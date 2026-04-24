@@ -5,6 +5,7 @@ module Icarium.Commands.Util
     , taskStateReader
     , edgeKindReader
     , axisReader
+    , effortReader
       -- * Body input handling
     , BodyInput(..)
     , bodyInputParser
@@ -44,6 +45,12 @@ axisReader = eitherReader $ \s ->
     case parseCategoryAxis (T.pack s) of
         Just a  -> Right a
         Nothing -> Left ("invalid axis: " <> s)
+
+effortReader :: ReadM Effort
+effortReader = eitherReader $ \s ->
+    case parseEffort (T.pack s) of
+        Just e  -> Right e
+        Nothing -> Left ("invalid effort: " <> s)
 
 data BodyInput = BodyInline Text | BodyFile FilePath | BodyStdin | BodyNone
 

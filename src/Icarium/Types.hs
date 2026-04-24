@@ -5,12 +5,14 @@ module Icarium.Types
     , EdgeKind(..), edgeKindText, parseEdgeKind
     , NodeKind(..), nodeKindText, parseNodeKind
     , CategoryAxis(..), categoryAxisText, parseCategoryAxis
+    , DispatchOutcome(..), dispatchOutcomeText, parseDispatchOutcome
 
       -- * Records
     , Task(..)
     , Knowledge(..)
     , Edge(..)
     , Category(..)
+    , Dispatch(..)
     ) where
 
 import Data.Text (Text)
@@ -183,3 +185,50 @@ data Category = Category
 
 instance FromRow Category where
     fromRow = Category <$> field <*> field <*> field
+
+data DispatchOutcome = OSuccess | OFailure | OInterrupted deriving (Show, Eq)
+
+dispatchOutcomeText :: DispatchOutcome -> Text
+dispatchOutcomeText = \case
+    OSuccess     -> "success"
+    OFailure     -> "failure"
+    OInterrupted -> "interrupted"
+
+parseDispatchOutcome :: Text -> Maybe DispatchOutcome
+parseDispatchOutcome = \case
+    "success"     -> Just OSuccess
+    "failure"     -> Just OFailure
+    "interrupted" -> Just OInterrupted
+    _             -> Nothing
+
+instance FromField DispatchOutcome where
+    fromField = enumFromField "dispatch outcome" parseDispatchOutcome
+instance ToField DispatchOutcome where
+    toField = toField . dispatchOutcomeText
+
+-- | A row in the @dispatches@ table. Columns kept in the order the
+-- schema declares them so @FromRow@ lines up with @SELECT *@.
+data Dispatch = Dispatch
+    { dispatchId         :: Text
+    , dispatchTaskId     :: Text
+    , dispatchBranch     :: Text
+    , dispatchBaseBranch :: Text
+    , dispatchBaseSha    :: Text
+    , dispatchPid        :: Maybe Int
+    , dispatchModel      :: Text
+    , dispatchEffort     :: Effort
+    , dispatchStartedAt  :: Text
+    , dispatchHeartbeat  :: Text
+    , dispatchEndedAt    :: Maybe Text
+    , dispatchOutcome    :: Maybe DispatchOutcome
+    , dispatchMergeSha   :: Maybe Text
+    , dispatchLastCommit :: Maybe Text
+    , dispatchNotes      :: Maybe Text
+    , dispatchLogPath    :: Maybe Text
+    } deriving (Show)
+
+instance FromRow Dispatch where
+    fromRow = Dispatch <$> field <*> field <*> field <*> field
+                       <*> field <*> field <*> field <*> field
+                       <*> field <*> field <*> field <*> field
+                       <*> field <*> field <*> field <*> field

@@ -1,0 +1,322 @@
+module Icarium.Dispatch
+    ( DispatchRequest(..)
+    , DispatchResult(..)
+    , dispatch
+    , dispatchBranchName
+    ) where
+
+import Control.Concurrent (forkIO)
+import Control.Exception (SomeException, bracket, try)
+import Control.Monad (unless, when)
+import qualified Data.ByteString.Char8 as BC
+import qualified Data.ByteString.Lazy as BL
+import Data.Maybe (fromMaybe)
+import Data.Text (Text)
+import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
+import qualified Data.Text.IO as TIO
+import Database.SQLite.Simple (Connection, close)
+import System.Directory (createDirectoryIfMissing)
+import System.Exit (ExitCode(..))
+import System.FilePath ((</>))
+import System.IO
+    ( BufferMode(..), Handle, IOMode(..), hClose, hIsEOF, hPutStrLn
+    , hSetBuffering, openFile, stderr
+    )
+import System.Process.Typed
+    ( byteStringInput, createPipe, getStdout, proc, runProcess, setEnv
+    , setStdin, setStdout, shell, waitExitCode, withProcessWait
+    )
+
+import Icarium.Config
+    ( CommandsConfig(..), Config(..), DispatchConfig(..), ProjectConfig(..) )
+import Icarium.Db (defaultDbPath, openDb)
+import qualified Icarium.Git as Git
+import Icarium.Id (newId)
+import Icarium.Render (renderTaskPrompt)
+import qualified Icarium.Repo.Dispatch as RD
+import qualified Icarium.Repo.Edge as RE
+import Icarium.Types
+
+-- =============================================================
+-- Request / result
+-- =============================================================
+
+data DispatchRequest = DispatchRequest
+    { drTask           :: Task
+    , drConfig         :: Config
+    , drDryRun         :: Bool
+    , drModelOverride  :: Maybe Text
+    , drEffortOverride :: Maybe Effort
+    , drBaseOverride   :: Maybe Text
+    }
+
+data DispatchResult = DispatchResult
+    { dresDispatchId :: Maybe Text
+    , dresOutcome    :: DispatchOutcome
+    , dresBranch     :: Text
+    , dresNotes      :: Text
+    }
+
+dispatchBranchName :: Text -> Text
+dispatchBranchName did = "dispatch/" <> did
+
+-- =============================================================
+-- Entry
+-- =============================================================
+
+dispatch :: Connection -> DispatchRequest -> IO DispatchResult
+dispatch conn req
+    | drDryRun req = doDryRun  conn req
+    | otherwise    = doReal    conn req
+
+-- =============================================================
+-- Dry run
+-- =============================================================
+
+doDryRun :: Connection -> DispatchRequest -> IO DispatchResult
+doDryRun conn req = do
+    prompt <- buildPrompt conn (drTask req)
+    fakeId <- newId
+    let branch = dispatchBranchName fakeId
+        model  = effectiveModel  req
+        effort = effectiveEffort req
+        base   = effectiveBase   req
+        tools  = dcAllowedTools (cfgDispatch (drConfig req))
+
+    TIO.putStrLn "=== DRY RUN ==="
+    TIO.putStrLn $ "dispatch id (simulated): " <> fakeId
+    TIO.putStrLn $ "task id:                 " <> taskId (drTask req)
+    TIO.putStrLn $ "base branch:             " <> base
+    TIO.putStrLn $ "dispatch branch:         " <> branch
+    TIO.putStrLn $ "model:                   " <> model
+    TIO.putStrLn $ "effort:                  " <> effortText effort
+    TIO.putStrLn $ "allowed_tools:           " <> T.intercalate "," tools
+    TIO.putStrLn ""
+    TIO.putStrLn "--- claude invocation ---"
+    TIO.putStrLn (renderCmdPreview model tools)
+    TIO.putStrLn ""
+    TIO.putStrLn "--- prompt (via stdin) ---"
+    TIO.putStr prompt
+
+    pure DispatchResult
+        { dresDispatchId = Nothing
+        , dresOutcome    = OSuccess
+        , dresBranch     = branch
+        , dresNotes      = "dry-run"
+        }
+
+renderCmdPreview :: Text -> [Text] -> Text
+renderCmdPreview model tools = T.unwords
+    [ "claude -p"
+    , "--model", model
+    , "--output-format stream-json"
+    , "--verbose"
+    , "--allowedTools \"" <> T.intercalate "," tools <> "\""
+    ]
+
+-- =============================================================
+-- Real dispatch
+-- =============================================================
+
+doReal :: Connection -> DispatchRequest -> IO DispatchResult
+doReal conn req = do
+    let cfg   = drConfig req
+        task  = drTask   req
+        base  = effectiveBase   req
+        model = effectiveModel  req
+        effort= effectiveEffort req
+        tools = dcAllowedTools (cfgDispatch cfg)
+
+    checkPreconditions base
+    baseSha <- either (ioFail . show) pure =<< Git.revParse base
+
+    -- Generate id up front so branch name and log path can embed it.
+    did <- newId
+    let branch  = dispatchBranchName did
+        logDir  = ".icarium" </> "logs"
+        logPath = logDir </> T.unpack did <> ".jsonl"
+    createDirectoryIfMissing True logDir
+
+    RD.insertDispatch conn did RD.NewDispatch
+        { RD.ndTaskId     = taskId task
+        , RD.ndBranch     = branch
+        , RD.ndBaseBranch = base
+        , RD.ndBaseSha    = baseSha
+        , RD.ndModel      = model
+        , RD.ndEffort     = effort
+        , RD.ndLogPath    = Just logPath
+        , RD.ndPid        = Nothing
+        }
+
+    prompt <- buildPrompt conn task
+
+    mBr <- Git.createBranch branch base
+    case mBr of
+        Left e ->
+            finishWith conn did branch OFailure Nothing
+                ("git checkout -b failed: " <> T.pack (show e))
+        Right () -> do
+            exit <- runClaudeStreaming did task prompt model tools logPath
+            handlePostClaude conn did branch base cfg exit
+
+checkPreconditions :: Text -> IO ()
+checkPreconditions base = do
+    clean <- Git.isClean
+    unless clean $ ioFail
+        "working tree not clean; commit or stash before dispatch"
+    mCur <- Git.currentBranch
+    case mCur of
+        Left e  -> ioFail ("git: " <> show e)
+        Right b -> when (b /= base) $ ioFail
+            ("not on base branch " <> T.unpack base <>
+             "; currently on " <> T.unpack b)
+
+-- =============================================================
+-- Claude invocation with live event streaming
+-- =============================================================
+
+runClaudeStreaming
+    :: Text -> Task -> Text -> Text -> [Text] -> FilePath
+    -> IO ExitCode
+runClaudeStreaming did task prompt model tools logPath = do
+    let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
+        args =
+            [ "-p"
+            , "--model", T.unpack model
+            , "--output-format", "stream-json"
+            , "--verbose"
+            , "--allowedTools", T.unpack (T.intercalate "," tools)
+            ]
+        env =
+            [ ("ICARIUM_DISPATCH_ID", T.unpack did)
+            , ("ICARIUM_TASK_ID",     T.unpack (taskId task))
+            ]
+        pcfg = setStdin  (byteStringInput promptBytes)
+             $ setStdout createPipe
+             $ setEnv    env
+             $ proc "claude" args
+
+    withLogHandle logPath $ \logH ->
+        withProcessWait pcfg $ \p -> do
+            _ <- forkIO (teeAndHeartbeat (getStdout p) logH did)
+            waitExitCode p
+
+-- | Tail the child's stdout, copy each line to the log file, and bump
+-- the heartbeat row per event. Runs in its own thread with its own DB
+-- connection so we don't share sqlite-simple's Connection between
+-- threads. On any failure the thread just exits; the caller is not
+-- blocked waiting for it.
+teeAndHeartbeat :: Handle -> Handle -> Text -> IO ()
+teeAndHeartbeat src logH did = do
+    r <- try (bracket (openDb defaultDbPath) close (loop src logH did))
+    case r :: Either SomeException () of
+        Left e  -> hPutStrLn stderr ("icarium: heartbeat thread died: " <> show e)
+        Right _ -> pure ()
+  where
+    loop h lh d c = do
+        eof <- hIsEOF h
+        if eof then pure ()
+        else do
+            line <- BC.hGetLine h
+            BC.hPutStrLn lh line
+            RD.updateHeartbeat c d
+            let short = T.pack (BC.unpack (BC.take 120 line))
+                tag   = "[" <> T.take 8 d <> "] "
+            hPutStrLn stderr (T.unpack (tag <> short))
+            loop h lh d c
+
+withLogHandle :: FilePath -> (Handle -> IO a) -> IO a
+withLogHandle path act = do
+    h <- openFile path WriteMode
+    hSetBuffering h LineBuffering
+    r <- act h
+    hClose h
+    pure r
+
+-- =============================================================
+-- Post-claude gates: build, test, FF-merge
+-- =============================================================
+
+handlePostClaude
+    :: Connection -> Text -> Text -> Text -> Config -> ExitCode
+    -> IO DispatchResult
+handlePostClaude conn did branch base cfg = \case
+    ExitFailure c ->
+        finishWith conn did branch OFailure Nothing
+            ("claude exited " <> T.pack (show c))
+    ExitSuccess -> do
+        mSha <- Git.revParse branch
+        case mSha of
+            Right sha -> RD.setLastCommit conn did sha
+            Left  _   -> pure ()
+        let cc = cfgCommands cfg
+        gated <- runGate (ccBuild cc) >>= \case
+            Left n  -> pure (Left n)
+            Right _ -> runGate (ccTest cc)
+        case gated of
+            Left notes ->
+                finishWith conn did branch OFailure Nothing notes
+            Right () -> do
+                e1 <- Git.checkout base
+                case e1 of
+                    Left err -> finishWith conn did branch OFailure Nothing
+                        ("checkout base: " <> T.pack (show err))
+                    Right () -> do
+                        e2 <- Git.ffMerge branch
+                        case e2 of
+                            Left err -> finishWith conn did branch OFailure Nothing
+                                ("ff-merge: " <> T.pack (show err))
+                            Right () -> do
+                                mShaBase <- Git.revParse base
+                                let mergeSha = either (const Nothing) Just mShaBase
+                                finishWith conn did branch OSuccess mergeSha "merged"
+
+-- | Run a shell command (as a single string, so users can include
+-- pipes and &&). Returns () on exit 0; otherwise a short note.
+runGate :: Text -> IO (Either Text ())
+runGate cmdText
+    | T.null (T.strip cmdText) = pure (Right ())
+    | otherwise = do
+        code <- runProcess (shell (T.unpack cmdText))
+        pure $ case code of
+            ExitSuccess   -> Right ()
+            ExitFailure c -> Left (cmdText <> " -> exit " <> T.pack (show c))
+
+-- =============================================================
+-- Plumbing
+-- =============================================================
+
+finishWith
+    :: Connection -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text
+    -> IO DispatchResult
+finishWith conn did branch outcome mSha notes = do
+    RD.finishDispatch conn did outcome mSha (Just notes)
+    pure DispatchResult
+        { dresDispatchId = Just did
+        , dresOutcome    = outcome
+        , dresBranch     = branch
+        , dresNotes      = notes
+        }
+
+buildPrompt :: Connection -> Task -> IO Text
+buildPrompt conn t = do
+    refs <- RE.referencedKnowledge conn (taskId t)
+    deps <- RE.dependencyTasks     conn (taskId t)
+    pure (renderTaskPrompt t refs deps)
+
+effectiveModel :: DispatchRequest -> Text
+effectiveModel req =
+    fromMaybe (dcModel (cfgDispatch (drConfig req))) (drModelOverride req)
+
+effectiveEffort :: DispatchRequest -> Effort
+effectiveEffort req =
+    fromMaybe (dcEffort (cfgDispatch (drConfig req))) (drEffortOverride req)
+
+effectiveBase :: DispatchRequest -> Text
+effectiveBase req =
+    fromMaybe (pcIntegrationBranch (cfgProject (drConfig req)))
+              (drBaseOverride req)
+
+ioFail :: String -> IO a
+ioFail = ioError . userError

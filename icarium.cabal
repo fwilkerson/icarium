@@ -24,10 +24,13 @@ library
                       Icarium.Db
                       Icarium.Config
                       Icarium.Render
+                      Icarium.Git
+                      Icarium.Dispatch
                       Icarium.Repo.Task
                       Icarium.Repo.Knowledge
                       Icarium.Repo.Edge
                       Icarium.Repo.Category
+                      Icarium.Repo.Dispatch
                       Icarium.Commands.Util
                       Icarium.Commands.Init
                       Icarium.Commands.Doctor
@@ -35,8 +38,10 @@ library
                       Icarium.Commands.Know
                       Icarium.Commands.Link
                       Icarium.Commands.Category
+                      Icarium.Commands.Dispatch
     build-depends:    base          >= 4.18 && < 5,
                       text,
+                      bytestring,
                       sqlite-simple,
                       direct-sqlite,
                       file-embed,
@@ -44,7 +49,8 @@ library
                       filepath,
                       ulid,
                       optparse-applicative,
-                      tomland
+                      tomland,
+                      typed-process
 
 executable icarium
     import:           lang

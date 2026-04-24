@@ -2,6 +2,7 @@ module Main (main) where
 
 import Options.Applicative
 import qualified Icarium.Commands.Category as Category
+import qualified Icarium.Commands.Dispatch as Dispatch
 import qualified Icarium.Commands.Doctor as Doctor
 import qualified Icarium.Commands.Init as Init
 import qualified Icarium.Commands.Know as Know
@@ -15,6 +16,7 @@ data Command
     | CmdKnow     Know.Command
     | CmdLink     Link.Command
     | CmdCategory Category.Command
+    | CmdDispatch Dispatch.Options
 
 main :: IO ()
 main = run =<< execParser parser
@@ -26,6 +28,7 @@ run (CmdTask c)     = Task.run c
 run (CmdKnow c)     = Know.run c
 run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
+run (CmdDispatch o) = Dispatch.run o
 
 parser :: ParserInfo Command
 parser = info (commands <**> helper)
@@ -53,4 +56,7 @@ commands = subparser
    <> command "category"
         (info (CmdCategory <$> Category.parser <**> helper)
               (progDesc "Manage category vocabulary"))
+   <> command "dispatch"
+        (info (CmdDispatch <$> Dispatch.parser <**> helper)
+              (progDesc "Dispatch a task to a headless agent"))
     )
