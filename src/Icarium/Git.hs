@@ -8,6 +8,7 @@ module Icarium.Git
     , checkout
     , ffMerge
     , stashUntracked
+    , deleteBranch
     ) where
 
 import qualified Data.ByteString.Lazy as BL
@@ -70,3 +71,9 @@ ffMerge branch = fmap (() <$) $ runGit
 stashUntracked :: Text -> IO (Either GitError ())
 stashUntracked msg = fmap (() <$) $ runGit
     ["stash", "push", "-u", "-m", T.unpack msg]
+
+-- | Delete a fully-merged local branch. Uses -d (safe delete) so git
+-- will refuse if the branch has unmerged commits.
+deleteBranch :: Text -> IO (Either GitError ())
+deleteBranch name = fmap (() <$) $ runGit
+    ["branch", "-d", T.unpack name]

@@ -280,6 +280,8 @@ handlePostClaude conn did branch base cfg = \case
                             Left err -> finishWith conn did branch OFailure Nothing
                                 ("ff-merge: " <> T.pack (show err))
                             Right () -> do
+                                -- Branch is fully reachable from base; delete it.
+                                _ <- Git.deleteBranch branch
                                 mShaBase <- Git.revParse base
                                 let mergeSha = either (const Nothing) Just mShaBase
                                 finishWith conn did branch OSuccess mergeSha "merged"
