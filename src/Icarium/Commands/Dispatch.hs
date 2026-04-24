@@ -1,12 +1,18 @@
-module Icarium.Commands.Dispatch (Command, parser, run) where
+module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
 import Control.Monad (when)
-import Data.Maybe (fromMaybe)
+import Data.Aeson (FromJSON(..), decode, withObject, (.:?))
+import qualified Data.ByteString.Lazy as BL
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Options.Applicative
 import System.Directory (doesFileExist)
+import Text.Printf (printf)
+
+import qualified Icarium.Git as Git
 
 import Icarium.Commands.Util
 import Icarium.Config (defaultConfigPath, loadConfig)
@@ -79,14 +85,123 @@ runRun o = do
                 D.applyOutcomeToTask c task res
                 summarize res
 
-summarize :: D.DispatchResult -> IO ()
-summarize r = do
+-- =============================================================
+-- Log parsing
+-- =============================================================
+
+data LogUsage = LogUsage
+    { luInputTokens  :: Maybe Int
+    , luOutputTokens :: Maybe Int
+    , luCacheReads   :: Maybe Int
+    }
+
+instance FromJSON LogUsage where
+    parseJSON = withObject "LogUsage" $ \o ->
+        LogUsage
+            <$> o .:? "input_tokens"
+            <*> o .:? "output_tokens"
+            <*> o .:? "cache_read_input_tokens"
+
+data LogResult = LogResult
+    { lrNumTurns      :: Maybe Int
+    , lrDurationMs    :: Maybe Int
+    , lrDurationApiMs :: Maybe Int
+    , lrCostUsd       :: Maybe Double
+    , lrUsage         :: Maybe LogUsage
+    , lrResultText    :: Maybe Text
+    }
+
+instance FromJSON LogResult where
+    parseJSON = withObject "LogResult" $ \o ->
+        LogResult
+            <$> o .:? "num_turns"
+            <*> o .:? "duration_ms"
+            <*> o .:? "duration_api_ms"
+            <*> o .:? "total_cost_usd"
+            <*> o .:? "usage"
+            <*> o .:? "result"
+
+readLogResult :: FilePath -> IO (Maybe LogResult)
+readLogResult path = do
+    exists <- doesFileExist path
+    if not exists then pure Nothing
+    else do
+        ls <- T.lines <$> TIO.readFile path
+        let isResult l = "\"type\":\"result\"" `T.isInfixOf` l
+            resultLines = filter isResult ls
+        pure $ listToMaybe $ mapMaybe parseLine (reverse resultLines)
+  where
+    parseLine l = decode (BL.fromStrict (TE.encodeUtf8 l))
+
+gitChangedFiles :: Text -> IO [Text]
+gitChangedFiles baseSha = do
+    r <- Git.runGit ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
+    case r of
+        Left  _   -> pure []
+        Right out -> pure (filter (not . T.null) (T.lines out))
+
+fmtMs :: Int -> Text
+fmtMs ms
+    | ms >= 1000 = T.pack (printf "%.1fs" (fromIntegral ms / 1000.0 :: Double))
+    | otherwise  = T.pack (show ms) <> "ms"
+
+trimResult :: Text -> Text
+trimResult t =
+    let ls      = filter (not . T.null) (T.lines t)
+        lastLine = case ls of { [] -> t; _ -> last ls }
+    in if T.length lastLine > 200 then T.take 197 lastLine <> "..." else lastLine
+
+-- | Print the enriched summary block; does not exit on failure.
+printSummary :: D.DispatchResult -> IO ()
+printSummary r = do
     let idPart = maybe "(dry-run)" id (D.dresDispatchId r)
     TIO.putStrLn ""
-    TIO.putStrLn $ "dispatch: "  <> idPart
-    TIO.putStrLn $ "outcome:  "  <> dispatchOutcomeText (D.dresOutcome r)
-    TIO.putStrLn $ "branch:   "  <> D.dresBranch r
-    TIO.putStrLn $ "notes:    "  <> D.dresNotes  r
+    TIO.putStrLn $ "dispatch: " <> idPart
+    TIO.putStrLn $ "outcome:  " <> dispatchOutcomeText (D.dresOutcome r)
+    TIO.putStrLn $ "branch:   " <> D.dresBranch r
+    TIO.putStrLn $ "notes:    " <> D.dresNotes  r
+    case D.dresLogPath r of
+        Nothing -> pure ()
+        Just lp -> do
+            mLR <- readLogResult lp
+            case mLR of
+                Nothing -> pure ()
+                Just lr -> do
+                    mapM_ TIO.putStrLn
+                        [ "turns:    " <> maybe "-" (T.pack . show) (lrNumTurns lr)
+                        , "duration: " <> maybe "-" fmtMs (lrDurationMs lr)
+                            <> maybe "" (\a -> " (api: " <> fmtMs a <> ")") (lrDurationApiMs lr)
+                        , "cost:     " <> maybe "-" (\c -> T.pack (printf "$%.4f" c)) (lrCostUsd lr)
+                        , "tokens:   " <> fmtTokens (lrUsage lr)
+                        ]
+                    case lrResultText lr >>= \t -> if T.null t then Nothing else Just t of
+                        Nothing -> pure ()
+                        Just t  -> TIO.putStrLn $ "result:   " <> trimResult t
+    case D.dresBaseSha r of
+        Nothing  -> pure ()
+        Just sha -> do
+            files <- gitChangedFiles sha
+            case files of
+                [] -> pure ()
+                _  -> do
+                    let shown = take 10 files
+                        extra = length files - length shown
+                        pad   = T.replicate 10 " "
+                        extraLine = if extra > 0
+                                    then [T.pack (show extra) <> " more"]
+                                    else []
+                        allItems  = shown ++ extraLine
+                    TIO.putStrLn $ "files:    " <> T.intercalate ("\n" <> pad) allItems
+  where
+    fmtTokens Nothing  = "-"
+    fmtTokens (Just u) =
+        "in "    <> maybe "-" (T.pack . show) (luInputTokens  u)
+        <> " / out " <> maybe "-" (T.pack . show) (luOutputTokens u)
+        <> " / cache " <> maybe "-" (T.pack . show) (luCacheReads   u)
+
+summarize :: D.DispatchResult -> IO ()
+summarize r = do
+    printSummary r
     case D.dresOutcome r of
         OSuccess -> pure ()
         _        -> fatal 3 "dispatch did not succeed"

@@ -10,6 +10,7 @@ import Options.Applicative
 import System.IO (hPutStrLn, stderr)
 
 import Icarium.Commands.Util (effortReader, fatal)
+import qualified Icarium.Commands.Dispatch as CD
 import Icarium.Config (Config, DispatchConfig(..), cfgDispatch, defaultConfigPath, loadConfig)
 import Icarium.Db (defaultDbPath, withDb)
 import qualified Icarium.Dispatch as D
@@ -65,4 +66,5 @@ loop opts cfg cap !i conn
                 TIO.hPutStrLn stderr $
                     "icarium: " <> dispatchOutcomeText (D.dresOutcome res)
                     <> " — " <> D.dresNotes res
+                CD.printSummary res
                 loop opts cfg cap (i + 1) conn

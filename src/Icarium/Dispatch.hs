@@ -59,6 +59,8 @@ data DispatchResult = DispatchResult
     , dresOutcome    :: DispatchOutcome
     , dresBranch     :: Text
     , dresNotes      :: Text
+    , dresLogPath    :: Maybe FilePath
+    , dresBaseSha    :: Maybe Text
     }
 
 dispatchBranchName :: Text -> Text
@@ -107,6 +109,8 @@ doDryRun conn req = do
         , dresOutcome    = OSuccess
         , dresBranch     = branch
         , dresNotes      = "dry-run"
+        , dresLogPath    = Nothing
+        , dresBaseSha    = Nothing
         }
 
 renderCmdPreview :: Text -> [Text] -> Text
@@ -160,9 +164,10 @@ doReal conn req = do
         Left e ->
             finishWith conn did branch OFailure Nothing
                 ("git checkout -b failed: " <> T.pack (show e)) retention
+                Nothing (Just baseSha)
         Right () -> do
             exit <- runClaudeStreaming did task prompt model tools logPath
-            handlePostClaude conn did branch base cfg exit
+            handlePostClaude conn did branch base cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
 checkPreconditions base = do
@@ -253,11 +258,13 @@ withLogHandle path act = do
 
 handlePostClaude
     :: Connection -> Text -> Text -> Text -> Config -> ExitCode
+    -> Text -> FilePath
     -> IO DispatchResult
-handlePostClaude conn did branch base cfg = \case
+handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
     ExitFailure c ->
         finishWith conn did branch OFailure Nothing
             ("claude exited " <> T.pack (show c)) ret
+            (Just logPath) (Just baseSha)
     ExitSuccess -> do
         mSha <- Git.revParse branch
         case mSha of
@@ -270,22 +277,26 @@ handlePostClaude conn did branch base cfg = \case
         case gated of
             Left notes ->
                 finishWith conn did branch OFailure Nothing notes ret
+                    (Just logPath) (Just baseSha)
             Right () -> do
                 e1 <- Git.checkout base
                 case e1 of
                     Left err -> finishWith conn did branch OFailure Nothing
                         ("checkout base: " <> T.pack (show err)) ret
+                        (Just logPath) (Just baseSha)
                     Right () -> do
                         e2 <- Git.ffMerge branch
                         case e2 of
                             Left err -> finishWith conn did branch OFailure Nothing
                                 ("ff-merge: " <> T.pack (show err)) ret
+                                (Just logPath) (Just baseSha)
                             Right () -> do
                                 -- Branch is fully reachable from base; delete it.
                                 _ <- Git.deleteBranch branch
                                 mShaBase <- Git.revParse base
                                 let mergeSha = either (const Nothing) Just mShaBase
                                 finishWith conn did branch OSuccess mergeSha "merged" ret
+                                    (Just logPath) (Just baseSha)
   where
     ret = dcLogRetentionRuns (cfgDispatch cfg)
 
@@ -306,8 +317,9 @@ runGate cmdText
 
 finishWith
     :: Connection -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text -> Int
+    -> Maybe FilePath -> Maybe Text
     -> IO DispatchResult
-finishWith conn did branch outcome mSha notes retention = do
+finishWith conn did branch outcome mSha notes retention mLogPath mBaseSha = do
     RD.finishDispatch conn did outcome mSha (Just notes)
     pruneLogFiles conn retention
     pure DispatchResult
@@ -315,6 +327,8 @@ finishWith conn did branch outcome mSha notes retention = do
         , dresOutcome    = outcome
         , dresBranch     = branch
         , dresNotes      = notes
+        , dresLogPath    = mLogPath
+        , dresBaseSha    = mBaseSha
         }
 
 pruneLogFiles :: Connection -> Int -> IO ()
