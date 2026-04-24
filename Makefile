@@ -1,4 +1,4 @@
-.PHONY: build install test lint clean
+.PHONY: build install test lint format clean
 
 build:
 	cabal build all
@@ -11,6 +11,9 @@ test:
 
 lint:
 	hlint src/ app/
+
+format:
+	stylish-haskell -i src/**/*.hs app/**/*.hs
 
 clean:
 	cabal clean
