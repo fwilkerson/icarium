@@ -13,7 +13,7 @@ lint:
 	hlint src/ app/
 
 format:
-	stylish-haskell -i src/**/*.hs app/**/*.hs
+	find src app -name '*.hs' | xargs ./bin/stylish-haskell -i
 
 clean:
 	cabal clean
