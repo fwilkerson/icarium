@@ -1,4 +1,4 @@
-.PHONY: build install test clean
+.PHONY: build install test lint clean
 
 build:
 	cabal build all
@@ -8,6 +8,9 @@ install:
 
 test:
 	cabal test all
+
+lint:
+	hlint src/ app/
 
 clean:
 	cabal clean
