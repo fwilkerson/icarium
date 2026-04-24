@@ -18,6 +18,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Database.SQLite.Simple (Connection, close)
 import System.Directory (createDirectoryIfMissing)
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 import System.IO
@@ -182,6 +183,7 @@ runClaudeStreaming
     :: Text -> Task -> Text -> Text -> [Text] -> FilePath
     -> IO ExitCode
 runClaudeStreaming did task prompt model tools logPath = do
+    parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args =
             [ "-p"
@@ -190,7 +192,9 @@ runClaudeStreaming did task prompt model tools logPath = do
             , "--verbose"
             , "--allowedTools", T.unpack (T.intercalate "," tools)
             ]
-        env =
+        -- Inherit parent env so claude can find ~/.claude credentials
+        -- via $HOME; append icarium's own vars.
+        env = parentEnv ++
             [ ("ICARIUM_DISPATCH_ID", T.unpack did)
             , ("ICARIUM_TASK_ID",     T.unpack (taskId task))
             ]
