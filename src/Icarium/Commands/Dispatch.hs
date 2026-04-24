@@ -1,27 +1,56 @@
-module Icarium.Commands.Dispatch (Options, parser, run) where
+module Icarium.Commands.Dispatch (Command, parser, run) where
 
+import Control.Monad (when)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Options.Applicative
+import System.Directory (doesFileExist)
 
 import Icarium.Commands.Util
 import Icarium.Config (defaultConfigPath, loadConfig)
 import Icarium.Db (defaultDbPath, withDb)
 import qualified Icarium.Dispatch as D
+import qualified Icarium.Repo.Dispatch as RD
 import qualified Icarium.Repo.Task as RT
 import Icarium.Types
 
-data Options = Options
-    { oTaskId :: Text
-    , oModel  :: Maybe Text
-    , oEffort :: Maybe Effort
-    , oBase   :: Maybe Text
-    , oDryRun :: Bool
+data Command
+    = Run   RunOpts
+    | List  ListOpts
+    | Show  ShowOpts
+    | Logs  LogsOpts
+
+parser :: Parser Command
+parser = subparser
+    ( subcmd "run"  "Dispatch a task to a headless agent" (Run  <$> runP)
+   <> subcmd "list" "List dispatches"                     (List <$> listP)
+   <> subcmd "show" "Show a single dispatch"              (Show <$> showP)
+   <> subcmd "logs" "Print the jsonl event log"           (Logs <$> logsP)
+    )
+
+run :: Command -> IO ()
+run = \case
+    Run o  -> runRun  o
+    List o -> runList o
+    Show o -> runShow o
+    Logs o -> runLogs o
+
+-- =============================================================
+-- run  (the original dispatch behavior, unchanged)
+-- =============================================================
+
+data RunOpts = RunOpts
+    { rTaskId :: Text
+    , rModel  :: Maybe Text
+    , rEffort :: Maybe Effort
+    , rBase   :: Maybe Text
+    , rDryRun :: Bool
     }
 
-parser :: Parser Options
-parser = Options
+runP :: Parser RunOpts
+runP = RunOpts
     <$> (T.pack <$> strArgument (metavar "TASK_ID"))
     <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"))
     <*> optional (option effortReader (long "effort" <> metavar "LEVEL"
@@ -29,23 +58,23 @@ parser = Options
     <*> optional (T.pack <$> strOption (long "base-branch" <> metavar "NAME"))
     <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
-run :: Options -> IO ()
-run o = do
+runRun :: RunOpts -> IO ()
+runRun o = do
     cfg <- loadConfig defaultConfigPath >>= \case
         Left  e  -> fatal 2 ("config parse error:\n" <> e)
         Right c  -> pure c
     withDb defaultDbPath $ \c -> do
-        mt <- RT.getTask c (oTaskId o)
+        mt <- RT.getTask c (rTaskId o)
         case mt of
-            Nothing -> fatal 1 ("task not found: " <> T.unpack (oTaskId o))
+            Nothing   -> fatal 1 ("task not found: " <> T.unpack (rTaskId o))
             Just task -> do
                 res <- D.dispatch c D.DispatchRequest
                     { D.drTask            = task
                     , D.drConfig          = cfg
-                    , D.drDryRun          = oDryRun o
-                    , D.drModelOverride   = oModel o
-                    , D.drEffortOverride  = oEffort o
-                    , D.drBaseOverride    = oBase  o
+                    , D.drDryRun          = rDryRun o
+                    , D.drModelOverride   = rModel o
+                    , D.drEffortOverride  = rEffort o
+                    , D.drBaseOverride    = rBase  o
                     }
                 D.applyOutcomeToTask c task res
                 summarize res
@@ -61,3 +90,132 @@ summarize r = do
     case D.dresOutcome r of
         OSuccess -> pure ()
         _        -> fatal 3 "dispatch did not succeed"
+
+-- =============================================================
+-- list
+-- =============================================================
+
+data ListOpts = ListOpts
+    { lTask    :: Maybe Text
+    , lOutcome :: Maybe DispatchOutcome
+    }
+
+listP :: Parser ListOpts
+listP = ListOpts
+    <$> optional (T.pack <$> strOption (long "task" <> metavar "TASK_ID"
+                                        <> help "Only dispatches for this task"))
+    <*> optional (option outcomeReader (long "outcome" <> metavar "OUTCOME"
+                                        <> help "success | failure | interrupted"))
+
+outcomeReader :: ReadM DispatchOutcome
+outcomeReader = eitherReader $ \s ->
+    case parseDispatchOutcome (T.pack s) of
+        Just o  -> Right o
+        Nothing -> Left ("invalid outcome: " <> s)
+
+runList :: ListOpts -> IO ()
+runList o = withDb defaultDbPath $ \c -> do
+    ds <- RD.listDispatches c (lTask o)
+    let filtered = case lOutcome o of
+            Nothing -> ds
+            Just want -> filter ((Just want ==) . dispatchOutcome) ds
+    TIO.putStr (renderDispatchList filtered)
+
+renderDispatchList :: [Dispatch] -> Text
+renderDispatchList ds =
+    let header = T.intercalate "  "
+            [ padR 26 "id"
+            , padR 26 "task_id"
+            , padR 11 "outcome"
+            , padR 34 "branch"
+            , "started_at"
+            ]
+        rows = map row ds
+        row d = T.intercalate "  "
+            [ padR 26 (dispatchId d)
+            , padR 26 (dispatchTaskId d)
+            , padR 11 (maybe "open" dispatchOutcomeText (dispatchOutcome d))
+            , padR 34 (dispatchBranch d)
+            , dispatchStartedAt d
+            ]
+    in T.unlines (header : rows)
+
+padR :: Int -> Text -> Text
+padR n t
+    | T.length t >= n = t
+    | otherwise       = t <> T.replicate (n - T.length t) " "
+
+-- =============================================================
+-- show
+-- =============================================================
+
+data ShowOpts = ShowOpts { sId :: Text }
+
+showP :: Parser ShowOpts
+showP = ShowOpts <$> (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+
+runShow :: ShowOpts -> IO ()
+runShow o = withDb defaultDbPath $ \c -> do
+    md <- RD.getDispatch c (sId o)
+    case md of
+        Nothing -> fatal 1 ("dispatch not found: " <> T.unpack (sId o))
+        Just d -> do
+            mt <- RT.getTask c (dispatchTaskId d)
+            TIO.putStr (renderDispatch d mt)
+
+renderDispatch :: Dispatch -> Maybe Task -> Text
+renderDispatch d mt = T.unlines
+    [ field "id"            (dispatchId d)
+    , field "task_id"       (dispatchTaskId d)
+    , field "task_title"    (maybe "(task missing)" taskTitle mt)
+    , field "branch"        (dispatchBranch d)
+    , field "base_branch"   (dispatchBaseBranch d)
+    , field "base_sha"      (dispatchBaseSha d)
+    , field "pid"           (maybe "" (T.pack . show) (dispatchPid d))
+    , field "model"         (dispatchModel d)
+    , field "effort"        (effortText (dispatchEffort d))
+    , field "started_at"    (dispatchStartedAt d)
+    , field "heartbeat_at"  (dispatchHeartbeat d)
+    , field "ended_at"      (fromMaybe "" (dispatchEndedAt d))
+    , field "outcome"       (maybe "open" dispatchOutcomeText (dispatchOutcome d))
+    , field "merge_sha"     (fromMaybe "" (dispatchMergeSha d))
+    , field "last_commit"   (fromMaybe "" (dispatchLastCommit d))
+    , field "log_path"      (fromMaybe "" (dispatchLogPath d))
+    , field "notes"         (fromMaybe "" (dispatchNotes d))
+    ]
+  where
+    field k v = padR 14 (k <> ":") <> " " <> v
+
+-- =============================================================
+-- logs
+-- =============================================================
+
+data LogsOpts = LogsOpts
+    { gId   :: Text
+    , gTail :: Maybe Int
+    }
+
+logsP :: Parser LogsOpts
+logsP = LogsOpts
+    <$> (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+    <*> optional (option auto (long "tail" <> metavar "N"
+                              <> help "Print only the last N lines"))
+
+runLogs :: LogsOpts -> IO ()
+runLogs o = withDb defaultDbPath $ \c -> do
+    md <- RD.getDispatch c (gId o)
+    case md of
+        Nothing -> fatal 1 ("dispatch not found: " <> T.unpack (gId o))
+        Just d  -> case dispatchLogPath d of
+            Nothing -> fatal 1 ("no log recorded for dispatch " <> T.unpack (gId o))
+            Just p  -> do
+                let path = T.unpack p
+                exists <- doesFileExist path
+                when (not exists) $
+                    fatal 1 ("log file missing: " <> path)
+                contents <- readFile path
+                let ls = lines contents
+                    out = case gTail o of
+                        Nothing -> ls
+                        Just n  -> drop (max 0 (length ls - n)) ls
+                mapM_ putStrLn out

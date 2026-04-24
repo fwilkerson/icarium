@@ -107,7 +107,7 @@ icarium next [--json]
     Print the id of the next ready task (priority DESC, created_at ASC).
     Exit 1 if queue empty.
 
-icarium dispatch <task-id>
+icarium dispatch run <task-id>
     [--model <id>] [--effort low|medium|high]
     [--base-branch <name>]            (default: from config)
     [--dry-run]                       (print prompt + plan, do nothing)
@@ -128,12 +128,14 @@ icarium status [--watch]
     Show open dispatches: id, task, branch, elapsed, heartbeat age,
     current tool. --watch refreshes every 2s.
 
-icarium dispatch list [--task <id>] [--outcome ...] [--json]
+icarium dispatch list [--task <id>] [--outcome success|failure|interrupted]
+    Tabular view of dispatches, newest first.
 
 icarium dispatch show <id>
+    All columns of the dispatch row plus the linked task title.
 
-icarium dispatch logs <id> [--tail] [--follow]
-    Tail the event jsonl log for a dispatch.
+icarium dispatch logs <id> [--tail N]
+    Cat the event jsonl log for a dispatch. --tail prints last N lines.
 ```
 
 ## Recovery

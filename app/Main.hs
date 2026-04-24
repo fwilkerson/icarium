@@ -20,7 +20,7 @@ data Command
     | CmdKnow     Know.Command
     | CmdLink     Link.Command
     | CmdCategory Category.Command
-    | CmdDispatch Dispatch.Options
+    | CmdDispatch Dispatch.Command
     | CmdNext     Next.Options
     | CmdRun      Run.Options
     | CmdRecover  Recover.Options
@@ -36,7 +36,7 @@ run (CmdTask c)     = Task.run c
 run (CmdKnow c)     = Know.run c
 run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
-run (CmdDispatch o) = Dispatch.run o
+run (CmdDispatch c) = Dispatch.run c
 run (CmdNext o)     = Next.run o
 run (CmdRun o)      = Run.run o
 run (CmdRecover o)  = Recover.run o
@@ -70,7 +70,7 @@ commands = subparser
               (progDesc "Manage category vocabulary"))
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
-              (progDesc "Dispatch a task to a headless agent"))
+              (progDesc "Manage dispatches (run, list, show, logs)"))
    <> command "next"
         (info (CmdNext <$> Next.parser <**> helper)
               (progDesc "Print the next ready task id; exit 1 if queue empty"))
