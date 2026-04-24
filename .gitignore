@@ -1,0 +1,8 @@
+dist-newstyle/
+.ghc.environment.*
+cabal.project.local
+.icarium/
+icarium.toml
+*.db
+*.db-wal
+*.db-shm

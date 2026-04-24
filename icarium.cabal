@@ -1,0 +1,43 @@
+cabal-version:      3.0
+name:               icarium
+version:            0.1.0.0
+synopsis:           Task/knowledge/dispatch tool for headless-agent workflows
+author:             frank
+maintainer:         frank.w1lk3rs0n@gmail.com
+build-type:         Simple
+extra-source-files: spec/schema.sql
+
+common lang
+    default-language:   GHC2021
+    default-extensions: OverloadedStrings
+                        LambdaCase
+                        StrictData
+    ghc-options:        -Wall -Wunused-packages
+
+library
+    import:           lang
+    hs-source-dirs:   src
+    exposed-modules:  Icarium.Types
+                      Icarium.Id
+                      Icarium.Schema
+                      Icarium.Db
+                      Icarium.Config
+                      Icarium.Commands.Init
+                      Icarium.Commands.Doctor
+    build-depends:    base          >= 4.18 && < 5,
+                      text,
+                      sqlite-simple,
+                      direct-sqlite,
+                      file-embed,
+                      directory,
+                      filepath,
+                      ulid,
+                      optparse-applicative
+
+executable icarium
+    import:           lang
+    hs-source-dirs:   app
+    main-is:          Main.hs
+    build-depends:    base,
+                      icarium,
+                      optparse-applicative
