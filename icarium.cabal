@@ -39,6 +39,9 @@ library
                       Icarium.Commands.Link
                       Icarium.Commands.Category
                       Icarium.Commands.Dispatch
+                      Icarium.Commands.Next
+                      Icarium.Commands.Run
+                      Icarium.Commands.Recover
     build-depends:    base          >= 4.18 && < 5,
                       text,
                       bytestring,
@@ -50,7 +53,8 @@ library
                       ulid,
                       optparse-applicative,
                       tomland,
-                      typed-process
+                      typed-process,
+                      time
 
 executable icarium
     import:           lang

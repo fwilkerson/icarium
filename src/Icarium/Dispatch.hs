@@ -3,6 +3,7 @@ module Icarium.Dispatch
     , DispatchResult(..)
     , dispatch
     , dispatchBranchName
+    , applyOutcomeToTask
     ) where
 
 import Control.Concurrent (forkIO)
@@ -24,7 +25,7 @@ import System.IO
     , hSetBuffering, openFile, stderr
     )
 import System.Process.Typed
-    ( byteStringInput, createPipe, getStdout, proc, runProcess, setEnv
+    ( byteStringInput, createPipe, getPid, getStdout, proc, runProcess, setEnv
     , setStdin, setStdout, shell, waitExitCode, withProcessWait
     )
 
@@ -36,6 +37,7 @@ import Icarium.Id (newId)
 import Icarium.Render (renderTaskPrompt)
 import qualified Icarium.Repo.Dispatch as RD
 import qualified Icarium.Repo.Edge as RE
+import qualified Icarium.Repo.Task as RT
 import Icarium.Types
 
 -- =============================================================
@@ -199,6 +201,12 @@ runClaudeStreaming did task prompt model tools logPath = do
 
     withLogHandle logPath $ \logH ->
         withProcessWait pcfg $ \p -> do
+            -- Record the child PID so recovery can detect a dead process.
+            mPid <- getPid p
+            case mPid of
+                Just pid -> bracket (openDb defaultDbPath) close $ \c ->
+                    RD.setPid c did (fromIntegral pid)
+                Nothing  -> pure ()
             _ <- forkIO (teeAndHeartbeat (getStdout p) logH did)
             waitExitCode p
 
@@ -320,3 +328,29 @@ effectiveBase req =
 
 ioFail :: String -> IO a
 ioFail = ioError . userError
+
+-- | Reconcile task state with the dispatch outcome. Intended to be
+-- called from the CLI layer after @dispatch@ returns.
+--
+-- * success and task still 'ready' -> mark 'done' (the agent
+--   presumably didn't self-update; we don't want to re-pick it).
+-- * failure -> mark 'blocked' with the dispatch notes as reason.
+-- * interrupted -> leave to @icarium recover@.
+-- * dry-run (dispatch id absent) -> no-op.
+applyOutcomeToTask :: Connection -> Task -> DispatchResult -> IO ()
+applyOutcomeToTask conn t res
+    | Nothing <- dresDispatchId res = pure ()
+    | otherwise = case dresOutcome res of
+        OSuccess -> do
+            mFresh <- RT.getTask conn (taskId t)
+            case mFresh of
+                Just t' | taskState t' == Ready ->
+                    () <$ RT.updateTask conn (taskId t') RT.emptyUpdate
+                        { RT.tuState = Just Done }
+                _ -> pure ()
+        OFailure ->
+            () <$ RT.updateTask conn (taskId t) RT.emptyUpdate
+                { RT.tuState       = Just Blocked
+                , RT.tuBlockReason = Just (Just (dresNotes res))
+                }
+        OInterrupted -> pure ()

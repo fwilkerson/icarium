@@ -47,6 +47,7 @@ run o = do
                     , D.drEffortOverride  = oEffort o
                     , D.drBaseOverride    = oBase  o
                     }
+                D.applyOutcomeToTask c task res
                 summarize res
 
 summarize :: D.DispatchResult -> IO ()

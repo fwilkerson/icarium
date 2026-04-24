@@ -7,6 +7,9 @@ import qualified Icarium.Commands.Doctor as Doctor
 import qualified Icarium.Commands.Init as Init
 import qualified Icarium.Commands.Know as Know
 import qualified Icarium.Commands.Link as Link
+import qualified Icarium.Commands.Next as Next
+import qualified Icarium.Commands.Recover as Recover
+import qualified Icarium.Commands.Run as Run
 import qualified Icarium.Commands.Task as Task
 
 data Command
@@ -17,6 +20,9 @@ data Command
     | CmdLink     Link.Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Options
+    | CmdNext     Next.Options
+    | CmdRun      Run.Options
+    | CmdRecover  Recover.Options
 
 main :: IO ()
 main = run =<< execParser parser
@@ -29,6 +35,9 @@ run (CmdKnow c)     = Know.run c
 run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
 run (CmdDispatch o) = Dispatch.run o
+run (CmdNext o)     = Next.run o
+run (CmdRun o)      = Run.run o
+run (CmdRecover o)  = Recover.run o
 
 parser :: ParserInfo Command
 parser = info (commands <**> helper)
@@ -59,4 +68,13 @@ commands = subparser
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
               (progDesc "Dispatch a task to a headless agent"))
+   <> command "next"
+        (info (CmdNext <$> Next.parser <**> helper)
+              (progDesc "Print the next ready task id; exit 1 if queue empty"))
+   <> command "run"
+        (info (CmdRun <$> Run.parser <**> helper)
+              (progDesc "Loop dispatching ready tasks until empty or --max"))
+   <> command "recover"
+        (info (CmdRecover <$> Recover.parser <**> helper)
+              (progDesc "Reconcile orphaned in-progress dispatches"))
     )
