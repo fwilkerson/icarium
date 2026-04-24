@@ -1,0 +1,23 @@
+[project]
+integration_branch = "main"
+
+[commands]
+build = "cabal build all"
+# No test suite yet — see dogfood task. Empty = gate is a no-op.
+test  = ""
+
+[dispatch]
+model  = "claude-sonnet-4-6"
+effort = "medium"
+allowed_tools = [
+  "Read", "Edit", "Write", "Grep", "Glob",
+  "Bash(./bin/icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
+]
+max_minutes_per_dispatch = 30
+max_dispatches_per_run   = 20
+heartbeat_stale_seconds  = 300
+log_retention_runs       = 25
+
+[categories]
+domains     = ["cli", "dispatch", "storage", "workflow"]
+disciplines = ["haskell", "ops"]

@@ -1,8 +1,14 @@
 dist-newstyle/
 .ghc.environment.*
 cabal.project.local
+
+# Pinned binary: platform-specific, reproduced via `make install`.
+/bin/
+
+# Local runtime state: DB file + dispatch logs. Snapshot/export is
+# what we commit (once that lands). Until then, seed locally.
 .icarium/
-icarium.toml
+
 *.db
 *.db-wal
 *.db-shm

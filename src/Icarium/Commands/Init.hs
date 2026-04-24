@@ -23,22 +23,25 @@ run o = do
     dbExists     <- doesFileExist defaultDbPath
     configExists <- doesFileExist defaultConfigPath
 
+    -- DB is protected: we refuse to clobber existing task/knowledge state.
     when (dbExists && not (optForce o)) $
         fatal 2 ("database already exists: " <> defaultDbPath
-                 <> " (use --force to reinitialize)")
-    when (configExists && not (optForce o)) $
-        fatal 2 ("config already exists: " <> defaultConfigPath
-                 <> " (use --force to overwrite)")
-
+                 <> " (use --force to reinitialize; this will NOT delete the file)")
     when (dbExists && optForce o) $
         ioError (userError "refusing to clobber existing DB; remove it manually")
 
     initDb defaultDbPath
-    TIO.writeFile defaultConfigPath defaultConfigText
-
     putStrLn $ "created  " <> defaultDbPath
-    putStrLn $ "created  " <> defaultConfigPath
-    putStrLn   "initialized."
+
+    -- Config is forgiving: on a fresh clone the repo may already ship a
+    -- tuned icarium.toml; don't error in that case, just keep it.
+    if configExists && not (optForce o)
+        then putStrLn $ "exists   " <> defaultConfigPath <> " (kept)"
+        else do
+            TIO.writeFile defaultConfigPath defaultConfigText
+            putStrLn $ "created  " <> defaultConfigPath
+
+    putStrLn "initialized."
 
 fatal :: Int -> String -> IO a
 fatal code msg = do
