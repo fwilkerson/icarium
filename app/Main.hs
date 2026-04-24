@@ -4,6 +4,7 @@ import Options.Applicative
 import qualified Icarium.Commands.Category as Category
 import qualified Icarium.Commands.Dispatch as Dispatch
 import qualified Icarium.Commands.Doctor as Doctor
+import qualified Icarium.Commands.Export as Export
 import qualified Icarium.Commands.Init as Init
 import qualified Icarium.Commands.Know as Know
 import qualified Icarium.Commands.Link as Link
@@ -23,6 +24,7 @@ data Command
     | CmdNext     Next.Options
     | CmdRun      Run.Options
     | CmdRecover  Recover.Options
+    | CmdExport   Export.Options
 
 main :: IO ()
 main = run =<< execParser parser
@@ -38,6 +40,7 @@ run (CmdDispatch o) = Dispatch.run o
 run (CmdNext o)     = Next.run o
 run (CmdRun o)      = Run.run o
 run (CmdRecover o)  = Recover.run o
+run (CmdExport o)   = Export.run o
 
 parser :: ParserInfo Command
 parser = info (commands <**> helper)
@@ -77,4 +80,7 @@ commands = subparser
    <> command "recover"
         (info (CmdRecover <$> Recover.parser <**> helper)
               (progDesc "Reconcile orphaned in-progress dispatches"))
+   <> command "export"
+        (info (CmdExport <$> Export.parser <**> helper)
+              (progDesc "Dump all data as a JSON snapshot"))
     )

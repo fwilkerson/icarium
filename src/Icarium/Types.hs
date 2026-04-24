@@ -15,6 +15,7 @@ module Icarium.Types
     , Dispatch(..)
     ) where
 
+import Data.Aeson (ToJSON(..), object, (.=))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Typeable (Typeable)
@@ -232,3 +233,67 @@ instance FromRow Dispatch where
                        <*> field <*> field <*> field <*> field
                        <*> field <*> field <*> field <*> field
                        <*> field <*> field <*> field <*> field
+
+-- =============================================================
+-- ToJSON instances (column names match DB snake_case names)
+-- =============================================================
+
+instance ToJSON Task where
+    toJSON Task{..} = object
+        [ "id"           .= taskId
+        , "title"        .= taskTitle
+        , "body"         .= taskBody
+        , "state"        .= taskStateText taskState
+        , "priority"     .= taskPriority
+        , "block_reason" .= taskBlockReason
+        , "created_at"   .= taskCreatedAt
+        , "updated_at"   .= taskUpdatedAt
+        ]
+
+instance ToJSON Knowledge where
+    toJSON Knowledge{..} = object
+        [ "id"         .= knowledgeId
+        , "title"      .= knowledgeTitle
+        , "body"       .= knowledgeBody
+        , "stale"      .= knowledgeStale
+        , "created_at" .= knowledgeCreatedAt
+        , "updated_at" .= knowledgeUpdatedAt
+        ]
+
+instance ToJSON Edge where
+    toJSON Edge{..} = object
+        [ "id"         .= edgeId
+        , "kind"       .= edgeKindText edgeKind
+        , "src_kind"   .= nodeKindText edgeSrcKind
+        , "src_id"     .= edgeSrcId
+        , "dst_kind"   .= nodeKindText edgeDstKind
+        , "dst_id"     .= edgeDstId
+        , "created_at" .= edgeCreatedAt
+        ]
+
+instance ToJSON Category where
+    toJSON Category{..} = object
+        [ "id"   .= categoryId
+        , "axis" .= categoryAxisText categoryAxis
+        , "name" .= categoryName
+        ]
+
+instance ToJSON Dispatch where
+    toJSON Dispatch{..} = object
+        [ "id"           .= dispatchId
+        , "task_id"      .= dispatchTaskId
+        , "branch"       .= dispatchBranch
+        , "base_branch"  .= dispatchBaseBranch
+        , "base_sha"     .= dispatchBaseSha
+        , "pid"          .= dispatchPid
+        , "model"        .= dispatchModel
+        , "effort"       .= effortText dispatchEffort
+        , "started_at"   .= dispatchStartedAt
+        , "heartbeat_at" .= dispatchHeartbeat
+        , "ended_at"     .= dispatchEndedAt
+        , "outcome"      .= fmap dispatchOutcomeText dispatchOutcome
+        , "merge_sha"    .= dispatchMergeSha
+        , "last_commit"  .= dispatchLastCommit
+        , "notes"        .= dispatchNotes
+        , "log_path"     .= dispatchLogPath
+        ]
