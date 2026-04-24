@@ -6,7 +6,7 @@ import Options.Applicative
 import System.Directory (doesFileExist, findExecutable)
 import System.Exit (exitWith, ExitCode(..))
 
-import Icarium.Config (defaultConfigPath)
+import Icarium.Config (defaultConfigPath, loadConfig)
 import Icarium.Db (defaultDbPath, dbSchemaVersion, openDb)
 import Icarium.Schema (schemaVersion)
 
@@ -23,7 +23,7 @@ data Check = Check
 run :: Options -> IO ()
 run _ = do
     checks <- sequence
-        [ checkFile   "config"   defaultConfigPath
+        [ checkConfig
         , checkFile   "database" defaultDbPath
         , checkSchema
         , checkBinary "claude"
@@ -40,6 +40,18 @@ checkFile name path = do
     pure $ Check name $
         if e then Right path
              else Left  ("missing: " <> path)
+
+-- | Loads and parses the config — not just existence-checks it.
+checkConfig :: IO Check
+checkConfig = do
+    e <- doesFileExist defaultConfigPath
+    if not e
+        then pure $ Check "config" (Left ("missing: " <> defaultConfigPath))
+        else do
+            r <- loadConfig defaultConfigPath
+            pure $ Check "config" $ case r of
+                Right _  -> Right defaultConfigPath
+                Left msg -> Left ("parse error\n" <> msg)
 
 checkBinary :: String -> IO Check
 checkBinary name = do

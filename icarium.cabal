@@ -43,7 +43,8 @@ library
                       directory,
                       filepath,
                       ulid,
-                      optparse-applicative
+                      optparse-applicative,
+                      tomland
 
 executable icarium
     import:           lang
