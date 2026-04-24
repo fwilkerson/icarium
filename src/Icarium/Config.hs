@@ -12,13 +12,13 @@ module Icarium.Config
     , loadConfig
     ) where
 
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Toml (TomlCodec, (.=))
+import           Data.Text     (Text)
+import qualified Data.Text     as T
+import qualified Data.Text.IO  as TIO
 import qualified Toml
+import           Toml          (TomlCodec, (.=))
 
-import Icarium.Types (Effort, effortText, parseEffort)
+import           Icarium.Types (Effort, effortText, parseEffort)
 
 -- =============================================================
 -- Types

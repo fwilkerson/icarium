@@ -1,17 +1,17 @@
 module Main (main) where
 
-import Options.Applicative
 import qualified Icarium.Commands.Category as Category
 import qualified Icarium.Commands.Dispatch as Dispatch
-import qualified Icarium.Commands.Doctor as Doctor
-import qualified Icarium.Commands.Export as Export
-import qualified Icarium.Commands.Init as Init
-import qualified Icarium.Commands.Know as Know
-import qualified Icarium.Commands.Link as Link
-import qualified Icarium.Commands.Next as Next
-import qualified Icarium.Commands.Recover as Recover
-import qualified Icarium.Commands.Run as Run
-import qualified Icarium.Commands.Task as Task
+import qualified Icarium.Commands.Doctor   as Doctor
+import qualified Icarium.Commands.Export   as Export
+import qualified Icarium.Commands.Init     as Init
+import qualified Icarium.Commands.Know     as Know
+import qualified Icarium.Commands.Link     as Link
+import qualified Icarium.Commands.Next     as Next
+import qualified Icarium.Commands.Recover  as Recover
+import qualified Icarium.Commands.Run      as Run
+import qualified Icarium.Commands.Task     as Task
+import           Options.Applicative
 
 data Command
     = CmdInit     Init.Options

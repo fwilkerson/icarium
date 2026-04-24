@@ -12,11 +12,11 @@ module Icarium.Git
     ) where
 
 import qualified Data.ByteString.Lazy as BL
-import qualified Data.Text as T
-import Data.Text (Text)
-import Data.Text.Encoding (decodeUtf8)
-import System.Exit (ExitCode(..))
-import System.Process.Typed (proc, readProcess)
+import           Data.Text            (Text)
+import qualified Data.Text            as T
+import           Data.Text.Encoding   (decodeUtf8)
+import           System.Exit          (ExitCode (..))
+import           System.Process.Typed (proc, readProcess)
 
 -- | A failed git invocation.
 data GitError = GitError

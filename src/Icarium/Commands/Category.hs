@@ -1,15 +1,15 @@
 module Icarium.Commands.Category (Command, parser, run) where
 
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Options.Applicative
+import           Data.Text             (Text)
+import qualified Data.Text             as T
+import qualified Data.Text.IO          as TIO
+import           Options.Applicative
 
-import Icarium.Commands.Util
-import Icarium.Db (defaultDbPath, withDb)
-import qualified Icarium.Render as Render
+import           Icarium.Commands.Util
+import           Icarium.Db            (defaultDbPath, withDb)
+import qualified Icarium.Render        as Render
 import qualified Icarium.Repo.Category as RC
-import Icarium.Types
+import           Icarium.Types
 
 data Command
     = Add AddOpts

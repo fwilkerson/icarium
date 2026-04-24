@@ -9,13 +9,11 @@ module Icarium.Repo.Task
     , deleteTask
     ) where
 
-import Data.Text (Text)
-import Database.SQLite.Simple
-    ( Connection, Only(..), Query(..), execute, query, query_
-    )
+import           Data.Text              (Text)
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
-import Icarium.Id (newId)
-import Icarium.Types (Task(..), TaskState(..))
+import           Icarium.Id             (newId)
+import           Icarium.Types          (Task (..), TaskState (..))
 
 data NewTask = NewTask
     { ntTitle    :: Text

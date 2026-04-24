@@ -1,22 +1,24 @@
 module Icarium.Commands.Recover (Options, parser, run) where
 
-import Control.Monad (forM_)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Data.Time (defaultTimeLocale, diffUTCTime, getCurrentTime, parseTimeM, UTCTime)
-import Database.SQLite.Simple (Connection)
-import Options.Applicative
-import System.Exit (ExitCode(..))
-import System.Process.Typed (nullStream, proc, runProcess, setStderr, setStdout)
+import           Control.Monad          (forM_)
+import           Data.Text              (Text)
+import qualified Data.Text              as T
+import qualified Data.Text.IO           as TIO
+import           Data.Time              (UTCTime, defaultTimeLocale, diffUTCTime, getCurrentTime,
+                                         parseTimeM)
+import           Database.SQLite.Simple (Connection)
+import           Options.Applicative
+import           System.Exit            (ExitCode (..))
+import           System.Process.Typed   (nullStream, proc, runProcess, setStderr, setStdout)
 
-import Icarium.Commands.Util (fatal)
-import Icarium.Config (DispatchConfig(..), cfgDispatch, defaultConfigPath, loadConfig)
-import Icarium.Db (defaultDbPath, withDb)
-import qualified Icarium.Git as Git
-import qualified Icarium.Repo.Dispatch as RD
-import qualified Icarium.Repo.Task as RT
-import Icarium.Types
+import           Icarium.Commands.Util  (fatal)
+import           Icarium.Config         (DispatchConfig (..), cfgDispatch, defaultConfigPath,
+                                         loadConfig)
+import           Icarium.Db             (defaultDbPath, withDb)
+import qualified Icarium.Git            as Git
+import qualified Icarium.Repo.Dispatch  as RD
+import qualified Icarium.Repo.Task      as RT
+import           Icarium.Types
 
 data Options = Options
     { oDispatchId :: Maybe Text

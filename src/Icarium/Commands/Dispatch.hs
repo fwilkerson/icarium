@@ -1,26 +1,26 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
-import Control.Monad (when)
-import Data.Aeson (FromJSON(..), decode, withObject, (.:?))
-import qualified Data.ByteString.Lazy as BL
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.Text.IO as TIO
-import Options.Applicative
-import System.Directory (doesFileExist)
-import Text.Printf (printf)
+import           Control.Monad         (when)
+import           Data.Aeson            (FromJSON (..), decode, withObject, (.:?))
+import qualified Data.ByteString.Lazy  as BL
+import           Data.Maybe            (fromMaybe, listToMaybe, mapMaybe)
+import           Data.Text             (Text)
+import qualified Data.Text             as T
+import qualified Data.Text.Encoding    as TE
+import qualified Data.Text.IO          as TIO
+import           Options.Applicative
+import           System.Directory      (doesFileExist)
+import           Text.Printf           (printf)
 
-import qualified Icarium.Git as Git
+import qualified Icarium.Git           as Git
 
-import Icarium.Commands.Util
-import Icarium.Config (defaultConfigPath, loadConfig)
-import Icarium.Db (defaultDbPath, withDb)
-import qualified Icarium.Dispatch as D
+import           Icarium.Commands.Util
+import           Icarium.Config        (defaultConfigPath, loadConfig)
+import           Icarium.Db            (defaultDbPath, withDb)
+import qualified Icarium.Dispatch      as D
 import qualified Icarium.Repo.Dispatch as RD
-import qualified Icarium.Repo.Task as RT
-import Icarium.Types
+import qualified Icarium.Repo.Task     as RT
+import           Icarium.Types
 
 data Command
     = Run   RunOpts

@@ -5,12 +5,12 @@ module Icarium.Schema
     , applySchema
     ) where
 
-import Data.FileEmbed (embedFile, makeRelativeToProject)
-import Data.Text (Text)
-import qualified Data.Text.Encoding as TE
-import Database.SQLite.Simple (Connection, execute_)
+import           Data.FileEmbed                  (embedFile, makeRelativeToProject)
+import           Data.Text                       (Text)
+import qualified Data.Text.Encoding              as TE
+import           Database.SQLite.Simple          (Connection, execute_)
 import qualified Database.SQLite.Simple.Internal as Internal
-import qualified Database.SQLite3 as Direct
+import qualified Database.SQLite3                as Direct
 
 -- | The DDL for the current schema, embedded at compile time from
 -- @spec/schema.sql@. This is the single source of truth.

@@ -1,14 +1,14 @@
 module Icarium.Commands.Doctor (Options, parser, run) where
 
-import Control.Exception (bracket)
-import Database.SQLite.Simple (close)
-import Options.Applicative
-import System.Directory (doesFileExist, findExecutable)
-import System.Exit (exitWith, ExitCode(..))
+import           Control.Exception      (bracket)
+import           Database.SQLite.Simple (close)
+import           Options.Applicative
+import           System.Directory       (doesFileExist, findExecutable)
+import           System.Exit            (ExitCode (..), exitWith)
 
-import Icarium.Config (defaultConfigPath, loadConfig)
-import Icarium.Db (defaultDbPath, dbSchemaVersion, openDb)
-import Icarium.Schema (schemaVersion)
+import           Icarium.Config         (defaultConfigPath, loadConfig)
+import           Icarium.Db             (dbSchemaVersion, defaultDbPath, openDb)
+import           Icarium.Schema         (schemaVersion)
 
 data Options = Options
 

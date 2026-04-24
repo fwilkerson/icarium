@@ -6,12 +6,12 @@ module Icarium.Db
     , dbSchemaVersion
     ) where
 
-import Control.Exception (bracket)
-import Data.Int (Int64)
-import Database.SQLite.Simple (Connection, Only(..), close, open, query_)
-import Icarium.Schema (applySchema)
-import System.Directory (createDirectoryIfMissing, doesFileExist)
-import System.FilePath ((</>), takeDirectory)
+import           Control.Exception      (bracket)
+import           Data.Int               (Int64)
+import           Database.SQLite.Simple (Connection, Only (..), close, open, query_)
+import           Icarium.Schema         (applySchema)
+import           System.Directory       (createDirectoryIfMissing, doesFileExist)
+import           System.FilePath        (takeDirectory, (</>))
 
 defaultDbPath :: FilePath
 defaultDbPath = ".icarium" </> "icarium.db"

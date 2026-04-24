@@ -1,12 +1,12 @@
 module Icarium.Commands.Next (Options, parser, run) where
 
-import qualified Data.Text.IO as TIO
-import Options.Applicative
-import System.Exit (exitWith, ExitCode(..))
+import qualified Data.Text.IO        as TIO
+import           Options.Applicative
+import           System.Exit         (ExitCode (..), exitWith)
 
-import Icarium.Db (defaultDbPath, withDb)
-import qualified Icarium.Repo.Task as RT
-import Icarium.Types (taskId)
+import           Icarium.Db          (defaultDbPath, withDb)
+import qualified Icarium.Repo.Task   as RT
+import           Icarium.Types       (taskId)
 
 data Options = Options
 

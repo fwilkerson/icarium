@@ -6,40 +6,37 @@ module Icarium.Dispatch
     , applyOutcomeToTask
     ) where
 
-import Control.Concurrent (forkIO)
-import Control.Exception (SomeException, bracket, try)
-import Control.Monad (unless, when)
-import qualified Data.ByteString.Char8 as BC
-import qualified Data.ByteString.Lazy as BL
-import Data.Maybe (fromMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
-import qualified Data.Text.IO as TIO
-import Database.SQLite.Simple (Connection, close)
-import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
-import System.Environment (getEnvironment)
-import System.Exit (ExitCode(..))
-import System.FilePath ((</>))
-import System.IO
-    ( BufferMode(..), Handle, IOMode(..), hClose, hIsEOF, hPutStrLn
-    , hSetBuffering, openFile, stderr
-    )
-import System.Process.Typed
-    ( byteStringInput, createPipe, getPid, getStdout, proc, runProcess, setEnv
-    , setStdin, setStdout, shell, waitExitCode, withProcessWait
-    )
+import           Control.Concurrent     (forkIO)
+import           Control.Exception      (SomeException, bracket, try)
+import           Control.Monad          (unless, when)
+import qualified Data.ByteString.Char8  as BC
+import qualified Data.ByteString.Lazy   as BL
+import           Data.Maybe             (fromMaybe)
+import           Data.Text              (Text)
+import qualified Data.Text              as T
+import qualified Data.Text.Encoding     as TE
+import qualified Data.Text.IO           as TIO
+import           Database.SQLite.Simple (Connection, close)
+import           System.Directory       (createDirectoryIfMissing, doesFileExist, removeFile)
+import           System.Environment     (getEnvironment)
+import           System.Exit            (ExitCode (..))
+import           System.FilePath        ((</>))
+import           System.IO              (BufferMode (..), Handle, IOMode (..), hClose, hIsEOF,
+                                         hPutStrLn, hSetBuffering, openFile, stderr)
+import           System.Process.Typed   (byteStringInput, createPipe, getPid, getStdout, proc,
+                                         runProcess, setEnv, setStdin, setStdout, shell,
+                                         waitExitCode, withProcessWait)
 
-import Icarium.Config
-    ( CommandsConfig(..), Config(..), DispatchConfig(..), ProjectConfig(..) )
-import Icarium.Db (defaultDbPath, openDb)
-import qualified Icarium.Git as Git
-import Icarium.Id (newId)
-import Icarium.Render (renderTaskPrompt)
-import qualified Icarium.Repo.Dispatch as RD
-import qualified Icarium.Repo.Edge as RE
-import qualified Icarium.Repo.Task as RT
-import Icarium.Types
+import           Icarium.Config         (CommandsConfig (..), Config (..), DispatchConfig (..),
+                                         ProjectConfig (..))
+import           Icarium.Db             (defaultDbPath, openDb)
+import qualified Icarium.Git            as Git
+import           Icarium.Id             (newId)
+import           Icarium.Render         (renderTaskPrompt)
+import qualified Icarium.Repo.Dispatch  as RD
+import qualified Icarium.Repo.Edge      as RE
+import qualified Icarium.Repo.Task      as RT
+import           Icarium.Types
 
 -- =============================================================
 -- Request / result

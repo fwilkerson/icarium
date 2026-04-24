@@ -1,21 +1,22 @@
 module Icarium.Commands.Run (Options, parser, run) where
 
-import Control.Monad (when)
-import Data.Maybe (fromMaybe)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Database.SQLite.Simple (Connection)
-import Options.Applicative
-import System.IO (hPutStrLn, stderr)
+import           Control.Monad             (when)
+import           Data.Maybe                (fromMaybe)
+import           Data.Text                 (Text)
+import qualified Data.Text                 as T
+import qualified Data.Text.IO              as TIO
+import           Database.SQLite.Simple    (Connection)
+import           Options.Applicative
+import           System.IO                 (hPutStrLn, stderr)
 
-import Icarium.Commands.Util (effortReader, fatal)
 import qualified Icarium.Commands.Dispatch as CD
-import Icarium.Config (Config, DispatchConfig(..), cfgDispatch, defaultConfigPath, loadConfig)
-import Icarium.Db (defaultDbPath, withDb)
-import qualified Icarium.Dispatch as D
-import qualified Icarium.Repo.Task as RT
-import Icarium.Types
+import           Icarium.Commands.Util     (effortReader, fatal)
+import           Icarium.Config            (Config, DispatchConfig (..), cfgDispatch,
+                                            defaultConfigPath, loadConfig)
+import           Icarium.Db                (defaultDbPath, withDb)
+import qualified Icarium.Dispatch          as D
+import qualified Icarium.Repo.Task         as RT
+import           Icarium.Types
 
 data Options = Options
     { oMax    :: Maybe Int

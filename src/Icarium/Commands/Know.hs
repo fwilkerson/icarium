@@ -1,21 +1,21 @@
 module Icarium.Commands.Know (Command, parser, run) where
 
-import Control.Monad (forM_, void, when)
-import Data.Maybe (isNothing)
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Database.SQLite.Simple (Connection)
-import Options.Applicative
+import           Control.Monad          (forM_, void, when)
+import           Data.Maybe             (isNothing)
+import           Data.Text              (Text)
+import qualified Data.Text              as T
+import qualified Data.Text.IO           as TIO
+import           Database.SQLite.Simple (Connection)
+import           Options.Applicative
 
-import Icarium.Commands.Util
-import Icarium.Db (defaultDbPath, withDb)
-import qualified Icarium.Render as Render
-import qualified Icarium.Repo.Category as RC
-import qualified Icarium.Repo.Edge as RE
+import           Icarium.Commands.Util
+import           Icarium.Db             (defaultDbPath, withDb)
+import qualified Icarium.Render         as Render
+import qualified Icarium.Repo.Category  as RC
+import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
-import qualified Icarium.Repo.Task as RT
-import Icarium.Types
+import qualified Icarium.Repo.Task      as RT
+import           Icarium.Types
 
 data Command
     = Add AddOpts

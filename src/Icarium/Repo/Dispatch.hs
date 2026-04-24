@@ -11,14 +11,10 @@ module Icarium.Repo.Dispatch
     , logPathsOutsideRetention
     ) where
 
-import Data.Text (Text, unpack)
-import Database.SQLite.Simple
-    ( Connection, Only(..), Query(..), execute, query, query_
-    )
+import           Data.Text              (Text, unpack)
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
-import Icarium.Types
-    ( Dispatch(..), DispatchOutcome, Effort
-    )
+import           Icarium.Types          (Dispatch (..), DispatchOutcome, Effort)
 
 data NewDispatch = NewDispatch
     { ndTaskId     :: Text

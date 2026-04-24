@@ -6,15 +6,11 @@ module Icarium.Repo.Edge
     , dependencyTasks
     ) where
 
-import Data.Text (Text)
-import Database.SQLite.Simple
-    ( Connection, Only(..), Query(..), execute, query, query_
-    )
+import           Data.Text              (Text)
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
-import Icarium.Id (newId)
-import Icarium.Types
-    ( Edge(..), EdgeKind(..), Knowledge, NodeKind(..), Task
-    )
+import           Icarium.Id             (newId)
+import           Icarium.Types          (Edge (..), EdgeKind (..), Knowledge, NodeKind (..), Task)
 
 -- | Insert an edge. The DB enforces kind/endpoint typing and node
 -- existence via CHECK constraints and triggers (see schema.sql).

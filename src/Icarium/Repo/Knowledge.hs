@@ -9,13 +9,11 @@ module Icarium.Repo.Knowledge
     , deleteKnowledge
     ) where
 
-import Data.Text (Text)
-import Database.SQLite.Simple
-    ( Connection, Only(..), Query(..), execute, query, query_
-    )
+import           Data.Text              (Text)
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
-import Icarium.Id (newId)
-import Icarium.Types (Knowledge(..))
+import           Icarium.Id             (newId)
+import           Icarium.Types          (Knowledge (..))
 
 data NewKnowledge = NewKnowledge
     { nkTitle :: Text

@@ -1,14 +1,14 @@
 module Icarium.Commands.Init (Options, parser, run) where
 
-import Control.Monad (when)
-import qualified Data.Text.IO as TIO
-import Options.Applicative
-import System.Directory (doesFileExist)
-import System.Exit (exitWith, ExitCode(..))
-import System.IO (hPutStrLn, stderr)
+import           Control.Monad       (when)
+import qualified Data.Text.IO        as TIO
+import           Options.Applicative
+import           System.Directory    (doesFileExist)
+import           System.Exit         (ExitCode (..), exitWith)
+import           System.IO           (hPutStrLn, stderr)
 
-import Icarium.Config (defaultConfigPath, defaultConfigText)
-import Icarium.Db (defaultDbPath, initDb)
+import           Icarium.Config      (defaultConfigPath, defaultConfigText)
+import           Icarium.Db          (defaultDbPath, initDb)
 
 data Options = Options
     { optForce :: Bool

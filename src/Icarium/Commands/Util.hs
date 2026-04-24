@@ -14,14 +14,14 @@ module Icarium.Commands.Util
     , subcmd
     ) where
 
-import Data.Text (Text)
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import Options.Applicative
-import System.Exit (exitWith, ExitCode(..))
-import System.IO (hPutStrLn, stderr)
+import           Data.Text           (Text)
+import qualified Data.Text           as T
+import qualified Data.Text.IO        as TIO
+import           Options.Applicative
+import           System.Exit         (ExitCode (..), exitWith)
+import           System.IO           (hPutStrLn, stderr)
 
-import Icarium.Types
+import           Icarium.Types
 
 fatal :: Int -> String -> IO a
 fatal code msg = do

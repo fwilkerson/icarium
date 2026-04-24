@@ -8,10 +8,10 @@ module Icarium.Render
     , renderCategory
     ) where
 
-import Data.Text (Text)
-import qualified Data.Text as T
+import           Data.Text     (Text)
+import qualified Data.Text     as T
 
-import Icarium.Types
+import           Icarium.Types
 
 -- =============================================================
 -- Task rendering

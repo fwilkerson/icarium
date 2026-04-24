@@ -15,14 +15,15 @@ module Icarium.Types
     , Dispatch(..)
     ) where
 
-import Data.Aeson (ToJSON(..), object, (.=))
-import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Typeable (Typeable)
-import Database.SQLite.Simple (FromRow(..), field)
-import Database.SQLite.Simple.FromField (Field, FromField(..), ResultError(..), returnError)
-import Database.SQLite.Simple.Ok (Ok)
-import Database.SQLite.Simple.ToField (ToField(..))
+import           Data.Aeson                       (ToJSON (..), object, (.=))
+import           Data.Text                        (Text)
+import qualified Data.Text                        as T
+import           Data.Typeable                    (Typeable)
+import           Database.SQLite.Simple           (FromRow (..), field)
+import           Database.SQLite.Simple.FromField (Field, FromField (..), ResultError (..),
+                                                   returnError)
+import           Database.SQLite.Simple.Ok        (Ok)
+import           Database.SQLite.Simple.ToField   (ToField (..))
 
 -- =============================================================
 -- Enums

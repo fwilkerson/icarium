@@ -7,13 +7,11 @@ module Icarium.Repo.Category
     , attachKnowledgeCategory
     ) where
 
-import Data.Text (Text)
-import Database.SQLite.Simple
-    ( Connection, Query(..), execute, query, query_
-    )
+import           Data.Text              (Text)
+import           Database.SQLite.Simple (Connection, Query (..), execute, query, query_)
 
-import Icarium.Id (newId)
-import Icarium.Types (Category(..), CategoryAxis(..), categoryAxisText)
+import           Icarium.Id             (newId)
+import           Icarium.Types          (Category (..), CategoryAxis (..), categoryAxisText)
 
 insertCategory :: Connection -> CategoryAxis -> Text -> IO Text
 insertCategory conn axis name = do
