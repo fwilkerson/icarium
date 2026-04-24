@@ -1,11 +1,29 @@
 module Icarium.Types
-    ( TaskState(..), taskStateText, parseTaskState
+    ( -- * Enums
+      TaskState(..), taskStateText, parseTaskState
     , Effort(..), effortText, parseEffort
     , EdgeKind(..), edgeKindText, parseEdgeKind
     , NodeKind(..), nodeKindText, parseNodeKind
+    , CategoryAxis(..), categoryAxisText, parseCategoryAxis
+
+      -- * Records
+    , Task(..)
+    , Knowledge(..)
+    , Edge(..)
+    , Category(..)
     ) where
 
 import Data.Text (Text)
+import qualified Data.Text as T
+import Data.Typeable (Typeable)
+import Database.SQLite.Simple (FromRow(..), field)
+import Database.SQLite.Simple.FromField (Field, FromField(..), ResultError(..), returnError)
+import Database.SQLite.Simple.Ok (Ok)
+import Database.SQLite.Simple.ToField (ToField(..))
+
+-- =============================================================
+-- Enums
+-- =============================================================
 
 data TaskState = Idea | Planned | Ready | Done | Blocked | Abandoned
     deriving (Show, Eq)
@@ -29,14 +47,10 @@ parseTaskState = \case
     "abandoned" -> Just Abandoned
     _           -> Nothing
 
-data Effort = Low | Medium | High
-    deriving (Show, Eq)
+data Effort = Low | Medium | High deriving (Show, Eq)
 
 effortText :: Effort -> Text
-effortText = \case
-    Low    -> "low"
-    Medium -> "medium"
-    High   -> "high"
+effortText = \case Low -> "low"; Medium -> "medium"; High -> "high"
 
 parseEffort :: Text -> Maybe Effort
 parseEffort = \case
@@ -50,10 +64,10 @@ data EdgeKind = DependsOn | References | DerivedFrom | Supersedes
 
 edgeKindText :: EdgeKind -> Text
 edgeKindText = \case
-    DependsOn    -> "depends_on"
-    References   -> "references"
-    DerivedFrom  -> "derived_from"
-    Supersedes   -> "supersedes"
+    DependsOn   -> "depends_on"
+    References  -> "references"
+    DerivedFrom -> "derived_from"
+    Supersedes  -> "supersedes"
 
 parseEdgeKind :: Text -> Maybe EdgeKind
 parseEdgeKind = \case
@@ -63,8 +77,7 @@ parseEdgeKind = \case
     "supersedes"   -> Just Supersedes
     _              -> Nothing
 
-data NodeKind = TaskNode | KnowledgeNode
-    deriving (Show, Eq)
+data NodeKind = TaskNode | KnowledgeNode deriving (Show, Eq)
 
 nodeKindText :: NodeKind -> Text
 nodeKindText TaskNode      = "task"
@@ -75,3 +88,98 @@ parseNodeKind = \case
     "task"      -> Just TaskNode
     "knowledge" -> Just KnowledgeNode
     _           -> Nothing
+
+data CategoryAxis = Domain | Discipline deriving (Show, Eq)
+
+categoryAxisText :: CategoryAxis -> Text
+categoryAxisText Domain     = "domain"
+categoryAxisText Discipline = "discipline"
+
+parseCategoryAxis :: Text -> Maybe CategoryAxis
+parseCategoryAxis = \case
+    "domain"     -> Just Domain
+    "discipline" -> Just Discipline
+    _            -> Nothing
+
+-- =============================================================
+-- FromField / ToField for enums
+-- =============================================================
+
+enumFromField :: Typeable a => String -> (Text -> Maybe a) -> Field -> Ok a
+enumFromField label p f = do
+    t <- fromField f
+    case p t of
+        Just x  -> pure x
+        Nothing -> returnError ConversionFailed f ("invalid " <> label <> ": " <> T.unpack t)
+
+instance FromField TaskState    where fromField = enumFromField "task state"    parseTaskState
+instance FromField Effort       where fromField = enumFromField "effort"        parseEffort
+instance FromField EdgeKind     where fromField = enumFromField "edge kind"     parseEdgeKind
+instance FromField NodeKind     where fromField = enumFromField "node kind"     parseNodeKind
+instance FromField CategoryAxis where fromField = enumFromField "category axis" parseCategoryAxis
+
+instance ToField TaskState    where toField = toField . taskStateText
+instance ToField Effort       where toField = toField . effortText
+instance ToField EdgeKind     where toField = toField . edgeKindText
+instance ToField NodeKind     where toField = toField . nodeKindText
+instance ToField CategoryAxis where toField = toField . categoryAxisText
+
+-- =============================================================
+-- Records (FromRow column order matches SELECT ordering used in Repo)
+-- =============================================================
+
+data Task = Task
+    { taskId          :: Text
+    , taskTitle       :: Text
+    , taskBody        :: Text
+    , taskState       :: TaskState
+    , taskPriority    :: Maybe Int
+    , taskBlockReason :: Maybe Text
+    , taskCreatedAt   :: Text
+    , taskUpdatedAt   :: Text
+    } deriving (Show)
+
+instance FromRow Task where
+    fromRow = Task <$> field <*> field <*> field <*> field
+                   <*> field <*> field <*> field <*> field
+
+data Knowledge = Knowledge
+    { knowledgeId        :: Text
+    , knowledgeTitle     :: Text
+    , knowledgeBody      :: Text
+    , knowledgeStale     :: Bool
+    , knowledgeCreatedAt :: Text
+    , knowledgeUpdatedAt :: Text
+    } deriving (Show)
+
+instance FromRow Knowledge where
+    fromRow = Knowledge <$> field <*> field <*> field
+                        <*> (intToBool <$> field)
+                        <*> field <*> field
+      where
+        intToBool :: Int -> Bool
+        intToBool 0 = False
+        intToBool _ = True
+
+data Edge = Edge
+    { edgeId        :: Text
+    , edgeKind      :: EdgeKind
+    , edgeSrcKind   :: NodeKind
+    , edgeSrcId     :: Text
+    , edgeDstKind   :: NodeKind
+    , edgeDstId     :: Text
+    , edgeCreatedAt :: Text
+    } deriving (Show)
+
+instance FromRow Edge where
+    fromRow = Edge <$> field <*> field <*> field <*> field
+                   <*> field <*> field <*> field
+
+data Category = Category
+    { categoryId   :: Text
+    , categoryAxis :: CategoryAxis
+    , categoryName :: Text
+    } deriving (Show)
+
+instance FromRow Category where
+    fromRow = Category <$> field <*> field <*> field

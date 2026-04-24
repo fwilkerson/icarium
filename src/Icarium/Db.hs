@@ -1,6 +1,7 @@
 module Icarium.Db
     ( defaultDbPath
     , openDb
+    , withDb
     , initDb
     , dbSchemaVersion
     ) where
@@ -19,6 +20,10 @@ openDb :: FilePath -> IO Connection
 openDb path = do
     createDirectoryIfMissing True (takeDirectory path)
     open path
+
+-- | Open the DB, run an action, close the DB — exception-safe.
+withDb :: FilePath -> (Connection -> IO a) -> IO a
+withDb path = bracket (openDb path) close
 
 -- | Create the DB file and apply the schema. Fails if the file
 -- already exists — the caller decides whether to handle that.

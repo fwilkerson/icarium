@@ -12,6 +12,7 @@ common lang
     default-extensions: OverloadedStrings
                         LambdaCase
                         StrictData
+                        RecordWildCards
     ghc-options:        -Wall -Wunused-packages
 
 library
@@ -22,8 +23,18 @@ library
                       Icarium.Schema
                       Icarium.Db
                       Icarium.Config
+                      Icarium.Render
+                      Icarium.Repo.Task
+                      Icarium.Repo.Knowledge
+                      Icarium.Repo.Edge
+                      Icarium.Repo.Category
+                      Icarium.Commands.Util
                       Icarium.Commands.Init
                       Icarium.Commands.Doctor
+                      Icarium.Commands.Task
+                      Icarium.Commands.Know
+                      Icarium.Commands.Link
+                      Icarium.Commands.Category
     build-depends:    base          >= 4.18 && < 5,
                       text,
                       sqlite-simple,
