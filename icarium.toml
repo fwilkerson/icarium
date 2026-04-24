@@ -3,8 +3,7 @@ integration_branch = "main"
 
 [commands]
 build = "cabal build all"
-# No test suite yet — see dogfood task. Empty = gate is a no-op.
-test  = ""
+test  = "cabal test all"
 
 [dispatch]
 model  = "claude-sonnet-4-6"

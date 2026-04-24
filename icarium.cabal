@@ -65,3 +65,15 @@ executable icarium
     build-depends:    base,
                       icarium,
                       optparse-applicative
+
+test-suite icarium-test
+    import:           lang
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          Main.hs
+    build-depends:    base,
+                      text,
+                      icarium,
+                      tasty,
+                      tasty-hunit,
+                      temporary
