@@ -8,9 +8,10 @@ module Icarium.Repo.Dispatch
     , setLastCommit
     , setPid
     , finishDispatch
+    , logPathsOutsideRetention
     ) where
 
-import Data.Text (Text)
+import Data.Text (Text, unpack)
 import Database.SQLite.Simple
     ( Connection, Only(..), Query(..), execute, query, query_
     )
@@ -88,6 +89,18 @@ setPid :: Connection -> Text -> Int -> IO ()
 setPid conn did pid = execute conn
     (Query "UPDATE dispatches SET pid = ? WHERE id = ?")
     (pid, did)
+
+-- | Log paths for dispatches outside the N most recent by started_at DESC.
+-- Only returns paths that are non-NULL in the DB.
+logPathsOutsideRetention :: Connection -> Int -> IO [FilePath]
+logPathsOutsideRetention conn n = do
+    rows <- query conn
+        (Query "SELECT log_path FROM dispatches \
+               \WHERE log_path IS NOT NULL \
+               \ORDER BY started_at DESC \
+               \LIMIT -1 OFFSET ?")
+        (Only n)
+    pure [unpack lp | Only lp <- rows]
 
 -- | Terminal update: outcome, ended_at, optional merge sha, optional notes.
 finishDispatch

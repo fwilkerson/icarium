@@ -17,7 +17,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import Database.SQLite.Simple (Connection, close)
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
@@ -154,11 +154,12 @@ doReal conn req = do
 
     prompt <- buildPrompt conn task
 
+    let retention = dcLogRetentionRuns (cfgDispatch cfg)
     mBr <- Git.createBranch branch base
     case mBr of
         Left e ->
             finishWith conn did branch OFailure Nothing
-                ("git checkout -b failed: " <> T.pack (show e))
+                ("git checkout -b failed: " <> T.pack (show e)) retention
         Right () -> do
             exit <- runClaudeStreaming did task prompt model tools logPath
             handlePostClaude conn did branch base cfg exit
@@ -256,7 +257,7 @@ handlePostClaude
 handlePostClaude conn did branch base cfg = \case
     ExitFailure c ->
         finishWith conn did branch OFailure Nothing
-            ("claude exited " <> T.pack (show c))
+            ("claude exited " <> T.pack (show c)) ret
     ExitSuccess -> do
         mSha <- Git.revParse branch
         case mSha of
@@ -268,23 +269,25 @@ handlePostClaude conn did branch base cfg = \case
             Right _ -> runGate (ccTest cc)
         case gated of
             Left notes ->
-                finishWith conn did branch OFailure Nothing notes
+                finishWith conn did branch OFailure Nothing notes ret
             Right () -> do
                 e1 <- Git.checkout base
                 case e1 of
                     Left err -> finishWith conn did branch OFailure Nothing
-                        ("checkout base: " <> T.pack (show err))
+                        ("checkout base: " <> T.pack (show err)) ret
                     Right () -> do
                         e2 <- Git.ffMerge branch
                         case e2 of
                             Left err -> finishWith conn did branch OFailure Nothing
-                                ("ff-merge: " <> T.pack (show err))
+                                ("ff-merge: " <> T.pack (show err)) ret
                             Right () -> do
                                 -- Branch is fully reachable from base; delete it.
                                 _ <- Git.deleteBranch branch
                                 mShaBase <- Git.revParse base
                                 let mergeSha = either (const Nothing) Just mShaBase
-                                finishWith conn did branch OSuccess mergeSha "merged"
+                                finishWith conn did branch OSuccess mergeSha "merged" ret
+  where
+    ret = dcLogRetentionRuns (cfgDispatch cfg)
 
 -- | Run a shell command (as a single string, so users can include
 -- pipes and &&). Returns () on exit 0; otherwise a short note.
@@ -302,16 +305,26 @@ runGate cmdText
 -- =============================================================
 
 finishWith
-    :: Connection -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text
+    :: Connection -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text -> Int
     -> IO DispatchResult
-finishWith conn did branch outcome mSha notes = do
+finishWith conn did branch outcome mSha notes retention = do
     RD.finishDispatch conn did outcome mSha (Just notes)
+    pruneLogFiles conn retention
     pure DispatchResult
         { dresDispatchId = Just did
         , dresOutcome    = outcome
         , dresBranch     = branch
         , dresNotes      = notes
         }
+
+pruneLogFiles :: Connection -> Int -> IO ()
+pruneLogFiles conn retention = do
+    paths <- RD.logPathsOutsideRetention conn retention
+    mapM_ deleteIfExists paths
+  where
+    deleteIfExists p = do
+        exists <- doesFileExist p
+        when exists (removeFile p)
 
 buildPrompt :: Connection -> Task -> IO Text
 buildPrompt conn t = do
