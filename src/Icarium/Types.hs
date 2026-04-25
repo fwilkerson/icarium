@@ -15,7 +15,8 @@ module Icarium.Types
     , Dispatch(..)
     ) where
 
-import           Data.Aeson                       (ToJSON (..), object, (.=))
+import           Data.Aeson                       (FromJSON (..), ToJSON (..), object, withObject,
+                                                   withText, (.:), (.:?), (.=))
 import           Data.Text                        (Text)
 import qualified Data.Text                        as T
 import           Data.Typeable                    (Typeable)
@@ -298,3 +299,89 @@ instance ToJSON Dispatch where
         , "notes"        .= dispatchNotes
         , "log_path"     .= dispatchLogPath
         ]
+
+-- =============================================================
+-- FromJSON instances (mirror the ToJSON field names above)
+-- =============================================================
+
+parseEnum :: String -> (Text -> Maybe a) -> Text -> Either String a
+parseEnum label p t = maybe (Left $ "invalid " <> label <> ": " <> T.unpack t) Right (p t)
+
+instance FromJSON TaskState where
+    parseJSON = withText "TaskState" $ \t ->
+        either fail pure (parseEnum "task state" parseTaskState t)
+
+instance FromJSON Effort where
+    parseJSON = withText "Effort" $ \t ->
+        either fail pure (parseEnum "effort" parseEffort t)
+
+instance FromJSON EdgeKind where
+    parseJSON = withText "EdgeKind" $ \t ->
+        either fail pure (parseEnum "edge kind" parseEdgeKind t)
+
+instance FromJSON NodeKind where
+    parseJSON = withText "NodeKind" $ \t ->
+        either fail pure (parseEnum "node kind" parseNodeKind t)
+
+instance FromJSON CategoryAxis where
+    parseJSON = withText "CategoryAxis" $ \t ->
+        either fail pure (parseEnum "category axis" parseCategoryAxis t)
+
+instance FromJSON DispatchOutcome where
+    parseJSON = withText "DispatchOutcome" $ \t ->
+        either fail pure (parseEnum "dispatch outcome" parseDispatchOutcome t)
+
+instance FromJSON Task where
+    parseJSON = withObject "Task" $ \o -> Task
+        <$> o .:  "id"
+        <*> o .:  "title"
+        <*> o .:  "body"
+        <*> o .:  "state"
+        <*> o .:? "priority"
+        <*> o .:? "block_reason"
+        <*> o .:  "created_at"
+        <*> o .:  "updated_at"
+
+instance FromJSON Knowledge where
+    parseJSON = withObject "Knowledge" $ \o -> Knowledge
+        <$> o .:  "id"
+        <*> o .:  "title"
+        <*> o .:  "body"
+        <*> o .:  "stale"
+        <*> o .:  "created_at"
+        <*> o .:  "updated_at"
+
+instance FromJSON Edge where
+    parseJSON = withObject "Edge" $ \o -> Edge
+        <$> o .:  "id"
+        <*> o .:  "kind"
+        <*> o .:  "src_kind"
+        <*> o .:  "src_id"
+        <*> o .:  "dst_kind"
+        <*> o .:  "dst_id"
+        <*> o .:  "created_at"
+
+instance FromJSON Category where
+    parseJSON = withObject "Category" $ \o -> Category
+        <$> o .: "id"
+        <*> o .: "axis"
+        <*> o .: "name"
+
+instance FromJSON Dispatch where
+    parseJSON = withObject "Dispatch" $ \o -> Dispatch
+        <$> o .:  "id"
+        <*> o .:  "task_id"
+        <*> o .:  "branch"
+        <*> o .:  "base_branch"
+        <*> o .:  "base_sha"
+        <*> o .:? "pid"
+        <*> o .:  "model"
+        <*> o .:  "effort"
+        <*> o .:  "started_at"
+        <*> o .:  "heartbeat_at"
+        <*> o .:? "ended_at"
+        <*> o .:? "outcome"
+        <*> o .:? "merge_sha"
+        <*> o .:? "last_commit"
+        <*> o .:? "notes"
+        <*> o .:? "log_path"
