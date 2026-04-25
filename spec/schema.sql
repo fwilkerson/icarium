@@ -13,10 +13,10 @@ CREATE TABLE tasks (
     title       TEXT NOT NULL,
     body        TEXT NOT NULL DEFAULT '',           -- markdown
     state       TEXT NOT NULL DEFAULT 'planned'
-                CHECK (state IN ('idea','planned','ready','done',
+                CHECK (state IN ('idea','planned','ready','in_progress','done',
                                  'blocked','abandoned')),
-    -- Note: 'in_progress' is NOT stored; it is derived from an open
-    -- dispatch (dispatches.outcome IS NULL). See view `task_status`.
+    -- 'in_progress' is stored; the dispatch program sets it before invoking
+    -- the agent, then transitions to 'done' or 'blocked' after gates pass.
     priority    INTEGER,                             -- NULL = default
     block_reason TEXT,                               -- structured text when state='blocked'
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),

@@ -155,6 +155,9 @@ doReal conn req = do
         , RD.ndPid        = Nothing
         }
 
+    void $ RT.updateTask conn (taskId task) RT.emptyUpdate
+        { RT.tuState = Just InProgress }
+
     prompt <- buildPrompt conn task
 
     let retention = dcLogRetentionRuns (cfgDispatch cfg)
@@ -380,7 +383,7 @@ applyOutcomeToTask conn t res
         OSuccess -> do
             mFresh <- RT.getTask conn (taskId t)
             case mFresh of
-                Just t' | taskState t' == Ready ->
+                Just t' | taskState t' `elem` [InProgress, Ready] ->
                     void $ RT.updateTask conn (taskId t') RT.emptyUpdate
                         { RT.tuState = Just Done }
                 _ -> pure ()

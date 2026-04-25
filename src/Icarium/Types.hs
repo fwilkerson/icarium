@@ -30,27 +30,29 @@ import           Database.SQLite.Simple.ToField   (ToField (..))
 -- Enums
 -- =============================================================
 
-data TaskState = Idea | Planned | Ready | Done | Blocked | Abandoned
+data TaskState = Idea | Planned | Ready | InProgress | Done | Blocked | Abandoned
     deriving (Show, Eq)
 
 taskStateText :: TaskState -> Text
 taskStateText = \case
-    Idea      -> "idea"
-    Planned   -> "planned"
-    Ready     -> "ready"
-    Done      -> "done"
-    Blocked   -> "blocked"
-    Abandoned -> "abandoned"
+    Idea       -> "idea"
+    Planned    -> "planned"
+    Ready      -> "ready"
+    InProgress -> "in_progress"
+    Done       -> "done"
+    Blocked    -> "blocked"
+    Abandoned  -> "abandoned"
 
 parseTaskState :: Text -> Maybe TaskState
 parseTaskState = \case
-    "idea"      -> Just Idea
-    "planned"   -> Just Planned
-    "ready"     -> Just Ready
-    "done"      -> Just Done
-    "blocked"   -> Just Blocked
-    "abandoned" -> Just Abandoned
-    _           -> Nothing
+    "idea"        -> Just Idea
+    "planned"     -> Just Planned
+    "ready"       -> Just Ready
+    "in_progress" -> Just InProgress
+    "done"        -> Just Done
+    "blocked"     -> Just Blocked
+    "abandoned"   -> Just Abandoned
+    _             -> Nothing
 
 data Effort = Low | Medium | High deriving (Show, Eq)
 

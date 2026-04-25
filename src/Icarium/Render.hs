@@ -127,12 +127,10 @@ workingAgreement t =
     , "You are a headless dispatch working on this task. Guardrails:"
     , ""
     , "- All task/knowledge mutation MUST go through the `icarium` CLI."
-    , "- Mark start:  `icarium task update " <> taskId t <> " --state in_progress`"
-    , "- Mark done:   `icarium task update " <> taskId t <> " --state done`"
-    , "- If blocked:  `icarium task update " <> taskId t <> " --state blocked --block-reason '<why>'`"
+    , "- If blocked:  `./bin/icarium task update " <> taskId t <> " --state blocked --block-reason '<why>'`"
     , "- Record anything you learn that future tasks should know as knowledge:"
-    , "    `icarium know add '<title>' --body-stdin`"
-    , "- Commit code before marking done."
+    , "    `./bin/icarium know add '<title>' --body-stdin`"
+    , "- Commit your code before exiting; the program marks the task done after the gates pass and the FF-merge succeeds."
     , ""
     ]
 

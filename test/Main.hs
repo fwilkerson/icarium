@@ -49,12 +49,13 @@ roundTrip toTxt fromTxt label val = testCase (T.unpack label) $ do
 
 taskStateTests :: [TestTree]
 taskStateTests =
-    [ roundTrip taskStateText parseTaskState "idea"      Idea
-    , roundTrip taskStateText parseTaskState "planned"   Planned
-    , roundTrip taskStateText parseTaskState "ready"     Ready
-    , roundTrip taskStateText parseTaskState "done"      Done
-    , roundTrip taskStateText parseTaskState "blocked"   Blocked
-    , roundTrip taskStateText parseTaskState "abandoned" Abandoned
+    [ roundTrip taskStateText parseTaskState "idea"        Idea
+    , roundTrip taskStateText parseTaskState "planned"     Planned
+    , roundTrip taskStateText parseTaskState "ready"       Ready
+    , roundTrip taskStateText parseTaskState "in_progress" InProgress
+    , roundTrip taskStateText parseTaskState "done"        Done
+    , roundTrip taskStateText parseTaskState "blocked"     Blocked
+    , roundTrip taskStateText parseTaskState "abandoned"   Abandoned
     ]
 
 edgeKindTests :: [TestTree]
