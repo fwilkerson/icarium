@@ -7,8 +7,9 @@ module Icarium.Schema
 
 import           Data.FileEmbed                  (embedFile, makeRelativeToProject)
 import           Data.Text                       (Text)
+import qualified Data.Text                       as T
 import qualified Data.Text.Encoding              as TE
-import           Database.SQLite.Simple          (Connection, execute_)
+import           Database.SQLite.Simple          (Connection, Query (..), execute_)
 import qualified Database.SQLite.Simple.Internal as Internal
 import qualified Database.SQLite3                as Direct
 
@@ -27,4 +28,4 @@ schemaVersion = 2
 applySchema :: Connection -> IO ()
 applySchema conn = do
     Direct.exec (Internal.connectionHandle conn) schemaSql
-    execute_ conn "PRAGMA user_version = 1"
+    execute_ conn (Query (T.pack ("PRAGMA user_version = " <> show schemaVersion)))
