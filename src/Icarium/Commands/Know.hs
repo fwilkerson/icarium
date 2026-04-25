@@ -8,6 +8,7 @@ import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
+import           System.Environment     (lookupEnv)
 
 import           Icarium.Commands.Util
 import           Icarium.Db             (defaultDbPath, withDb)
@@ -75,9 +76,24 @@ runAdd o = withDb defaultDbPath $ \c -> do
     derived <- mapM (resolveNode c) (aDerivedFrom o)
     for_ (aSupersedes o) (requireKnowledge c)
 
+    -- Per-axis inheritance: if an axis has no explicit flag and
+    -- ICARIUM_TASK_ID is set, copy that axis's categories from the task.
+    inheritedCats <- if null (aDomains o) || null (aDisciplines o)
+        then do
+            mTaskId <- lookupEnv "ICARIUM_TASK_ID"
+            case mTaskId of
+                Nothing  -> pure []
+                Just tid -> do
+                    allCats <- RC.taskCategoriesFor c (T.pack tid)
+                    pure $ filter (\cat ->
+                        (null (aDomains o)     && categoryAxis cat == Domain) ||
+                        (null (aDisciplines o) && categoryAxis cat == Discipline)
+                        ) allCats
+        else pure []
+
     kid <- RK.insertKnowledge c RK.NewKnowledge
         { RK.nkTitle = aTitle o, RK.nkBody = body }
-    forM_ (domains <> disc) $ \cat ->
+    forM_ (domains <> disc <> inheritedCats) $ \cat ->
         RC.attachKnowledgeCategory c kid (categoryId cat)
     forM_ derived $ \(nkind, nid) ->
         void $ RE.insertEdge c DerivedFrom KnowledgeNode kid nkind nid
@@ -159,10 +175,12 @@ runShow o = withDb defaultDbPath $ \c -> do
 -- =============================================================
 
 data UpdateOpts = UpdateOpts
-    { uId    :: Text
-    , uTitle :: Maybe Text
-    , uBody  :: BodyInput
-    , uStale :: Maybe Bool
+    { uId          :: Text
+    , uTitle       :: Maybe Text
+    , uBody        :: BodyInput
+    , uStale       :: Maybe Bool
+    , uDomains     :: [Text]
+    , uDisciplines :: [Text]
     }
 
 updateP :: Parser UpdateOpts
@@ -171,6 +189,8 @@ updateP = UpdateOpts . T.pack
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"))
     <*> bodyInputParser
     <*> optional staleFlag
+    <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"))
+    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
   where
     staleFlag =
             flag' True  (long "stale" <> help "Mark as stale")
@@ -181,14 +201,19 @@ runUpdate o = withDb defaultDbPath $ \c -> do
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
+    domains <- mapM (requireCategory c Domain)     (uDomains o)
+    disc    <- mapM (requireCategory c Discipline) (uDisciplines o)
     let upd = RK.emptyUpdate
             { RK.kuTitle = uTitle o
             , RK.kuBody  = body
             , RK.kuStale = uStale o
             }
     ok <- RK.updateKnowledge c (uId o) upd
-    if ok then TIO.putStrLn ("updated " <> uId o)
-          else fatal 1 ("knowledge not found: " <> T.unpack (uId o))
+    if ok then do
+        forM_ (domains <> disc) $ \cat ->
+            RC.attachKnowledgeCategory c (uId o) (categoryId cat)
+        TIO.putStrLn ("updated " <> uId o)
+    else fatal 1 ("knowledge not found: " <> T.unpack (uId o))
 
 -- =============================================================
 -- rm
