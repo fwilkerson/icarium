@@ -74,6 +74,7 @@ test-suite icarium-test
     main-is:          Main.hs
     build-depends:    base,
                       text,
+                      sqlite-simple,
                       icarium,
                       tasty,
                       tasty-hunit,

@@ -160,11 +160,14 @@ runShow o = withDb defaultDbPath $ \c -> do
     case mt of
         Nothing -> fatal 1 ("task not found: " <> T.unpack (sId o))
         Just t  -> do
-            refs <- RE.referencedKnowledge c (taskId t)
-            deps <- RE.dependencyTasks     c (taskId t)
-            cats <- RC.taskCategoriesFor   c (taskId t)
+            refs     <- RE.referencedKnowledge c (taskId t)
+            deps     <- RE.dependencyTasks     c (taskId t)
+            cats     <- RC.taskCategoriesFor   c (taskId t)
+            catMatch <- RK.categoryMatchedKnowledge c cats 5
+            let refIds     = map knowledgeId refs
+                dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
             TIO.putStr $ if sPrompt o
-                then Render.renderTaskPrompt t refs deps
+                then Render.renderTaskPrompt t refs dedupedCat deps
                 else Render.renderTaskHuman  t refs deps cats
 
 -- =============================================================

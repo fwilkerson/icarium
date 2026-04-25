@@ -33,8 +33,10 @@ import           Icarium.Db             (defaultDbPath, openDb)
 import qualified Icarium.Git            as Git
 import           Icarium.Id             (newId)
 import           Icarium.Render         (renderTaskPrompt)
+import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Edge      as RE
+import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
 import           Icarium.Types
 
@@ -339,9 +341,13 @@ pruneLogFiles conn retention = do
 
 buildPrompt :: Connection -> Task -> IO Text
 buildPrompt conn t = do
-    refs <- RE.referencedKnowledge conn (taskId t)
-    deps <- RE.dependencyTasks     conn (taskId t)
-    pure (renderTaskPrompt t refs deps)
+    refs     <- RE.referencedKnowledge conn (taskId t)
+    cats     <- RC.taskCategoriesFor   conn (taskId t)
+    catMatch <- RK.categoryMatchedKnowledge conn cats 5
+    deps     <- RE.dependencyTasks     conn (taskId t)
+    let refIds     = map knowledgeId refs
+        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+    pure (renderTaskPrompt t refs dedupedCat deps)
 
 effectiveModel :: DispatchRequest -> Text
 effectiveModel req =

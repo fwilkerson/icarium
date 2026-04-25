@@ -155,7 +155,7 @@ data Knowledge = Knowledge
     , knowledgeStale     :: Bool
     , knowledgeCreatedAt :: Text
     , knowledgeUpdatedAt :: Text
-    } deriving (Show)
+    } deriving (Show, Eq)
 
 instance FromRow Knowledge where
     fromRow = Knowledge <$> field <*> field <*> field

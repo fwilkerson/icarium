@@ -69,8 +69,10 @@ refSection refs = ["## Referenced knowledge", ""]
 
 -- | The exact prompt the dispatcher will send to the headless agent.
 -- Sharing this with @task show --prompt@ keeps the two in lockstep.
-renderTaskPrompt :: Task -> [Knowledge] -> [Task] -> Text
-renderTaskPrompt t refs deps = T.unlines $
+-- @refs@ = explicit references (always rendered); @catMatched@ = auto-pulled
+-- by category (rendered under a separate hedged section, omitted if empty).
+renderTaskPrompt :: Task -> [Knowledge] -> [Knowledge] -> [Task] -> Text
+renderTaskPrompt t refs catMatched deps = T.unlines $
     [ "# Task " <> taskId t
     , ""
     , "**" <> taskTitle t <> "**"
@@ -80,6 +82,7 @@ renderTaskPrompt t refs deps = T.unlines $
     ]
     <> promptDeps deps
     <> promptRefs refs
+    <> promptRelated catMatched
     <> workingAgreement t
 
 promptDeps :: [Task] -> [Text]
@@ -96,6 +99,21 @@ promptRefs ks =
     "## Referenced knowledge"
     : ""
     : concatMap (\k ->
+        [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
+        , ""
+        , knowledgeBody k
+        , ""
+        ]) ks
+
+promptRelated :: [Knowledge] -> [Text]
+promptRelated [] = []
+promptRelated ks =
+    [ "## Related knowledge"
+    , ""
+    , "These entries share categories with this task. They may not all apply directly — use judgment."
+    , ""
+    ]
+    <> concatMap (\k ->
         [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
         , ""
         , knowledgeBody k

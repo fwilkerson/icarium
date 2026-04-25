@@ -7,6 +7,7 @@ module Icarium.Repo.Knowledge
     , listKnowledge
     , updateKnowledge
     , deleteKnowledge
+    , categoryMatchedKnowledge
     ) where
 
 import           Data.Maybe             (catMaybes, fromMaybe)
@@ -16,7 +17,7 @@ import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLD
                                          query)
 
 import           Icarium.Id             (newId)
-import           Icarium.Types          (Knowledge (..))
+import           Icarium.Types          (Category (..), CategoryAxis (..), Knowledge (..))
 
 data NewKnowledge = NewKnowledge
     { nkTitle :: Text
@@ -98,3 +99,27 @@ deleteKnowledge conn kid = do
         Just _  -> do
             execute conn (Query "DELETE FROM knowledge WHERE id = ?") (Only kid)
             pure True
+
+-- | Knowledge entries whose categories AND-intersect with the given
+-- category list (one condition per axis present in the input). Excludes
+-- stale entries. Returns [] immediately when the input list is empty.
+-- Cap limits results; order is most-recently-created first.
+categoryMatchedKnowledge :: Connection -> [Category] -> Int -> IO [Knowledge]
+categoryMatchedKnowledge conn cats cap
+    | null cats    = pure []
+    | null clauses = pure []
+    | otherwise    = query conn q params
+  where
+    domains = [categoryName c | c <- cats, categoryAxis c == Domain]
+    discs   = [categoryName c | c <- cats, categoryAxis c == Discipline]
+    axisClause axis names =
+        let ph = T.intercalate "," (replicate (length names) "?")
+        in "id IN (SELECT knowledge_id FROM knowledge_categories kc \
+           \JOIN categories c ON c.id = kc.category_id \
+           \WHERE c.axis = '" <> axis <> "' AND c.name IN (" <> ph <> "))"
+    clauses = (if null domains then [] else [axisClause "domain"     domains])
+           <> (if null discs   then [] else [axisClause "discipline" discs  ])
+    q = Query $ "SELECT " <> knowCols <> " FROM knowledge"
+             <> " WHERE stale = 0 AND " <> T.intercalate " AND " clauses
+             <> " ORDER BY created_at DESC LIMIT ?"
+    params = map SQLText domains <> map SQLText discs <> [SQLInteger (fromIntegral cap)]
