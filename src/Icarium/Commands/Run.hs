@@ -50,7 +50,7 @@ loop opts cfg cap !i conn
     | i >= cap = hPutStrLn stderr
         ("icarium: reached max dispatches (" <> show cap <> "); stopping")
     | otherwise = do
-        ts <- RT.listTasks conn [] True
+        ts <- RT.listTasks conn [] True Nothing Nothing
         case ts of
             [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
             (t : _) -> do

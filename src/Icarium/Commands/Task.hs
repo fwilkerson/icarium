@@ -120,18 +120,24 @@ requireKnowledge c kid = do
 -- =============================================================
 
 data ListOpts = ListOpts
-    { lStates :: [TaskState]
-    , lReady  :: Bool
+    { lStates     :: [TaskState]
+    , lReady      :: Bool
+    , lDomain     :: Maybe Text
+    , lDiscipline :: Maybe Text
     }
 
 listP :: Parser ListOpts
 listP = ListOpts
     <$> many (option taskStateReader (long "state" <> metavar "STATE"))
     <*> switch (long "ready" <> help "Only tasks ready to dispatch")
+    <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"))
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
-    ts <- RT.listTasks c (lStates o) (lReady o)
+    forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
+    forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
+    ts <- RT.listTasks c (lStates o) (lReady o) (lDomain o) (lDiscipline o)
     TIO.putStr (Render.renderTaskList ts)
 
 -- =============================================================

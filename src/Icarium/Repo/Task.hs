@@ -9,9 +9,11 @@ module Icarium.Repo.Task
     , deleteTask
     ) where
 
-import           Data.Maybe             (fromMaybe)
+import           Data.Maybe             (catMaybes, fromMaybe)
 import           Data.Text              (Text)
-import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
+import qualified Data.Text              as T
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
+                                         query)
 
 import           Icarium.Id             (newId)
 import           Icarium.Types          (Task (..), TaskState (..))
@@ -57,19 +59,36 @@ getTask conn tid = do
 
 -- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
 -- (state='ready' with all depends_on satisfied). Otherwise pulls from
--- @tasks@ and optionally filters by state client-side.
-listTasks :: Connection -> [TaskState] -> Bool -> IO [Task]
-listTasks conn filterStates readyOnly
-    | readyOnly = query_ conn
-        (Query $ "SELECT " <> taskCols <> " FROM ready_tasks \
-                 \ORDER BY COALESCE(priority, 0) DESC, created_at ASC")
-    | otherwise = do
-        rows <- query_ conn
-            (Query $ "SELECT " <> taskCols <> " FROM tasks \
-                     \ORDER BY created_at ASC")
-        pure $ case filterStates of
+-- @tasks@ and optionally filters by state client-side. Both @mDomain@
+-- and @mDiscipline@ are category-name filters applied at the SQL level.
+listTasks :: Connection -> [TaskState] -> Bool -> Maybe Text -> Maybe Text -> IO [Task]
+listTasks conn filterStates readyOnly mDomain mDisc = do
+    rows <- query conn (buildQ tbl ord) params
+    pure $ if readyOnly
+        then rows
+        else case filterStates of
             [] -> rows
             ss -> filter ((`elem` ss) . taskState) rows
+  where
+    tbl  = if readyOnly then "ready_tasks" else "tasks"
+    ord  = if readyOnly
+               then "COALESCE(priority, 0) DESC, created_at ASC"
+               else "created_at ASC"
+    (whereClause, params) = taskCatWhere mDomain mDisc
+    buildQ t o = Query $ "SELECT " <> taskCols <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
+
+taskCatWhere :: Maybe Text -> Maybe Text -> (Text, [SQLData])
+taskCatWhere mDomain mDisc =
+    let catSubq axis = "id IN (SELECT task_id FROM task_categories tc"
+                    <> " JOIN categories c ON c.id = tc.category_id"
+                    <> " WHERE c.axis = '" <> axis <> "' AND c.name = ?)"
+        filters = catMaybes
+            [ fmap (\n -> (catSubq "domain",      SQLText n)) mDomain
+            , fmap (\n -> (catSubq "discipline",   SQLText n)) mDisc
+            ]
+    in case filters of
+        [] -> ("", [])
+        fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
 
 -- | Apply a sparse update. Returns True iff a row was affected.
 updateTask :: Connection -> Text -> TaskUpdate -> IO Bool

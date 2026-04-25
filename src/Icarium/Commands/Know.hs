@@ -117,15 +117,23 @@ requireKnowledge c kid = do
 -- list
 -- =============================================================
 
-data ListOpts = ListOpts { lStale :: Bool }
+data ListOpts = ListOpts
+    { lStale      :: Bool
+    , lDomain     :: Maybe Text
+    , lDiscipline :: Maybe Text
+    }
 
 listP :: Parser ListOpts
 listP = ListOpts
     <$> switch (long "stale" <> help "Only entries flagged stale")
+    <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"))
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
-    ks <- RK.listKnowledge c (lStale o)
+    forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
+    forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
+    ks <- RK.listKnowledge c (lStale o) (lDomain o) (lDiscipline o)
     TIO.putStr (Render.renderKnowledgeList ks)
 
 -- =============================================================

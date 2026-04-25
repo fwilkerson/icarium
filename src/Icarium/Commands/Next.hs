@@ -18,7 +18,7 @@ parser = pure Options
 -- order the @ready_tasks@ view produces.
 run :: Options -> IO ()
 run _ = withDb defaultDbPath $ \c -> do
-    ts <- RT.listTasks c [] True
+    ts <- RT.listTasks c [] True Nothing Nothing
     case ts of
         []      -> exitWith (ExitFailure 1)
         (t : _) -> TIO.putStrLn (taskId t)
