@@ -18,8 +18,8 @@ import           Icarium.Types
 -- =============================================================
 
 -- | Human-facing task view. Shows metadata + body + linked nodes.
-renderTaskHuman :: Task -> [Knowledge] -> [Task] -> Text
-renderTaskHuman t refs deps = T.unlines $
+renderTaskHuman :: Task -> [Knowledge] -> [Task] -> [Category] -> Text
+renderTaskHuman t refs deps cats = T.unlines $
     [ "id:        " <> taskId t
     , "title:     " <> taskTitle t
     , "state:     " <> taskStateText (taskState t)
@@ -28,7 +28,9 @@ renderTaskHuman t refs deps = T.unlines $
     <> blockReasonLines t
     <> [ "created:   " <> taskCreatedAt t
        , "updated:   " <> taskUpdatedAt t
-       , ""
+       ]
+    <> categoriesBlock cats
+    <> [ ""
        , "## Body"
        , ""
        , if T.null (taskBody t) then "(no body)" else taskBody t
@@ -135,18 +137,20 @@ renderTaskList ts = T.unlines $ header : map row ts
     prio Nothing  = "-"
     prio (Just p) = T.pack (show p)
 
-renderKnowledge :: Knowledge -> Text
-renderKnowledge k = T.unlines $
+renderKnowledge :: Knowledge -> [Category] -> Text
+renderKnowledge k cats = T.unlines $
     [ "id:       " <> knowledgeId k
     , "title:    " <> knowledgeTitle k
     , "stale:    " <> (if knowledgeStale k then "yes" else "no")
     , "created:  " <> knowledgeCreatedAt k
     , "updated:  " <> knowledgeUpdatedAt k
-    , ""
-    , "## Body"
-    , ""
-    , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
     ]
+    <> categoriesBlock cats
+    <> [ ""
+       , "## Body"
+       , ""
+       , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
+       ]
 
 renderKnowledgeList :: [Knowledge] -> Text
 renderKnowledgeList [] = "(no knowledge)\n"
@@ -169,6 +173,17 @@ renderCategory :: Category -> Text
 renderCategory c =
     categoryAxisText (categoryAxis c) <> "  " <> categoryName c
     <> "  (" <> categoryId c <> ")"
+
+categoriesBlock :: [Category] -> [Text]
+categoriesBlock [] = []
+categoriesBlock cats =
+    "Categories:"
+    : concatMap axisLine [Domain, Discipline]
+  where
+    axisLine axis =
+        let names = [categoryName c | c <- cats, categoryAxis c == axis]
+        in if null names then []
+           else ["  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names]
 
 padr :: Int -> Text -> Text
 padr n s = s <> T.replicate (max 0 (n - T.length s)) " "

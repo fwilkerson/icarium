@@ -162,9 +162,10 @@ runShow o = withDb defaultDbPath $ \c -> do
         Just t  -> do
             refs <- RE.referencedKnowledge c (taskId t)
             deps <- RE.dependencyTasks     c (taskId t)
+            cats <- RC.taskCategoriesFor   c (taskId t)
             TIO.putStr $ if sPrompt o
                 then Render.renderTaskPrompt t refs deps
-                else Render.renderTaskHuman  t refs deps
+                else Render.renderTaskHuman  t refs deps cats
 
 -- =============================================================
 -- update

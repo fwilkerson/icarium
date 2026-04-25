@@ -150,7 +150,9 @@ runShow o = withDb defaultDbPath $ \c -> do
     mk <- RK.getKnowledge c (sId o)
     case mk of
         Nothing -> fatal 1 ("knowledge not found: " <> T.unpack (sId o))
-        Just k  -> TIO.putStr (Render.renderKnowledge k)
+        Just k  -> do
+            cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
+            TIO.putStr (Render.renderKnowledge k cats)
 
 -- =============================================================
 -- update

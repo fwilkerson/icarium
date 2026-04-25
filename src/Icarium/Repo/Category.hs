@@ -5,6 +5,8 @@ module Icarium.Repo.Category
     , deleteCategory
     , attachTaskCategory
     , attachKnowledgeCategory
+    , taskCategoriesFor
+    , knowledgeCategoriesFor
     ) where
 
 import           Data.Text              (Text)
@@ -58,3 +60,17 @@ attachKnowledgeCategory :: Connection -> Text -> Text -> IO ()
 attachKnowledgeCategory conn kid cid = execute conn
     (Query "INSERT OR IGNORE INTO knowledge_categories (knowledge_id, category_id) VALUES (?, ?)")
     (kid, cid)
+
+taskCategoriesFor :: Connection -> Text -> IO [Category]
+taskCategoriesFor conn tid = query conn
+    (Query "SELECT c.id, c.axis, c.name FROM categories c \
+           \JOIN task_categories tc ON tc.category_id = c.id \
+           \WHERE tc.task_id = ? ORDER BY c.axis, c.name")
+    [tid]
+
+knowledgeCategoriesFor :: Connection -> Text -> IO [Category]
+knowledgeCategoriesFor conn kid = query conn
+    (Query "SELECT c.id, c.axis, c.name FROM categories c \
+           \JOIN knowledge_categories kc ON kc.category_id = c.id \
+           \WHERE kc.knowledge_id = ? ORDER BY c.axis, c.name")
+    [kid]
