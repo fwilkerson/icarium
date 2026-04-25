@@ -8,7 +8,7 @@ module Icarium.Dispatch
 
 import           Control.Concurrent     (forkIO)
 import           Control.Exception      (SomeException, bracket, try)
-import           Control.Monad          (unless, when)
+import           Control.Monad          (unless, void, when)
 import qualified Data.ByteString.Char8  as BC
 import qualified Data.ByteString.Lazy   as BL
 import           Data.Maybe             (fromMaybe)
@@ -375,11 +375,11 @@ applyOutcomeToTask conn t res
             mFresh <- RT.getTask conn (taskId t)
             case mFresh of
                 Just t' | taskState t' == Ready ->
-                    () <$ RT.updateTask conn (taskId t') RT.emptyUpdate
+                    void $ RT.updateTask conn (taskId t') RT.emptyUpdate
                         { RT.tuState = Just Done }
                 _ -> pure ()
         OFailure ->
-            () <$ RT.updateTask conn (taskId t) RT.emptyUpdate
+            void $ RT.updateTask conn (taskId t) RT.emptyUpdate
                 { RT.tuState       = Just Blocked
                 , RT.tuBlockReason = Just (Just (dresNotes res))
                 }

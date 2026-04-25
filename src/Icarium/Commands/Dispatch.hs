@@ -1,6 +1,6 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
-import           Control.Monad         (when)
+import           Control.Monad         (unless)
 import           Data.Aeson            (FromJSON (..), decode, withObject, (.:?))
 import qualified Data.ByteString.Lazy  as BL
 import           Data.Maybe            (fromMaybe, listToMaybe, mapMaybe)
@@ -56,8 +56,8 @@ data RunOpts = RunOpts
     }
 
 runP :: Parser RunOpts
-runP = RunOpts
-    <$> (T.pack <$> strArgument (metavar "TASK_ID"))
+runP = RunOpts . T.pack
+    <$> strArgument (metavar "TASK_ID")
     <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"))
     <*> optional (option effortReader (long "effort" <> metavar "LEVEL"
                                      <> help "low | medium | high"))
@@ -154,7 +154,7 @@ trimResult t =
 -- | Print the enriched summary block; does not exit on failure.
 printSummary :: D.DispatchResult -> IO ()
 printSummary r = do
-    let idPart = maybe "(dry-run)" id (D.dresDispatchId r)
+    let idPart = fromMaybe "(dry-run)" (D.dresDispatchId r)
     TIO.putStrLn ""
     TIO.putStrLn $ "dispatch: " <> idPart
     TIO.putStrLn $ "outcome:  " <> dispatchOutcomeText (D.dresOutcome r)
@@ -171,7 +171,7 @@ printSummary r = do
                         [ "turns:    " <> maybe "-" (T.pack . show) (lrNumTurns lr)
                         , "duration: " <> maybe "-" fmtMs (lrDurationMs lr)
                             <> maybe "" (\a -> " (api: " <> fmtMs a <> ")") (lrDurationApiMs lr)
-                        , "cost:     " <> maybe "-" (\c -> T.pack (printf "$%.4f" c)) (lrCostUsd lr)
+                        , "cost:     " <> maybe "-" (T.pack . printf "$%.4f") (lrCostUsd lr)
                         , "tokens:   " <> fmtTokens (lrUsage lr)
                         ]
                     case lrResultText lr >>= \t -> if T.null t then Nothing else Just t of
@@ -267,7 +267,7 @@ padR n t
 data ShowOpts = ShowOpts { sId :: Text }
 
 showP :: Parser ShowOpts
-showP = ShowOpts <$> (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+showP = ShowOpts . T.pack <$> strArgument (metavar "DISPATCH_ID")
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -311,8 +311,8 @@ data LogsOpts = LogsOpts
     }
 
 logsP :: Parser LogsOpts
-logsP = LogsOpts
-    <$> (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+logsP = LogsOpts . T.pack
+    <$> strArgument (metavar "DISPATCH_ID")
     <*> optional (option auto (long "tail" <> metavar "N"
                               <> help "Print only the last N lines"))
 
@@ -326,7 +326,7 @@ runLogs o = withDb defaultDbPath $ \c -> do
             Just p  -> do
                 let path = T.unpack p
                 exists <- doesFileExist path
-                when (not exists) $
+                unless exists $
                     fatal 1 ("log file missing: " <> path)
                 contents <- readFile path
                 let ls = lines contents

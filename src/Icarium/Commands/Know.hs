@@ -1,6 +1,7 @@
 module Icarium.Commands.Know (Command, parser, run) where
 
 import           Control.Monad          (forM_, void, when)
+import           Data.Foldable          (for_)
 import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
@@ -55,8 +56,8 @@ data AddOpts = AddOpts
     }
 
 addP :: Parser AddOpts
-addP = AddOpts
-    <$> (T.pack <$> strArgument (metavar "TITLE"))
+addP = AddOpts . T.pack
+    <$> strArgument (metavar "TITLE")
     <*> bodyInputParser
     <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"))
     <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
@@ -72,9 +73,7 @@ runAdd o = withDb defaultDbPath $ \c -> do
     domains <- mapM (requireCategory c Domain)     (aDomains o)
     disc    <- mapM (requireCategory c Discipline) (aDisciplines o)
     derived <- mapM (resolveNode c) (aDerivedFrom o)
-    case aSupersedes o of
-        Just kid -> requireKnowledge c kid
-        Nothing  -> pure ()
+    for_ (aSupersedes o) (requireKnowledge c)
 
     kid <- RK.insertKnowledge c RK.NewKnowledge
         { RK.nkTitle = aTitle o, RK.nkBody = body }
@@ -136,7 +135,7 @@ runList o = withDb defaultDbPath $ \c -> do
 data ShowOpts = ShowOpts { sId :: Text }
 
 showP :: Parser ShowOpts
-showP = ShowOpts <$> (T.pack <$> strArgument (metavar "KNOWLEDGE_ID"))
+showP = ShowOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -157,8 +156,8 @@ data UpdateOpts = UpdateOpts
     }
 
 updateP :: Parser UpdateOpts
-updateP = UpdateOpts
-    <$> (T.pack <$> strArgument (metavar "KNOWLEDGE_ID"))
+updateP = UpdateOpts . T.pack
+    <$> strArgument (metavar "KNOWLEDGE_ID")
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"))
     <*> bodyInputParser
     <*> optional staleFlag
@@ -188,7 +187,7 @@ runUpdate o = withDb defaultDbPath $ \c -> do
 data RmOpts = RmOpts { rId :: Text }
 
 rmP :: Parser RmOpts
-rmP = RmOpts <$> (T.pack <$> strArgument (metavar "KNOWLEDGE_ID"))
+rmP = RmOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do

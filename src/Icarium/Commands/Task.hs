@@ -1,6 +1,6 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
-import           Control.Monad          (forM_, void, when)
+import           Control.Monad          (forM_, unless, void, when)
 import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
@@ -57,8 +57,8 @@ data AddOpts = AddOpts
     }
 
 addP :: Parser AddOpts
-addP = AddOpts
-    <$> (T.pack <$> strArgument (metavar "TITLE"))
+addP = AddOpts . T.pack
+    <$> strArgument (metavar "TITLE")
     <*> bodyInputParser
     <*> option taskStateReader
             ( long "state" <> metavar "STATE" <> value Planned
@@ -72,7 +72,7 @@ addP = AddOpts
 runAdd :: AddOpts -> IO ()
 runAdd o = withDb defaultDbPath $ \c -> do
     body <- resolveBody (aBody o)
-    when (aState o `notElem` [Idea, Planned, Ready]) $
+    unless (aState o `elem` [Idea, Planned, Ready]) $
         fatal 2 "on add: state must be idea | planned | ready"
 
     -- Pre-validate referenced categories and nodes so we fail before insert.
@@ -144,8 +144,8 @@ data ShowOpts = ShowOpts
     }
 
 showP :: Parser ShowOpts
-showP = ShowOpts
-    <$> (T.pack <$> strArgument (metavar "TASK_ID"))
+showP = ShowOpts . T.pack
+    <$> strArgument (metavar "TASK_ID")
     <*> switch (long "prompt" <> help "Render the dispatch prompt instead")
 
 runShow :: ShowOpts -> IO ()
@@ -174,8 +174,8 @@ data UpdateOpts = UpdateOpts
     }
 
 updateP :: Parser UpdateOpts
-updateP = UpdateOpts
-    <$> (T.pack <$> strArgument (metavar "TASK_ID"))
+updateP = UpdateOpts . T.pack
+    <$> strArgument (metavar "TASK_ID")
     <*> optional (option taskStateReader (long "state" <> metavar "STATE"))
     <*> optional (option auto (long "priority" <> metavar "N"))
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"))
@@ -207,7 +207,7 @@ runUpdate o = withDb defaultDbPath $ \c -> do
 data RmOpts = RmOpts { rId :: Text }
 
 rmP :: Parser RmOpts
-rmP = RmOpts <$> (T.pack <$> strArgument (metavar "TASK_ID"))
+rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do

@@ -44,8 +44,8 @@ data AddOpts = AddOpts
     }
 
 addP :: Parser AddOpts
-addP = AddOpts
-    <$> (T.pack <$> strArgument (metavar "SRC_ID"))
+addP = AddOpts . T.pack
+    <$> strArgument (metavar "SRC_ID")
     <*> argument edgeKindReader
             (metavar "KIND"
              <> help "depends_on | references | derived_from | supersedes")
@@ -125,7 +125,7 @@ runList o = withDb defaultDbPath $ \c -> do
 data RmOpts = RmOpts { rId :: Text }
 
 rmP :: Parser RmOpts
-rmP = RmOpts <$> (T.pack <$> strArgument (metavar "EDGE_ID"))
+rmP = RmOpts . T.pack <$> strArgument (metavar "EDGE_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do

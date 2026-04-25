@@ -9,6 +9,7 @@ module Icarium.Repo.Knowledge
     , deleteKnowledge
     ) where
 
+import           Data.Maybe             (fromMaybe)
 import           Data.Text              (Text)
 import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
@@ -61,9 +62,9 @@ updateKnowledge conn kid KnowledgeUpdate{..} = do
     case mk of
         Nothing -> pure False
         Just k  -> do
-            let newTitle = maybe (knowledgeTitle k) id kuTitle
-                newBody  = maybe (knowledgeBody k)  id kuBody
-                newStale = maybe (knowledgeStale k) id kuStale
+            let newTitle = fromMaybe (knowledgeTitle k) kuTitle
+                newBody  = fromMaybe (knowledgeBody k)  kuBody
+                newStale = fromMaybe (knowledgeStale k) kuStale
                 staleInt = if newStale then 1 else 0 :: Int
             execute conn
                 (Query "UPDATE knowledge SET title=?, body=?, stale=? WHERE id=?")

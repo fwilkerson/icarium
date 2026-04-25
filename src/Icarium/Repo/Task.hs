@@ -9,6 +9,7 @@ module Icarium.Repo.Task
     , deleteTask
     ) where
 
+import           Data.Maybe             (fromMaybe)
 import           Data.Text              (Text)
 import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
@@ -77,11 +78,11 @@ updateTask conn tid TaskUpdate{..} = do
     case mt of
         Nothing -> pure False
         Just t  -> do
-            let newTitle = maybe (taskTitle t) id tuTitle
-                newBody  = maybe (taskBody t)  id tuBody
-                newState = maybe (taskState t) id tuState
-                newPrio  = maybe (taskPriority t)    id tuPriority
-                newBlock = maybe (taskBlockReason t) id tuBlockReason
+            let newTitle = fromMaybe (taskTitle t) tuTitle
+                newBody  = fromMaybe (taskBody t)  tuBody
+                newState = fromMaybe (taskState t) tuState
+                newPrio  = fromMaybe (taskPriority t)    tuPriority
+                newBlock = fromMaybe (taskBlockReason t) tuBlockReason
             execute conn
                 (Query "UPDATE tasks SET title=?, body=?, state=?, \
                        \priority=?, block_reason=? WHERE id=?")

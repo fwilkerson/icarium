@@ -1,6 +1,8 @@
 module Icarium.Commands.Recover (Options, parser, run) where
 
-import           Control.Monad          (forM_)
+import           Control.Monad          (forM_, void)
+import           Data.Either            (fromRight)
+import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -40,7 +42,7 @@ run o = do
             Just did -> do
                 md <- RD.getDispatch c did
                 pure $ case md of
-                    Just d | dispatchOutcome d == Nothing -> [d]
+                    Just d | isNothing (dispatchOutcome d) -> [d]
                     _ -> []
             Nothing  -> RD.listOpenDispatches c
         if null open
@@ -59,7 +61,7 @@ reconcile c now staleSec d = do
         then pure ()   -- genuinely still running; leave it
         else do
             uncommitted <- fmap not Git.isClean
-            lastCommit  <- fmap (either (const "") id) (Git.revParse (dispatchBranch d))
+            lastCommit  <- fmap (fromRight "") (Git.revParse (dispatchBranch d))
             let notes = T.intercalate "; "
                     [ "interrupted"
                     , "alive=" <> boolText alive
@@ -68,7 +70,7 @@ reconcile c now staleSec d = do
                     , "last_commit=" <> lastCommit
                     ]
             RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
-            () <$ RT.updateTask c (dispatchTaskId d) RT.emptyUpdate
+            void $ RT.updateTask c (dispatchTaskId d) RT.emptyUpdate
                 { RT.tuState       = Just Blocked
                 , RT.tuBlockReason = Just (Just notes)
                 }
