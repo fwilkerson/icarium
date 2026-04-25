@@ -4,6 +4,7 @@ module Icarium.Dispatch
     , dispatch
     , dispatchBranchName
     , applyOutcomeToTask
+    , postClaudeGuard
     ) where
 
 import           Control.Concurrent     (forkIO)
@@ -268,39 +269,57 @@ handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
             ("claude exited " <> T.pack (show c)) ret
             (Just logPath) (Just baseSha)
     ExitSuccess -> do
-        mSha <- Git.revParse branch
-        case mSha of
-            Right sha -> RD.setLastCommit conn did sha
-            Left  _   -> pure ()
-        let cc = cfgCommands cfg
-        gated <- runGate (ccBuild cc) >>= \case
-            Left n  -> pure (Left n)
-            Right _ -> runGate (ccTest cc)
-        case gated of
-            Left notes ->
-                finishWith conn did branch OFailure Nothing notes ret
+        clean      <- Git.isClean
+        mBranchSha <- Git.revParse branch
+        case postClaudeGuard clean mBranchSha baseSha of
+            Just msg ->
+                finishWith conn did branch OFailure Nothing msg ret
                     (Just logPath) (Just baseSha)
-            Right () -> do
-                e1 <- Git.checkout base
-                case e1 of
-                    Left err -> finishWith conn did branch OFailure Nothing
-                        ("checkout base: " <> T.pack (show err)) ret
-                        (Just logPath) (Just baseSha)
+            Nothing -> do
+                case mBranchSha of
+                    Right sha -> RD.setLastCommit conn did sha
+                    Left  _   -> pure ()
+                let cc = cfgCommands cfg
+                gated <- runGate (ccBuild cc) >>= \case
+                    Left n  -> pure (Left n)
+                    Right _ -> runGate (ccTest cc)
+                case gated of
+                    Left notes ->
+                        finishWith conn did branch OFailure Nothing notes ret
+                            (Just logPath) (Just baseSha)
                     Right () -> do
-                        e2 <- Git.ffMerge branch
-                        case e2 of
+                        e1 <- Git.checkout base
+                        case e1 of
                             Left err -> finishWith conn did branch OFailure Nothing
-                                ("ff-merge: " <> T.pack (show err)) ret
+                                ("checkout base: " <> T.pack (show err)) ret
                                 (Just logPath) (Just baseSha)
                             Right () -> do
-                                -- Branch is fully reachable from base; delete it.
-                                _ <- Git.deleteBranch branch
-                                mShaBase <- Git.revParse base
-                                let mergeSha = either (const Nothing) Just mShaBase
-                                finishWith conn did branch OSuccess mergeSha "merged" ret
-                                    (Just logPath) (Just baseSha)
+                                e2 <- Git.ffMerge branch
+                                case e2 of
+                                    Left err -> finishWith conn did branch OFailure Nothing
+                                        ("ff-merge: " <> T.pack (show err)) ret
+                                        (Just logPath) (Just baseSha)
+                                    Right () -> do
+                                        _ <- Git.deleteBranch branch
+                                        mShaBase <- Git.revParse base
+                                        let mergeSha = either (const Nothing) Just mShaBase
+                                        finishWith conn did branch OSuccess mergeSha "merged" ret
+                                            (Just logPath) (Just baseSha)
   where
     ret = dcLogRetentionRuns (cfgDispatch cfg)
+
+-- | Pure guard logic for the post-claude checks. Returns Just an error
+-- message if a guard fires, Nothing if both pass.
+--   * Dirty-tree guard fires when the working tree has uncommitted edits.
+--   * Empty-diff guard fires when the dispatch branch SHA equals baseSha
+--     (agent exited success but made no commits).
+postClaudeGuard :: Bool -> Either e Text -> Text -> Maybe Text
+postClaudeGuard clean mBranchSha baseSha
+    | not clean                       = Just "agent left uncommitted changes; refusing to merge"
+    | branchSha == Just baseSha       = Just "agent made no commits on dispatch branch"
+    | otherwise                       = Nothing
+  where
+    branchSha = either (const Nothing) Just mBranchSha
 
 -- | Run a shell command (as a single string, so users can include
 -- pipes and &&). Returns () on exit 0; otherwise a short note.

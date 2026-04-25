@@ -12,6 +12,7 @@ import           Test.Tasty             (defaultMain, testGroup, TestTree)
 import           Test.Tasty.HUnit       (testCase, (@?=), assertBool)
 
 import           Icarium.Config         (loadConfig, defaultConfigText)
+import           Icarium.Dispatch       (postClaudeGuard)
 import           Icarium.Id             (newId)
 import           Icarium.Render         (renderTaskPrompt)
 import qualified Icarium.Repo.Category  as RC
@@ -27,6 +28,13 @@ main = defaultMain $ testGroup "icarium"
     , testGroup "CategoryAxis round-trips" categoryAxisTests
     , testCase "loadConfig succeeds on default template"        loadConfigTest
     , testCase "renderTaskPrompt is non-empty for minimal task" renderTest
+    , testGroup "postClaudeGuard"
+        [ testCase "dirty tree fires dirty-tree note"    testGuardDirtyTree
+        , testCase "empty diff fires empty-diff note"    testGuardEmptyDiff
+        , testCase "dirty tree takes priority over empty diff" testGuardDirtyFirst
+        , testCase "clean tree with new commit passes"   testGuardPasses
+        , testCase "revParse error does not fire empty-diff" testGuardRevParseError
+        ]
     , testGroup "categoryMatchedKnowledge"
         [ testCase "both-axis match appears under Related knowledge" testBothAxisMatch
         , testCase "stale knowledge excluded from auto-pull"         testStaleExcluded
@@ -37,6 +45,39 @@ main = defaultMain $ testGroup "icarium"
         , testCase "stale explicit ref still renders under refs"     testStaleRef
         ]
     ]
+
+-- =============================================================
+-- postClaudeGuard tests
+-- =============================================================
+
+baseSha :: Text
+baseSha = "aaaa0000"
+
+newSha :: Text
+newSha = "bbbb1111"
+
+testGuardDirtyTree :: IO ()
+testGuardDirtyTree =
+    postClaudeGuard False (Right newSha) baseSha
+        @?= Just "agent left uncommitted changes; refusing to merge"
+
+testGuardEmptyDiff :: IO ()
+testGuardEmptyDiff =
+    postClaudeGuard True (Right baseSha) baseSha
+        @?= Just "agent made no commits on dispatch branch"
+
+testGuardDirtyFirst :: IO ()
+testGuardDirtyFirst =
+    postClaudeGuard False (Right baseSha) baseSha
+        @?= Just "agent left uncommitted changes; refusing to merge"
+
+testGuardPasses :: IO ()
+testGuardPasses =
+    postClaudeGuard True (Right newSha) baseSha @?= Nothing
+
+testGuardRevParseError :: IO ()
+testGuardRevParseError =
+    postClaudeGuard True (Left ("git error" :: String)) baseSha @?= Nothing
 
 -- =============================================================
 -- Round-trip tests
