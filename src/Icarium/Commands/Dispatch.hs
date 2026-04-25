@@ -58,10 +58,12 @@ data RunOpts = RunOpts
 runP :: Parser RunOpts
 runP = RunOpts . T.pack
     <$> strArgument (metavar "TASK_ID")
-    <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"))
+    <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"
+           <> help "Override the model for this dispatch"))
     <*> optional (option effortReader (long "effort" <> metavar "LEVEL"
                                      <> help "low | medium | high"))
-    <*> optional (T.pack <$> strOption (long "base-branch" <> metavar "NAME"))
+    <*> optional (T.pack <$> strOption (long "base-branch" <> metavar "NAME"
+           <> help "Override the base branch for git operations"))
     <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
 runRun :: RunOpts -> IO ()

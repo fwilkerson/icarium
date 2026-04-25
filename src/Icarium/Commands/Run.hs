@@ -30,9 +30,12 @@ parser :: Parser Options
 parser = Options
     <$> optional (option auto (long "max" <> metavar "N"
                  <> help "Cap the number of dispatches (default from config)"))
-    <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"))
-    <*> optional (option effortReader  (long "effort" <> metavar "LEVEL"))
-    <*> optional (T.pack <$> strOption (long "base-branch" <> metavar "NAME"))
+    <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"
+                 <> help "Override the model for all dispatches"))
+    <*> optional (option effortReader  (long "effort" <> metavar "LEVEL"
+                 <> help "Override effort level (low | medium | high)"))
+    <*> optional (T.pack <$> strOption (long "base-branch" <> metavar "NAME"
+                 <> help "Override the base branch for git operations"))
     <*> switch   (long "dry-run" <> help "Dry-run each dispatch; do not touch git or call claude")
 
 -- | Loop until the ready queue drains or we hit the max.

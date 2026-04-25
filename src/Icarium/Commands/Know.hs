@@ -60,11 +60,14 @@ addP :: Parser AddOpts
 addP = AddOpts . T.pack
     <$> strArgument (metavar "TITLE")
     <*> bodyInputParser
-    <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"))
-    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
+    <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"
+           <> help "Tag with this domain category"))
+    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Tag with this discipline category"))
     <*> many (T.pack <$> strOption (long "derived-from" <> metavar "ID"
                 <> help "Task or knowledge id this was derived from"))
-    <*> optional (T.pack <$> strOption (long "supersedes" <> metavar "KNOWLEDGE_ID"))
+    <*> optional (T.pack <$> strOption (long "supersedes" <> metavar "KNOWLEDGE_ID"
+           <> help "Mark this entry as superseding KNOWLEDGE_ID"))
 
 runAdd :: AddOpts -> IO ()
 runAdd o = withDb defaultDbPath $ \c -> do
@@ -142,8 +145,10 @@ data ListOpts = ListOpts
 listP :: Parser ListOpts
 listP = ListOpts
     <$> switch (long "stale" <> help "Only entries flagged stale")
-    <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"))
-    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
+    <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
+           <> help "Filter by domain category"))
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Filter by discipline category"))
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
@@ -186,11 +191,14 @@ data UpdateOpts = UpdateOpts
 updateP :: Parser UpdateOpts
 updateP = UpdateOpts . T.pack
     <$> strArgument (metavar "KNOWLEDGE_ID")
-    <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"))
+    <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
+           <> help "Replace entry title"))
     <*> bodyInputParser
     <*> optional staleFlag
-    <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"))
-    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
+    <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"
+           <> help "Tag with this domain category"))
+    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Tag with this discipline category"))
   where
     staleFlag =
             flag' True  (long "stale" <> help "Mark as stale")

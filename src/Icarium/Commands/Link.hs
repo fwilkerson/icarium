@@ -107,9 +107,12 @@ data ListOpts = ListOpts
 
 listP :: Parser ListOpts
 listP = ListOpts
-    <$> optional (T.pack <$> strOption (long "from" <> metavar "ID"))
-    <*> optional (T.pack <$> strOption (long "to"   <> metavar "ID"))
-    <*> optional (option edgeKindReader (long "kind" <> metavar "KIND"))
+    <$> optional (T.pack <$> strOption (long "from" <> metavar "ID"
+           <> help "Only edges outgoing from this node"))
+    <*> optional (T.pack <$> strOption (long "to"   <> metavar "ID"
+           <> help "Only edges incoming to this node"))
+    <*> optional (option edgeKindReader (long "kind" <> metavar "KIND"
+           <> help "Filter by edge kind"))
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do

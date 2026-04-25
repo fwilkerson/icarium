@@ -63,11 +63,16 @@ addP = AddOpts . T.pack
     <*> option taskStateReader
             ( long "state" <> metavar "STATE" <> value Planned
            <> help "idea | planned | ready (default: planned)" )
-    <*> optional (option auto (long "priority" <> metavar "N"))
-    <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"))
-    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
-    <*> many (T.pack <$> strOption (long "depends-on" <> metavar "TASK_ID"))
-    <*> many (T.pack <$> strOption (long "references" <> metavar "KNOWLEDGE_ID"))
+    <*> optional (option auto (long "priority" <> metavar "N"
+           <> help "Set priority (lower number = higher priority)"))
+    <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"
+           <> help "Tag with this domain category"))
+    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Tag with this discipline category"))
+    <*> many (T.pack <$> strOption (long "depends-on" <> metavar "TASK_ID"
+           <> help "Add a depends_on edge to TASK_ID"))
+    <*> many (T.pack <$> strOption (long "references" <> metavar "KNOWLEDGE_ID"
+           <> help "Add a references edge to KNOWLEDGE_ID"))
 
 runAdd :: AddOpts -> IO ()
 runAdd o = withDb defaultDbPath $ \c -> do
@@ -128,10 +133,13 @@ data ListOpts = ListOpts
 
 listP :: Parser ListOpts
 listP = ListOpts
-    <$> many (option taskStateReader (long "state" <> metavar "STATE"))
+    <$> many (option taskStateReader (long "state" <> metavar "STATE"
+           <> help "Filter by task state (repeatable)"))
     <*> switch (long "ready" <> help "Only tasks ready to dispatch")
-    <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"))
-    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"))
+    <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
+           <> help "Filter by domain category"))
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Filter by discipline category"))
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
@@ -186,11 +194,15 @@ data UpdateOpts = UpdateOpts
 updateP :: Parser UpdateOpts
 updateP = UpdateOpts . T.pack
     <$> strArgument (metavar "TASK_ID")
-    <*> optional (option taskStateReader (long "state" <> metavar "STATE"))
-    <*> optional (option auto (long "priority" <> metavar "N"))
-    <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"))
+    <*> optional (option taskStateReader (long "state" <> metavar "STATE"
+           <> help "Set new task state"))
+    <*> optional (option auto (long "priority" <> metavar "N"
+           <> help "Set priority (lower = higher priority)"))
+    <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
+           <> help "Replace task title"))
     <*> bodyInputParser
-    <*> optional (T.pack <$> strOption (long "block-reason" <> metavar "TEXT"))
+    <*> optional (T.pack <$> strOption (long "block-reason" <> metavar "TEXT"
+           <> help "Reason for blocked state (required with --state blocked)"))
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do
