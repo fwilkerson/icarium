@@ -3,6 +3,7 @@ module Icarium.Schema
     ( schemaSql
     , schemaVersion
     , applySchema
+    , execSql
     ) where
 
 import           Data.FileEmbed                  (embedFile, makeRelativeToProject)
@@ -29,3 +30,8 @@ applySchema :: Connection -> IO ()
 applySchema conn = do
     Direct.exec (Internal.connectionHandle conn) schemaSql
     execute_ conn (Query (T.pack ("PRAGMA user_version = " <> show schemaVersion)))
+
+-- | Execute arbitrary (potentially multi-statement) SQL against a connection.
+-- Useful for applying DDL fixtures in tests.
+execSql :: Connection -> Text -> IO ()
+execSql conn sql = Direct.exec (Internal.connectionHandle conn) sql

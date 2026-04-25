@@ -6,6 +6,7 @@ author:             frank
 maintainer:         frank.w1lk3rs0n@gmail.com
 build-type:         Simple
 extra-source-files: spec/schema.sql
+                    test/fixtures/v1_schema.sql
 
 common lang
     default-language:   GHC2021
@@ -21,6 +22,7 @@ library
     exposed-modules:  Icarium.Types
                       Icarium.Id
                       Icarium.Schema
+                      Icarium.Migrations
                       Icarium.Db
                       Icarium.Config
                       Icarium.Render
@@ -75,6 +77,7 @@ test-suite icarium-test
     build-depends:    base,
                       text,
                       sqlite-simple,
+                      file-embed,
                       icarium,
                       tasty,
                       tasty-hunit,

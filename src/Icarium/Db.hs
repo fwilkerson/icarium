@@ -4,11 +4,13 @@ module Icarium.Db
     , withDb
     , initDb
     , dbSchemaVersion
+    , migrateDb
     ) where
 
 import           Control.Exception      (bracket)
 import           Data.Int               (Int64)
 import           Database.SQLite.Simple (Connection, Only (..), close, open, query_)
+import           Icarium.Migrations     (Migration (..), migrations)
 import           Icarium.Schema         (applySchema)
 import           System.Directory       (createDirectoryIfMissing, doesFileExist)
 import           System.FilePath        (takeDirectory, (</>))
@@ -21,9 +23,23 @@ openDb path = do
     createDirectoryIfMissing True (takeDirectory path)
     open path
 
--- | Open the DB, run an action, close the DB — exception-safe.
+-- | Open the DB, run pending migrations, run an action, close the DB.
+-- Exception-safe; if migration fails the error propagates and the DB is
+-- left at its original schema version (the migration ran inside a transaction).
 withDb :: FilePath -> (Connection -> IO a) -> IO a
-withDb path = bracket (openDb path) close
+withDb path action = bracket (openDb path) close $ \conn -> do
+    migrateDb conn
+    action conn
+
+-- | Run all pending migrations against an open connection, in version order.
+-- Each migration is atomic: it manages its own transaction and stamps
+-- @PRAGMA user_version@ inside that transaction. Idempotent against an
+-- already-current DB.
+migrateDb :: Connection -> IO ()
+migrateDb conn = do
+    current <- fromIntegral <$> dbSchemaVersion conn
+    mapM_ (\m -> migrationUp m conn)
+          (filter (\m -> migrationVersion m > current) migrations)
 
 -- | Create the DB file and apply the schema. Fails if the file
 -- already exists — the caller decides whether to handle that.
