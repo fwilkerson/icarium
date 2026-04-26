@@ -57,7 +57,7 @@ effortReader = eitherReader $ \s ->
         Just e  -> Right e
         Nothing -> Left ("invalid effort: " <> s)
 
-data BodyInput = BodyInline Text | BodyFile FilePath | BodyStdin | BodyNone
+data BodyInput = BodyInline Text | BodyFile FilePath | BodyNone
 
 bodyInputParser :: Parser BodyInput
 bodyInputParser =
@@ -66,15 +66,14 @@ bodyInputParser =
                         <> help "Body as inline text"))
     <|> (BodyFile
             <$> strOption (long "body-file" <> metavar "PATH"
-                        <> help "Read body from file"))
-    <|> flag' BodyStdin (long "body-stdin" <> help "Read body from stdin")
+                        <> help "Read body from file (use - for stdin)"))
     <|> pure BodyNone
 
 resolveBody :: BodyInput -> IO Text
 resolveBody BodyNone       = pure ""
 resolveBody (BodyInline t) = pure t
+resolveBody (BodyFile "-") = TIO.getContents
 resolveBody (BodyFile p)   = TIO.readFile p
-resolveBody BodyStdin      = TIO.getContents
 
 -- | Shorthand for a subcommand with helper automatically attached.
 subcmd :: String -> String -> Parser a -> Mod CommandFields a

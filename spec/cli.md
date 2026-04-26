@@ -29,7 +29,7 @@ icarium import <file>
 
 ```
 icarium task add <title>
-    [--body <text> | --body-file <path> | --body-stdin]
+    [--body <text> | --body-file <path>]    (use --body-file - for stdin)
     [--state idea|planned|ready]           (default: planned)
     [--priority <int>]
     [--domain <name> ...] [--discipline <name> ...]
@@ -49,7 +49,7 @@ icarium task show <id> [--prompt]
 
 icarium task update <id>
     [--state ...] [--priority ...] [--title ...]
-    [--body ... | --body-file ... | --body-stdin]
+    [--body ... | --body-file ...]     (use --body-file - for stdin)
     [--block-reason <text>]           (required iff --state blocked)
 
 icarium task rm <id> [--force]
@@ -60,7 +60,7 @@ icarium task rm <id> [--force]
 
 ```
 icarium know add <title>
-    [--body <text> | --body-file <path> | --body-stdin]
+    [--body <text> | --body-file <path>]    (use --body-file - for stdin)
     [--domain <name> ...] [--discipline <name> ...]
     [--derived-from <id> ...]         (task or knowledge id)
     [--supersedes <knowledge-id>]
@@ -160,7 +160,7 @@ The headless agent is prompted to use these, and only these, for mutation:
 ```
 icarium task update <id> --state in_progress|done|blocked [--block-reason ...]
 icarium task show <id>
-icarium know add <title> --body-stdin [--domain ...] [--discipline ...] [--derived-from <id>]
+icarium know add <title> --body-file - [--domain ...] [--discipline ...] [--derived-from <id>]
 icarium link add <src> <kind> <dst>
 ```
 

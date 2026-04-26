@@ -161,7 +161,7 @@ workingAgreement t =
     , "- All task/knowledge mutation MUST go through the `icarium` CLI."
     , "- If blocked:  `./bin/icarium task update " <> taskId t <> " --state blocked --block-reason '<why>'`"
     , "- Record anything you learn that future tasks should know as knowledge:"
-    , "    `./bin/icarium know add '<title>' --body-stdin`"
+    , "    `./bin/icarium know add '<title>' --body-file -`"
     , "- Commit your code before exiting; the program marks the task done after the gates pass and the FF-merge succeeds."
     , ""
     ]
