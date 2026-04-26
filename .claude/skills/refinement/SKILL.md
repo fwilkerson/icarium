@@ -1,67 +1,31 @@
 ---
 name: refinement
-description: Run a refinement session on an icarium project — verify done work, curate the task and knowledge backlogs, prune/prioritize, and write dispatch-ready task bodies. Use when the working directory contains an `.icarium/` dir or `icarium.toml`. Invoke at session start to catch up on prior context, or any time the user wants to plan/curate before the next batch of headless dispatches.
+description: Refine icarium tasks before headless dispatch — resolve open decisions and lock them into task bodies so a sonnet agent can execute without making product calls. Use when the working dir has .icarium/ or icarium.toml.
 ---
 
-# Icarium refinement session
+# Icarium refinement
 
-Icarium is a CLI for managing tasks, knowledge, and headless-Claude dispatches. Headless Sonnet agents execute one task per dispatch on a branch, with merge gates. The human-driven work that happens *between* dispatch batches is **refinement** — and that's what this skill is for.
+Icarium dispatches headless sonnet agents on `ready` tasks. Agents execute well when decisions are already made; they pick poorly when bodies say "should we…" or list options. Refinement is where you and the user resolve those choices.
 
-## First moves
+## Start
 
-Catch up on the prior session's handoff:
+Ask the user what to focus on. They'll point at specific `idea` or `planned` tasks, or name an outcome and let you scope the relevant work.
 
-```
-./bin/icarium know list --discipline planning
-./bin/icarium know show <id-of-top-entry>
-```
+The story is in `./bin/icarium task`, `task show <id>`, `dispatch list`, and `know list`. Pull what you need.
 
-That entry is the prior session's handoff — what shipped, what's queued, what design questions are open, and the recommended dispatch order for the next batch.
+## For each task
 
-## Then survey state
+1. Read the body. Identify unresolved decisions.
+2. Research what you can yourself — read code, follow links, check git, spawn a sub-agent for breadth.
+3. Batch open product questions to the user with AskUserQuestion. Concrete options, your recommendation first. Don't ask one at a time.
+4. Lock the answers into the body with `task update ID --body-file …`. The body should read like a brief: spec, decisions, scope, "done when". No options, no open questions.
+5. New task surfaced in conversation? Add it. Now-moot? Abandon with a one-line note.
+6. Mark `--state ready` when the body would let an agent execute without making a product call.
 
-```
-./bin/icarium task list                    # ready/planned/idea backlog
-./bin/icarium dispatch list | head         # most recent runs
-```
+## Quality bar
 
-If something looks off (interrupted dispatches, stale knowledge, surprising state), investigate before adding new work.
+A ready body answers: *what changes, where, why this shape, how do we know it's done.* If a sonnet agent following it would have to make a judgment call about user-facing behavior, it's not ready.
 
-## What refinement covers
+## Close
 
-Standard agile-style backlog refinement, applied to both tasks and knowledge:
-
-- **Verify done work.** Inspect the most recent merged dispatches. Read the diff. Check that knowledge was recorded for non-obvious decisions.
-- **Curate knowledge.** Mark stale entries `--stale`, supersede outdated ones, recategorize, prune dead lineage.
-- **Refine the backlog.** Promote `idea` → `planned` → `ready` as designs settle. Re-prioritize. Drop ideas that no longer fit.
-- **Write dispatch-ready task bodies.** A headless agent can execute reliably only when product/design choices are *already made*. If a task body lists "options" or asks "should we …", it's not ready — resolve the choice in this session and write the answer into the body. Otherwise the agent picks, and the agent optimizes for shipping, not for what you'd pick.
-- **Brainstorm and queue new work.** Discoveries from verification and use go in as `idea` tasks; promote later.
-
-## Workflow primitives
-
-```
-./bin/icarium task add 'TITLE' --body-stdin --state planned --priority N
-./bin/icarium task update ID --state ready
-./bin/icarium task show ID
-./bin/icarium know add 'TITLE' --body-stdin --derived-from ID
-./bin/icarium know show ID
-./bin/icarium dispatch show DISPATCH_ID
-./bin/icarium drain                        # process the ready queue
-./bin/icarium dispatch run TASK_ID         # one-shot a single task
-```
-
-State machine: `idea | planned | ready | in_progress | done | blocked | abandoned`. `in_progress` is derived from an open dispatch row. `drain` only runs `ready` tasks in priority order.
-
-## Closing the session
-
-End with a handoff knowledge entry:
-
-```
-./bin/icarium know add 'Handoff: <short context>' \
-    --discipline planning \
-    --body-stdin <<'EOF'
-... what shipped, what's queued, design questions open, recommended next moves ...
-EOF
-```
-
-The `discipline: planning` tag isolates handoffs from the auto-pull category-matching in dispatched-agent prompts (handoffs are for the next refinement session, not for headless executors). The next session will find this entry via `know list --discipline planning`.
+Summarize in chat what's now ready and any non-obvious calls made.
