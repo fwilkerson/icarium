@@ -10,13 +10,17 @@ module Icarium.Dispatch
 import           Control.Concurrent     (forkIO)
 import           Control.Exception      (SomeException, bracket, try)
 import           Control.Monad          (unless, void, when)
+import           Data.Aeson             (Object, Result (..), Value (..), decodeStrict, fromJSON)
+import qualified Data.Aeson.Key         as AK
+import qualified Data.Aeson.KeyMap      as AKM
 import qualified Data.ByteString.Char8  as BC
 import qualified Data.ByteString.Lazy   as BL
-import           Data.Maybe             (fromMaybe)
+import           Data.Maybe             (fromMaybe, maybeToList)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.Encoding     as TE
 import qualified Data.Text.IO           as TIO
+import           Data.Time              (defaultTimeLocale, formatTime, getCurrentTime)
 import           Database.SQLite.Simple (Connection, close)
 import           System.Directory       (createDirectoryIfMissing, doesFileExist, removeFile)
 import           System.Environment     (getEnvironment)
@@ -220,7 +224,7 @@ runClaudeStreaming did task prompt model tools logPath = do
                 Just pid -> bracket (openDb defaultDbPath) close $ \c ->
                     RD.setPid c did (fromIntegral pid)
                 Nothing  -> pure ()
-            _ <- forkIO (teeAndHeartbeat (getStdout p) logH did)
+            _ <- forkIO (teeAndHeartbeat (getStdout p) logH did (taskTitle task))
             waitExitCode p
 
 -- | Tail the child's stdout, copy each line to the log file, and bump
@@ -228,24 +232,176 @@ runClaudeStreaming did task prompt model tools logPath = do
 -- connection so we don't share sqlite-simple's Connection between
 -- threads. On any failure the thread just exits; the caller is not
 -- blocked waiting for it.
-teeAndHeartbeat :: Handle -> Handle -> Text -> IO ()
-teeAndHeartbeat src logH did = do
-    r <- try (bracket (openDb defaultDbPath) close (loop src logH did))
+teeAndHeartbeat :: Handle -> Handle -> Text -> Text -> IO ()
+teeAndHeartbeat src logH did title = do
+    hPutStrLn stderr $ "[" ++ T.unpack (T.take 8 did) ++ "] " ++ T.unpack (T.take 60 title)
+    r <- try (bracket (openDb defaultDbPath) close (loop src logH did emptyTickState))
     case r :: Either SomeException () of
         Left e  -> hPutStrLn stderr ("icarium: heartbeat thread died: " <> show e)
         Right _ -> pure ()
   where
-    loop h lh d c = do
+    loop h lh d st c = do
         eof <- hIsEOF h
         if eof then pure ()
         else do
             line <- BC.hGetLine h
             BC.hPutStrLn lh line
             RD.updateHeartbeat c d
-            let short = T.pack (BC.unpack (BC.take 120 line))
-                tag   = "[" <> T.take 8 d <> "] "
-            hPutStrLn stderr (T.unpack (tag <> short))
-            loop h lh d c
+            now <- getCurrentTime
+            let ts = formatTime defaultTimeLocale "%H:%M:%S" now
+                (outLines, st') = summariseTick ts line st
+            mapM_ (hPutStrLn stderr) outLines
+            loop h lh d st' c
+
+-- =============================================================
+-- Tick parsing: structured per-event stderr summary
+-- =============================================================
+
+data TickState = TickState
+    { tsEventCount :: !Int
+    , tsLastIn     :: !Int
+    , tsLastOut    :: !Int
+    , tsLastCache  :: !Int
+    }
+
+emptyTickState :: TickState
+emptyTickState = TickState 0 0 0 0
+
+-- | Parse one JSONL line and return lines to emit on stderr.
+-- Increments the event counter and prints a usage summary every 20 events.
+summariseTick :: String -> BC.ByteString -> TickState -> ([String], TickState)
+summariseTick ts bytes st0 =
+    let st = st0 { tsEventCount = tsEventCount st0 + 1 }
+    in case decodeStrict bytes :: Maybe Value of
+        Nothing  -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
+        Just val -> case val of
+            Object obj -> parseEvent st obj
+            _          -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
+  where
+    pad k      = k ++ replicate (max 0 (14 - length k)) ' '
+    row sym kw body = ts ++ "  " ++ [sym] ++ " " ++ pad kw ++ body
+
+    parseEvent st obj = case lookStr "type" obj of
+        Just "system"           -> handleSystem st obj
+        Just "assistant"        -> handleAssistant st obj
+        Just "user"             -> handleUser st obj
+        Just "result"           -> handleResult st obj
+        Just "rate_limit_event" -> ([], st)
+        _                       -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
+
+    handleSystem st obj =
+        let model  = maybe "?" T.unpack (lookStr "model"      obj)
+            sessId = maybe "?" (take 8 . T.unpack) (lookStr "session_id" obj)
+        in ([row '.' "system" ("model=" ++ model ++ " session=" ++ sessId)], st)
+
+    handleAssistant st obj =
+        let msg       = lookObj "message" obj
+            usageObj  = msg >>= lookObj "usage"
+            inToks    = usageObj >>= lookInt "input_tokens"
+            outToks   = usageObj >>= lookInt "output_tokens"
+            cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
+            st1 = st { tsLastIn    = fromMaybe (tsLastIn    st) inToks
+                     , tsLastOut   = fromMaybe (tsLastOut   st) outToks
+                     , tsLastCache = fromMaybe (tsLastCache st) cacheToks
+                     }
+            contents  = msg >>= lookArr "content"
+            eventLine = do
+                xs <- contents
+                c  <- case xs of { (x:_) -> Just x; [] -> Nothing }
+                parseContent c
+            (usageLines, st2) = checkUsagePeriodic st1
+        in (maybeToList eventLine ++ usageLines, st2)
+
+    parseContent (Object c) = case lookStr "type" c of
+        Just "thinking" ->
+            let txt = maybe "" (take 80 . T.unpack) (lookStr "thinking" c)
+            in Just (row '>' "thinking" txt)
+        Just "text" ->
+            let txt = maybe "" (take 80 . T.unpack) (lookStr "text" c)
+            in Just (row '>' "assistant" txt)
+        Just "tool_use" ->
+            let name    = maybe "?" T.unpack (lookStr "name" c)
+                inputV  = lookObj "input" c
+                summary = summariseToolInput name inputV
+            in Just (row '*' "tool" (name ++ ": " ++ summary))
+        _ -> Nothing
+    parseContent _ = Nothing
+
+    handleUser st obj =
+        let msg      = lookObj "message" obj
+            contents = maybe [] id (msg >>= lookArr "content")
+            errLines = [ row 'x' "tool_result" cnt
+                       | Object cObj <- contents
+                       , Just (String "tool_result") <- [lookRaw "type"     cObj]
+                       , Just (Bool True)            <- [lookRaw "is_error" cObj]
+                       , let cnt = case lookRaw "content" cObj of
+                                     Just (String t) -> take 80 (T.unpack t)
+                                     _               -> "error"
+                       ]
+        in (errLines, st)
+
+    handleResult st obj =
+        let subtype   = maybe "?" T.unpack (lookStr "subtype" obj)
+            result    = maybe "" (take 60 . T.unpack) (lookStr "result" obj)
+            usageObj  = lookObj "usage" obj
+            inToks    = usageObj >>= lookInt "input_tokens"
+            outToks   = usageObj >>= lookInt "output_tokens"
+            cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
+            resultLine = row '+' "result" (subtype ++ ": " ++ result)
+            usageLine  = case (inToks, outToks, cacheToks) of
+                (Just i, Just o, Just c) ->
+                    [row '=' "usage" ("in " ++ show i ++ " / out " ++ show o
+                                    ++ " / cache_read " ++ show c)]
+                _ -> []
+        in ([resultLine] ++ usageLine, st)
+
+    checkUsagePeriodic st
+        | tsEventCount st >= 20 =
+            let line = row '=' "usage" ("in " ++ show (tsLastIn st)
+                                      ++ " / out " ++ show (tsLastOut st)
+                                      ++ " / cache_read " ++ show (tsLastCache st))
+            in ([line], st { tsEventCount = 0 })
+        | otherwise = ([], st)
+
+-- | Brief summary of a tool's input arguments for display.
+summariseToolInput :: String -> Maybe Object -> String
+summariseToolInput "Bash"  (Just o) = take 80 $ maybe "?" T.unpack (lookStr "command"     o)
+summariseToolInput "Read"  (Just o) = maybe "?" T.unpack (lookStr "file_path"   o)
+summariseToolInput "Edit"  (Just o) = maybe "?" T.unpack (lookStr "file_path"   o)
+summariseToolInput "Write" (Just o) = maybe "?" T.unpack (lookStr "file_path"   o)
+summariseToolInput "Glob"  (Just o) = maybe "?" T.unpack (lookStr "pattern"     o)
+summariseToolInput "Grep"  (Just o) = maybe "?" T.unpack (lookStr "pattern"     o)
+summariseToolInput "Agent" (Just o) = maybe "?" T.unpack (lookStr "description" o)
+summariseToolInput _       _        = "..."
+
+-- Aeson helpers
+
+lookRaw :: Text -> Object -> Maybe Value
+lookRaw k = AKM.lookup (AK.fromText k)
+
+lookStr :: Text -> Object -> Maybe Text
+lookStr k obj = case lookRaw k obj of
+    Just (String t) -> Just t
+    _               -> Nothing
+
+lookObj :: Text -> Object -> Maybe Object
+lookObj k obj = case lookRaw k obj of
+    Just (Object o) -> Just o
+    _               -> Nothing
+
+lookArr :: Text -> Object -> Maybe [Value]
+lookArr k obj = case lookRaw k obj of
+    Just v  -> case fromJSON v :: Result [Value] of
+                   Success xs -> Just xs
+                   Error _    -> Nothing
+    Nothing -> Nothing
+
+lookInt :: Text -> Object -> Maybe Int
+lookInt k obj = case lookRaw k obj of
+    Just v  -> case fromJSON v :: Result Int of
+                   Success n -> Just n
+                   Error _   -> Nothing
+    Nothing -> Nothing
 
 withLogHandle :: FilePath -> (Handle -> IO a) -> IO a
 withLogHandle path act = do
