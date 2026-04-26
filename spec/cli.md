@@ -103,7 +103,7 @@ icarium category rm <axis> <name>
 ## Dispatch and run loop
 
 ```
-icarium next [--json]
+icarium task next
     Print the id of the next ready task (priority DESC, created_at ASC).
     Exit 1 if queue empty.
 
@@ -117,7 +117,7 @@ icarium dispatch run <task-id>
 
 icarium drain
     [--max <n>]                       (default: from config max_dispatches_per_run)
-    [--until-empty]                   (loop until `next` returns empty)
+    [--until-empty]                   (loop until `task next` returns empty)
     [--model ...] [--effort ...]      (override defaults for this run)
     Pulls tasks until queue empty, max dispatches reached, or budget
     tripped. Prints one-line status per event (dispatch id, task, elapsed,

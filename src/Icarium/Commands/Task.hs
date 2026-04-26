@@ -9,6 +9,7 @@ import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
+import           System.Exit            (ExitCode (..), exitWith)
 
 import           Icarium.Commands.Util
 import           Icarium.Db             (defaultDbPath, withDb)
@@ -25,14 +26,16 @@ data Command
     | Show ShowOpts
     | Update UpdateOpts
     | Rm RmOpts
+    | Next NextOpts
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"      "Add a task"          (Add     <$> addP)
-   <> subcmd "list"     "List tasks"          (List    <$> listP)
-   <> subcmd "show"     "Show a task"         (Show    <$> showP)
-   <> subcmd "update"   "Update a task"       (Update  <$> updateP)
-   <> subcmd "rm"       "Delete a task"       (Rm      <$> rmP)
+    ( subcmd "add"      "Add a task"                                 (Add     <$> addP)
+   <> subcmd "list"     "List tasks"                                 (List    <$> listP)
+   <> subcmd "show"     "Show a task"                                (Show    <$> showP)
+   <> subcmd "update"   "Update a task"                              (Update  <$> updateP)
+   <> subcmd "rm"       "Delete a task"                              (Rm      <$> rmP)
+   <> subcmd "next"     "Print next ready task id; exit 1 if empty"  (Next    <$> nextP)
     )
     <|> (List <$> listP)
 
@@ -43,6 +46,7 @@ run = \case
     Show o    -> runShow o
     Update o  -> runUpdate o
     Rm o      -> runRm o
+    Next o    -> runNext o
 
 -- =============================================================
 -- add
@@ -300,3 +304,19 @@ runRm o = withDb defaultDbPath $ \c -> do
     ok <- RT.deleteTask c tid
     if ok then TIO.putStrLn ("deleted " <> tid)
           else fatal 1 ("task not found: " <> T.unpack (rId o))
+
+-- =============================================================
+-- next
+-- =============================================================
+
+data NextOpts = NextOpts
+
+nextP :: Parser NextOpts
+nextP = pure NextOpts
+
+runNext :: NextOpts -> IO ()
+runNext _ = withDb defaultDbPath $ \c -> do
+    ts <- RT.listTasks c [] True Nothing Nothing
+    case ts of
+        []      -> exitWith (ExitFailure 1)
+        (t : _) -> TIO.putStrLn (taskId t)

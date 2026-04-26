@@ -8,7 +8,6 @@ import qualified Icarium.Commands.Import   as Import
 import qualified Icarium.Commands.Init     as Init
 import qualified Icarium.Commands.Know     as Know
 import qualified Icarium.Commands.Link     as Link
-import qualified Icarium.Commands.Next     as Next
 import qualified Icarium.Commands.Task     as Task
 import           Options.Applicative
 
@@ -20,7 +19,6 @@ data Command
     | CmdLink     Link.Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
-    | CmdNext     Next.Options
     | CmdExport   Export.Options
     | CmdImport   Import.Options
 
@@ -35,7 +33,6 @@ run (CmdKnow c)     = Know.run c
 run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
 run (CmdDispatch c) = Dispatch.run c
-run (CmdNext o)     = Next.run o
 run (CmdExport o)   = Export.run o
 run (CmdImport o)   = Import.run o
 
@@ -68,9 +65,6 @@ commands = subparser
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
               (progDesc "Manage dispatches (run, list, show, logs, recover)"))
-   <> command "next"
-        (info (CmdNext <$> Next.parser <**> helper)
-              (progDesc "Print the next ready task id; exit 1 if queue empty"))
    <> command "export"
         (info (CmdExport <$> Export.parser <**> helper)
               (progDesc "Dump all data as a JSON snapshot"))
