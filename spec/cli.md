@@ -115,7 +115,7 @@ icarium dispatch run <task-id>
     output. Prints live heartbeat lines to stderr. On success, FF-merges
     to base branch. Exit code reflects dispatch outcome.
 
-icarium run
+icarium drain
     [--max <n>]                       (default: from config max_dispatches_per_run)
     [--until-empty]                   (loop until `next` returns empty)
     [--model ...] [--effort ...]      (override defaults for this run)
@@ -178,5 +178,5 @@ Reads (`task show`, `know show`, `know list`) are always permitted. Everything e
 1. DB path default `.icarium/icarium.db` — OK, or prefer `./icarium.db` flat?
 2. Body input: do we want an `$EDITOR` flow on `task add` with no body flags (like `git commit`)? Nice ergonomics for humans, easy to skip in v0.
 3. `--json` on every list or opt-in per command? I'm proposing universal.
-4. Should `icarium run` default to `--until-empty`, or require the flag? Safer to require, I think.
+4. Should `icarium drain` default to `--until-empty`, or require the flag? Safer to require, I think.
 5. Agent-visible `task show --prompt` — do we want this to also be what the dispatcher actually sends, or keep them separate paths? I'd make them literally the same code.

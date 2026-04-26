@@ -23,7 +23,7 @@ data Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
     | CmdNext     Next.Options
-    | CmdRun      Run.Options
+    | CmdDrain    Run.Options
     | CmdRecover  Recover.Options
     | CmdExport   Export.Options
     | CmdImport   Import.Options
@@ -40,7 +40,7 @@ run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
 run (CmdDispatch c) = Dispatch.run c
 run (CmdNext o)     = Next.run o
-run (CmdRun o)      = Run.run o
+run (CmdDrain o)    = Run.run o
 run (CmdRecover o)  = Recover.run o
 run (CmdExport o)   = Export.run o
 run (CmdImport o)   = Import.run o
@@ -77,9 +77,9 @@ commands = subparser
    <> command "next"
         (info (CmdNext <$> Next.parser <**> helper)
               (progDesc "Print the next ready task id; exit 1 if queue empty"))
-   <> command "run"
-        (info (CmdRun <$> Run.parser <**> helper)
-              (progDesc "Loop dispatching ready tasks until empty or --max"))
+   <> command "drain"
+        (info (CmdDrain <$> Run.parser <**> helper)
+              (progDesc "Drain the ready queue: loop dispatching tasks until empty or --max"))
    <> command "recover"
         (info (CmdRecover <$> Recover.parser <**> helper)
               (progDesc "Reconcile orphaned in-progress dispatches"))

@@ -268,7 +268,7 @@ T_EFFORT=$($I task add \
     --body-file "$T/t_effort")
 
 cat > "$T/t_sigint" <<'EOF'
-icarium run should catch SIGINT. On first Ctrl-C: finish the current
+icarium drain should catch SIGINT. On first Ctrl-C: finish the current
 dispatch, then exit cleanly without picking a new task. On second
 Ctrl-C: propagate hard kill.
 
@@ -276,7 +276,7 @@ Use System.Posix.Signals.installHandler with a shared MVar flag the
 loop checks between dispatches. Do not try to kill an in-flight
 claude process; let it finish the task it started.
 
-Test: start ./bin/icarium run --max 5 --dry-run, Ctrl-C during the
+Test: start ./bin/icarium drain --max 5 --dry-run, Ctrl-C during the
 loop, verify it stops cleanly.
 EOF
 T_SIGINT=$($I task add \
