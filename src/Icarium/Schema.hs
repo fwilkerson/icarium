@@ -22,7 +22,7 @@ schemaSql = TE.decodeUtf8 $(makeRelativeToProject "spec/schema.sql" >>= embedFil
 -- | Monotonically-increasing integer. Bumped whenever schema changes.
 -- Stored in @PRAGMA user_version@.
 schemaVersion :: Int
-schemaVersion = 2
+schemaVersion = 3
 
 -- | Apply the schema to a fresh connection and stamp the version.
 -- Uses direct-sqlite's multi-statement exec to run the whole script.

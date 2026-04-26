@@ -3,8 +3,6 @@ module Icarium.Commands.Know (Command, parser, run) where
 import           Control.Monad          (forM_, void, when)
 import           Data.Aeson             (encode, object, (.=))
 import qualified Data.ByteString.Lazy   as BL
-import           Data.Foldable          (for_)
-import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -19,6 +17,7 @@ import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
+import qualified Icarium.Slug           as Slug
 import           Icarium.Types
 
 data Command
@@ -27,23 +26,26 @@ data Command
     | Show ShowOpts
     | Update UpdateOpts
     | Rm RmOpts
+    | SlugSet SlugSetOpts
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"    "Add a knowledge entry"    (Add    <$> addP)
-   <> subcmd "list"   "List knowledge"           (List   <$> listP)
-   <> subcmd "show"   "Show a knowledge entry"   (Show   <$> showP)
-   <> subcmd "update" "Update a knowledge entry" (Update <$> updateP)
-   <> subcmd "rm"     "Delete a knowledge entry" (Rm     <$> rmP)
+    ( subcmd "add"      "Add a knowledge entry"    (Add     <$> addP)
+   <> subcmd "list"     "List knowledge"           (List    <$> listP)
+   <> subcmd "show"     "Show a knowledge entry"   (Show    <$> showP)
+   <> subcmd "update"   "Update a knowledge entry" (Update  <$> updateP)
+   <> subcmd "rm"       "Delete a knowledge entry" (Rm      <$> rmP)
+   <> subcmd "slug-set" "Set a knowledge entry's slug" (SlugSet <$> slugSetP)
     )
 
 run :: Command -> IO ()
 run = \case
-    Add o    -> runAdd o
-    List o   -> runList o
-    Show o   -> runShow o
-    Update o -> runUpdate o
-    Rm o     -> runRm o
+    Add o     -> runAdd o
+    List o    -> runList o
+    Show o    -> runShow o
+    Update o  -> runUpdate o
+    Rm o      -> runRm o
+    SlugSet o -> runSlugSet o
 
 -- =============================================================
 -- add
@@ -79,7 +81,7 @@ runAdd o = withDb defaultDbPath $ \c -> do
     domains <- mapM (requireCategory c Domain)     (aDomains o)
     disc    <- mapM (requireCategory c Discipline) (aDisciplines o)
     derived <- mapM (resolveNode c) (aDerivedFrom o)
-    for_ (aSupersedes o) (requireKnowledge c)
+    mSupersedesId <- mapM (requireKnowledge c) (aSupersedes o)
 
     -- Per-axis inheritance: if an axis has no explicit flag and
     -- ICARIUM_TASK_ID is set, copy that axis's categories from the task.
@@ -102,24 +104,31 @@ runAdd o = withDb defaultDbPath $ \c -> do
         RC.attachKnowledgeCategory c kid (categoryId cat)
     forM_ derived $ \(nkind, nid) ->
         void $ RE.insertEdge c DerivedFrom KnowledgeNode kid nkind nid
-    case aSupersedes o of
+    case mSupersedesId of
         Just target ->
             void $ RE.insertEdge c Supersedes KnowledgeNode kid KnowledgeNode target
         Nothing -> pure ()
     TIO.putStrLn kid
 
 -- | Look up an id that could refer to either a task or a knowledge entry.
--- Returns the @NodeKind@ alongside the id so edge inserts are correctly typed.
+-- Tries slug match on each table, then ULID prefix.
 resolveNode :: Connection -> Text -> IO (NodeKind, Text)
-resolveNode c nid = do
-    mt <- RT.getTask c nid
-    case mt of
-        Just _  -> pure (TaskNode, nid)
-        Nothing -> do
-            mk <- RK.getKnowledge c nid
-            case mk of
-                Just _  -> pure (KnowledgeNode, nid)
-                Nothing -> fatal 2 ("unknown node: " <> T.unpack nid)
+resolveNode c input = do
+    mtSlug <- RT.getTaskBySlug c input
+    mkSlug <- RK.getKnowledgeBySlug c input
+    case (mtSlug, mkSlug) of
+        (Just t, Nothing) -> pure (TaskNode, taskId t)
+        (Nothing, Just k) -> pure (KnowledgeNode, knowledgeId k)
+        (Just _,  Just _) ->
+            fatal 2 ("ambiguous slug (matches task and knowledge): " <> T.unpack input)
+        (Nothing, Nothing) -> do
+            ts <- RT.getTasksByPrefix c input
+            ks <- RK.getKnowledgesByPrefix c input
+            case (ts, ks) of
+                ([t], [] ) -> pure (TaskNode, taskId t)
+                ([], [k] ) -> pure (KnowledgeNode, knowledgeId k)
+                ([], []  ) -> fatal 2 ("unknown node: " <> T.unpack input)
+                _          -> fatal 2 ("ambiguous id: " <> T.unpack input)
 
 requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
 requireCategory c axis name = do
@@ -129,10 +138,13 @@ requireCategory c axis name = do
         Nothing  -> fatal 2 ("unknown " <> T.unpack (categoryAxisText axis)
                                        <> ": " <> T.unpack name)
 
-requireKnowledge :: Connection -> Text -> IO ()
-requireKnowledge c kid = do
-    mk <- RK.getKnowledge c kid
-    when (isNothing mk) $ fatal 2 ("unknown knowledge: " <> T.unpack kid)
+-- | Resolve a knowledge input (slug or ULID prefix) to a canonical ULID.
+requireKnowledge :: Connection -> Text -> IO Text
+requireKnowledge c input = do
+    r <- RK.resolveKnowledgeId c input
+    case r of
+        Right kid -> pure kid
+        Left err  -> fatal 2 err
 
 -- =============================================================
 -- list
@@ -185,17 +197,18 @@ showP = ShowOpts . T.pack
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
-    mk <- RK.getKnowledge c (sId o)
-    case mk of
-        Nothing -> fatal 1 ("knowledge not found: " <> T.unpack (sId o))
-        Just k  -> do
-            cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
-            if sJson o
-                then BL.putStr (encode (object
-                        [ "knowledge" .= k
-                        , "categories" .= cats
-                        ])) >> putStrLn ""
-                else TIO.putStr (Render.renderKnowledge k cats)
+    eId <- RK.resolveKnowledgeId c (sId o)
+    kid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    Just k <- RK.getKnowledge c kid
+    cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
+    if sJson o
+        then BL.putStr (encode (object
+                [ "knowledge" .= k
+                , "categories" .= cats
+                ])) >> putStrLn ""
+        else TIO.putStr (Render.renderKnowledge k cats)
 
 -- =============================================================
 -- update
@@ -228,6 +241,10 @@ updateP = UpdateOpts . T.pack
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do
+    eId <- RK.resolveKnowledgeId c (uId o)
+    kid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
@@ -238,11 +255,11 @@ runUpdate o = withDb defaultDbPath $ \c -> do
             , RK.kuBody  = body
             , RK.kuStale = uStale o
             }
-    ok <- RK.updateKnowledge c (uId o) upd
+    ok <- RK.updateKnowledge c kid upd
     if ok then do
         forM_ (domains <> disc) $ \cat ->
-            RC.attachKnowledgeCategory c (uId o) (categoryId cat)
-        TIO.putStrLn ("updated " <> uId o)
+            RC.attachKnowledgeCategory c kid (categoryId cat)
+        TIO.putStrLn ("updated " <> kid)
     else fatal 1 ("knowledge not found: " <> T.unpack (uId o))
 
 -- =============================================================
@@ -256,6 +273,42 @@ rmP = RmOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do
-    ok <- RK.deleteKnowledge c (rId o)
-    if ok then TIO.putStrLn ("deleted " <> rId o)
+    eId <- RK.resolveKnowledgeId c (rId o)
+    kid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    ok <- RK.deleteKnowledge c kid
+    if ok then TIO.putStrLn ("deleted " <> kid)
           else fatal 1 ("knowledge not found: " <> T.unpack (rId o))
+
+-- =============================================================
+-- slug-set
+-- =============================================================
+
+data SlugSetOpts = SlugSetOpts
+    { ssId   :: Text
+    , ssSlug :: Text
+    }
+
+slugSetP :: Parser SlugSetOpts
+slugSetP = SlugSetOpts . T.pack
+    <$> strArgument (metavar "KNOWLEDGE_ID")
+    <*> (T.pack <$> strArgument (metavar "SLUG"))
+
+runSlugSet :: SlugSetOpts -> IO ()
+runSlugSet o = withDb defaultDbPath $ \c -> do
+    eId <- RK.resolveKnowledgeId c (ssId o)
+    kid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    let newSlug = Slug.titleToSlug (ssSlug o)
+    when (T.null newSlug) $
+        fatal 2 "slug cannot be empty"
+    existing <- RK.getKnowledgeBySlug c newSlug
+    case existing of
+        Just k | knowledgeId k /= kid ->
+            fatal 1 ("slug already in use by knowledge: " <> T.unpack (knowledgeId k))
+        _ -> do
+            ok <- RK.setKnowledgeSlug c kid newSlug
+            if ok then TIO.putStrLn ("slug set: " <> newSlug)
+                  else fatal 1 ("knowledge not found: " <> T.unpack (ssId o))

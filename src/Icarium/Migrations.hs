@@ -22,6 +22,36 @@ data Migration = Migration
 migrations :: [Migration]
 migrations =
     [ Migration 2 migrate_1_to_2
+    , Migration 3 migrate_2_to_3
+    ]
+
+-- ---------------------------------------------------------------------------
+-- 1 → 2: Add 'in_progress' to the tasks.state CHECK constraint.
+-- ---------------------------------------------------------------------------
+-- SQLite does not support ALTER COLUMN, so we use the standard
+-- create-copy-drop-rename pattern. Foreign keys must be disabled outside the
+-- transaction (PRAGMA foreign_keys is a no-op inside a transaction) to allow
+-- DROP TABLE tasks while task_categories / dispatches reference it.
+-- ---------------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------------
+-- 2 → 3: Add 'slug' TEXT column to tasks and knowledge, with partial unique
+-- index allowing multiple NULLs (legacy rows keep slug = NULL).
+-- ---------------------------------------------------------------------------
+
+migrate_2_to_3 :: Connection -> IO ()
+migrate_2_to_3 conn =
+    Direct.exec (Internal.connectionHandle conn) migrate_2_to_3_sql
+
+migrate_2_to_3_sql :: Text
+migrate_2_to_3_sql = T.unlines
+    [ "BEGIN;"
+    , "ALTER TABLE tasks ADD COLUMN slug TEXT;"
+    , "CREATE UNIQUE INDEX tasks_slug_idx ON tasks(slug) WHERE slug IS NOT NULL;"
+    , "ALTER TABLE knowledge ADD COLUMN slug TEXT;"
+    , "CREATE UNIQUE INDEX knowledge_slug_idx ON knowledge(slug) WHERE slug IS NOT NULL;"
+    , "PRAGMA user_version = 3;"
+    , "COMMIT;"
     ]
 
 -- ---------------------------------------------------------------------------

@@ -144,11 +144,13 @@ data Task = Task
     , taskBlockReason :: Maybe Text
     , taskCreatedAt   :: Text
     , taskUpdatedAt   :: Text
+    , taskSlug        :: Maybe Text
     } deriving (Show)
 
 instance FromRow Task where
     fromRow = Task <$> field <*> field <*> field <*> field
                    <*> field <*> field <*> field <*> field
+                   <*> field
 
 data Knowledge = Knowledge
     { knowledgeId        :: Text
@@ -157,12 +159,14 @@ data Knowledge = Knowledge
     , knowledgeStale     :: Bool
     , knowledgeCreatedAt :: Text
     , knowledgeUpdatedAt :: Text
+    , knowledgeSlug      :: Maybe Text
     } deriving (Show, Eq)
 
 instance FromRow Knowledge where
     fromRow = Knowledge <$> field <*> field <*> field
                         <*> (intToBool <$> field)
                         <*> field <*> field
+                        <*> field
       where
         intToBool :: Int -> Bool
         intToBool 0 = False
@@ -252,6 +256,7 @@ instance ToJSON Task where
         , "block_reason" .= taskBlockReason
         , "created_at"   .= taskCreatedAt
         , "updated_at"   .= taskUpdatedAt
+        , "slug"         .= taskSlug
         ]
 
 instance ToJSON Knowledge where
@@ -262,6 +267,7 @@ instance ToJSON Knowledge where
         , "stale"      .= knowledgeStale
         , "created_at" .= knowledgeCreatedAt
         , "updated_at" .= knowledgeUpdatedAt
+        , "slug"       .= knowledgeSlug
         ]
 
 instance ToJSON Edge where
@@ -343,6 +349,7 @@ instance FromJSON Task where
         <*> o .:? "block_reason"
         <*> o .:  "created_at"
         <*> o .:  "updated_at"
+        <*> o .:? "slug"
 
 instance FromJSON Knowledge where
     parseJSON = withObject "Knowledge" $ \o -> Knowledge
@@ -352,6 +359,7 @@ instance FromJSON Knowledge where
         <*> o .:  "stale"
         <*> o .:  "created_at"
         <*> o .:  "updated_at"
+        <*> o .:? "slug"
 
 instance FromJSON Edge where
     parseJSON = withObject "Edge" $ \o -> Edge

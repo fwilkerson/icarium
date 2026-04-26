@@ -74,17 +74,17 @@ importAll conn merge ImportPayload{..} = do
     forM_ ipTasks $ \Task{..} ->
         execute conn
             (ins "tasks"
-                 "id, title, body, state, priority, block_reason, created_at, updated_at"
-                 "?, ?, ?, ?, ?, ?, ?, ?")
+                 "id, title, body, state, priority, block_reason, created_at, updated_at, slug"
+                 "?, ?, ?, ?, ?, ?, ?, ?, ?")
             (taskId, taskTitle, taskBody, taskState, taskPriority,
-             taskBlockReason, taskCreatedAt, taskUpdatedAt)
+             taskBlockReason, taskCreatedAt, taskUpdatedAt, taskSlug)
     forM_ ipKnowledge $ \Knowledge{..} ->
         execute conn
             (ins "knowledge"
-                 "id, title, body, stale, created_at, updated_at"
-                 "?, ?, ?, ?, ?, ?")
+                 "id, title, body, stale, created_at, updated_at, slug"
+                 "?, ?, ?, ?, ?, ?, ?")
             (knowledgeId, knowledgeTitle, knowledgeBody,
-             boolToInt knowledgeStale, knowledgeCreatedAt, knowledgeUpdatedAt)
+             boolToInt knowledgeStale, knowledgeCreatedAt, knowledgeUpdatedAt, knowledgeSlug)
     forM_ ipEdges $ \Edge{..} ->
         execute conn
             (ins "edges"

@@ -4,6 +4,10 @@ module Icarium.Repo.Knowledge
     , emptyUpdate
     , insertKnowledge
     , getKnowledge
+    , getKnowledgeBySlug
+    , getKnowledgesByPrefix
+    , resolveKnowledgeId
+    , setKnowledgeSlug
     , listKnowledge
     , updateKnowledge
     , deleteKnowledge
@@ -17,6 +21,7 @@ import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLD
                                          query)
 
 import           Icarium.Id             (newId)
+import           Icarium.Slug           (titleToSlug, uniqueKnowledgeSlug)
 import           Icarium.Types          (Category (..), CategoryAxis (..), Knowledge (..))
 
 data NewKnowledge = NewKnowledge
@@ -34,14 +39,15 @@ emptyUpdate :: KnowledgeUpdate
 emptyUpdate = KnowledgeUpdate Nothing Nothing Nothing
 
 knowCols :: Text
-knowCols = "id, title, body, stale, created_at, updated_at"
+knowCols = "id, title, body, stale, created_at, updated_at, slug"
 
 insertKnowledge :: Connection -> NewKnowledge -> IO Text
 insertKnowledge conn NewKnowledge{..} = do
-    kid <- newId
+    kid  <- newId
+    slug <- uniqueKnowledgeSlug conn (titleToSlug nkTitle)
     execute conn
-        (Query "INSERT INTO knowledge (id, title, body) VALUES (?, ?, ?)")
-        (kid, nkTitle, nkBody)
+        (Query "INSERT INTO knowledge (id, title, body, slug) VALUES (?, ?, ?, ?)")
+        (kid, nkTitle, nkBody, slug)
     pure kid
 
 getKnowledge :: Connection -> Text -> IO (Maybe Knowledge)
@@ -52,6 +58,56 @@ getKnowledge conn kid = do
     pure $ case rows of
         (k:_) -> Just k
         []    -> Nothing
+
+getKnowledgeBySlug :: Connection -> Text -> IO (Maybe Knowledge)
+getKnowledgeBySlug conn slug = do
+    rows <- query conn
+        (Query $ "SELECT " <> knowCols <> " FROM knowledge WHERE slug = ?")
+        (Only slug)
+    pure $ case rows of
+        (k:_) -> Just k
+        []    -> Nothing
+
+-- | Escape LIKE special characters so they match literally.
+escapeLike :: Text -> Text
+escapeLike = T.concatMap esc
+  where
+    esc c | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
+           | otherwise                  = T.singleton c
+
+-- | Knowledge entries whose ULID starts with @prefix@.
+getKnowledgesByPrefix :: Connection -> Text -> IO [Knowledge]
+getKnowledgesByPrefix conn prefix =
+    query conn
+        (Query $ "SELECT " <> knowCols <> " FROM knowledge WHERE id LIKE ? ESCAPE '\\'")
+        (Only (escapeLike prefix <> "%"))
+
+-- | Resolve a user-supplied string to a canonical knowledge ULID.
+-- Tries slug exact match, then ULID prefix match.
+resolveKnowledgeId :: Connection -> Text -> IO (Either String Text)
+resolveKnowledgeId conn input = do
+    mk <- getKnowledgeBySlug conn input
+    case mk of
+        Just k  -> pure (Right (knowledgeId k))
+        Nothing -> do
+            ks <- getKnowledgesByPrefix conn input
+            case ks of
+                [k] -> pure (Right (knowledgeId k))
+                []  -> pure (Left $ "knowledge not found: " <> T.unpack input)
+                _   -> pure (Left $ "ambiguous id: " <> T.unpack input
+                                 <> " (matches " <> show (length ks) <> " entries)")
+
+-- | Overwrite a knowledge entry's slug. Returns False if the entry does not exist.
+setKnowledgeSlug :: Connection -> Text -> Text -> IO Bool
+setKnowledgeSlug conn kid newSlug = do
+    mk <- getKnowledge conn kid
+    case mk of
+        Nothing -> pure False
+        Just _  -> do
+            execute conn
+                (Query "UPDATE knowledge SET slug = ? WHERE id = ?")
+                (newSlug, kid)
+            pure True
 
 -- | List knowledge entries. @staleFilter@: @Nothing@ = all entries,
 -- @Just True@ = stale only, @Just False@ = exclude stale.

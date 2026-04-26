@@ -3,7 +3,6 @@ module Icarium.Commands.Task (Command, parser, run) where
 import           Control.Monad          (forM_, unless, void, when)
 import           Data.Aeson             (encode, object, (.=))
 import qualified Data.ByteString.Lazy   as BL
-import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -17,6 +16,7 @@ import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
+import qualified Icarium.Slug           as Slug
 import           Icarium.Types
 
 data Command
@@ -25,23 +25,26 @@ data Command
     | Show ShowOpts
     | Update UpdateOpts
     | Rm RmOpts
+    | SlugSet SlugSetOpts
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"    "Add a task"       (Add    <$> addP)
-   <> subcmd "list"   "List tasks"       (List   <$> listP)
-   <> subcmd "show"   "Show a task"      (Show   <$> showP)
-   <> subcmd "update" "Update a task"    (Update <$> updateP)
-   <> subcmd "rm"     "Delete a task"    (Rm     <$> rmP)
+    ( subcmd "add"      "Add a task"          (Add     <$> addP)
+   <> subcmd "list"     "List tasks"          (List    <$> listP)
+   <> subcmd "show"     "Show a task"         (Show    <$> showP)
+   <> subcmd "update"   "Update a task"       (Update  <$> updateP)
+   <> subcmd "rm"       "Delete a task"       (Rm      <$> rmP)
+   <> subcmd "slug-set" "Set a task's slug"   (SlugSet <$> slugSetP)
     )
 
 run :: Command -> IO ()
 run = \case
-    Add o    -> runAdd o
-    List o   -> runList o
-    Show o   -> runShow o
-    Update o -> runUpdate o
-    Rm o     -> runRm o
+    Add o     -> runAdd o
+    List o    -> runList o
+    Show o    -> runShow o
+    Update o  -> runUpdate o
+    Rm o      -> runRm o
+    SlugSet o -> runSlugSet o
 
 -- =============================================================
 -- add
@@ -83,10 +86,10 @@ runAdd o = withDb defaultDbPath $ \c -> do
         fatal 2 "on add: state must be idea | planned | ready"
 
     -- Pre-validate referenced categories and nodes so we fail before insert.
-    domains  <- mapM (requireCategory c Domain)     (aDomains o)
-    disc     <- mapM (requireCategory c Discipline) (aDisciplines o)
-    mapM_ (requireTask c)      (aDependsOn o)
-    mapM_ (requireKnowledge c) (aReferences o)
+    domains <- mapM (requireCategory c Domain)     (aDomains o)
+    disc    <- mapM (requireCategory c Discipline) (aDisciplines o)
+    depIds  <- mapM (requireTask c)      (aDependsOn o)
+    refIds  <- mapM (requireKnowledge c) (aReferences o)
 
     tid <- RT.insertTask c RT.NewTask
         { RT.ntTitle    = aTitle o
@@ -96,10 +99,10 @@ runAdd o = withDb defaultDbPath $ \c -> do
         }
     forM_ (domains <> disc) $ \cat ->
         RC.attachTaskCategory c tid (categoryId cat)
-    forM_ (aDependsOn o) $ \depId ->
+    forM_ depIds $ \depId ->
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
-    forM_ (aReferences o) $ \kid ->
-        void $ RE.insertEdge c References TaskNode tid KnowledgeNode kid
+    forM_ refIds $ \refId ->
+        void $ RE.insertEdge c References TaskNode tid KnowledgeNode refId
     TIO.putStrLn tid
 
 requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
@@ -110,17 +113,21 @@ requireCategory c axis name = do
         Nothing  -> fatal 2 ("unknown " <> T.unpack (categoryAxisText axis)
                                        <> ": " <> T.unpack name)
 
-requireTask :: Connection -> Text -> IO ()
-requireTask c tid = do
-    mt <- RT.getTask c tid
-    when (isNothing mt) $
-        fatal 2 ("unknown task: " <> T.unpack tid)
+-- | Resolve a task input (slug or ULID prefix) to a canonical ULID.
+requireTask :: Connection -> Text -> IO Text
+requireTask c input = do
+    r <- RT.resolveTaskId c input
+    case r of
+        Right tid -> pure tid
+        Left err  -> fatal 2 err
 
-requireKnowledge :: Connection -> Text -> IO ()
-requireKnowledge c kid = do
-    mk <- RK.getKnowledge c kid
-    when (isNothing mk) $
-        fatal 2 ("unknown knowledge: " <> T.unpack kid)
+-- | Resolve a knowledge input (slug or ULID prefix) to a canonical ULID.
+requireKnowledge :: Connection -> Text -> IO Text
+requireKnowledge c input = do
+    r <- RK.resolveKnowledgeId c input
+    case r of
+        Right kid -> pure kid
+        Left err  -> fatal 2 err
 
 -- =============================================================
 -- list
@@ -181,27 +188,28 @@ showP = ShowOpts . T.pack
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
-    mt <- RT.getTask c (sId o)
-    case mt of
-        Nothing -> fatal 1 ("task not found: " <> T.unpack (sId o))
-        Just t  -> do
-            refs <- RE.referencedKnowledge c (taskId t)
-            deps <- RE.dependencyTasks     c (taskId t)
-            cats <- RC.taskCategoriesFor   c (taskId t)
-            if sJson o
-                then BL.putStr (encode (object
-                        [ "task"       .= t
-                        , "deps"       .= deps
-                        , "refs"       .= refs
-                        , "categories" .= cats
-                        ])) >> putStrLn ""
-                else do
-                    catMatch <- RK.categoryMatchedKnowledge c cats 5
-                    let refIds     = map knowledgeId refs
-                        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
-                    TIO.putStr $ if sPrompt o
-                        then Render.renderTaskPrompt t refs dedupedCat deps
-                        else Render.renderTaskHuman  t refs deps cats
+    eId <- RT.resolveTaskId c (sId o)
+    tid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    Just t <- RT.getTask c tid
+    refs <- RE.referencedKnowledge c (taskId t)
+    deps <- RE.dependencyTasks     c (taskId t)
+    cats <- RC.taskCategoriesFor   c (taskId t)
+    if sJson o
+        then BL.putStr (encode (object
+                [ "task"       .= t
+                , "deps"       .= deps
+                , "refs"       .= refs
+                , "categories" .= cats
+                ])) >> putStrLn ""
+        else do
+            catMatch <- RK.categoryMatchedKnowledge c cats 5
+            let refIds     = map knowledgeId refs
+                dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+            TIO.putStr $ if sPrompt o
+                then Render.renderTaskPrompt t refs dedupedCat deps
+                else Render.renderTaskHuman  t refs deps cats
 
 -- =============================================================
 -- update
@@ -231,8 +239,12 @@ updateP = UpdateOpts . T.pack
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do
-    when (uState o == Just Blocked && isNothing (uBlockReason o)) $
+    when (uState o == Just Blocked && uBlockReason o == Nothing) $
         fatal 2 "--state blocked requires --block-reason"
+    eId <- RT.resolveTaskId c (uId o)
+    tid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
@@ -243,8 +255,8 @@ runUpdate o = withDb defaultDbPath $ \c -> do
             , RT.tuPriority    = fmap Just (uPriority o)
             , RT.tuBlockReason = fmap Just (uBlockReason o)
             }
-    ok <- RT.updateTask c (uId o) upd
-    if ok then TIO.putStrLn ("updated " <> uId o)
+    ok <- RT.updateTask c tid upd
+    if ok then TIO.putStrLn ("updated " <> tid)
           else fatal 1 ("task not found: " <> T.unpack (uId o))
 
 -- =============================================================
@@ -258,6 +270,42 @@ rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do
-    ok <- RT.deleteTask c (rId o)
-    if ok then TIO.putStrLn ("deleted " <> rId o)
+    eId <- RT.resolveTaskId c (rId o)
+    tid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    ok <- RT.deleteTask c tid
+    if ok then TIO.putStrLn ("deleted " <> tid)
           else fatal 1 ("task not found: " <> T.unpack (rId o))
+
+-- =============================================================
+-- slug-set
+-- =============================================================
+
+data SlugSetOpts = SlugSetOpts
+    { ssId   :: Text
+    , ssSlug :: Text
+    }
+
+slugSetP :: Parser SlugSetOpts
+slugSetP = SlugSetOpts . T.pack
+    <$> strArgument (metavar "TASK_ID")
+    <*> (T.pack <$> strArgument (metavar "SLUG"))
+
+runSlugSet :: SlugSetOpts -> IO ()
+runSlugSet o = withDb defaultDbPath $ \c -> do
+    eId <- RT.resolveTaskId c (ssId o)
+    tid <- case eId of
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    let newSlug = Slug.titleToSlug (ssSlug o)
+    when (T.null newSlug) $
+        fatal 2 "slug cannot be empty"
+    existing <- RT.getTaskBySlug c newSlug
+    case existing of
+        Just t | taskId t /= tid ->
+            fatal 1 ("slug already in use by task: " <> T.unpack (taskId t))
+        _ -> do
+            ok <- RT.setTaskSlug c tid newSlug
+            if ok then TIO.putStrLn ("slug set: " <> newSlug)
+                  else fatal 1 ("task not found: " <> T.unpack (ssId o))

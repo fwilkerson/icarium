@@ -21,6 +21,7 @@ import           Icarium.Types
 renderTaskHuman :: Task -> [Knowledge] -> [Task] -> [Category] -> Text
 renderTaskHuman t refs deps cats = T.unlines $
     [ "id:        " <> taskId t
+    , "slug:      " <> maybe "-" id (taskSlug t)
     , "title:     " <> taskTitle t
     , "state:     " <> taskStateText (taskState t)
     , priorityLine t
@@ -156,6 +157,7 @@ renderTaskList ts = T.unlines $ header : map row ts
 renderKnowledge :: Knowledge -> [Category] -> Text
 renderKnowledge k cats = T.unlines $
     [ "id:       " <> knowledgeId k
+    , "slug:     " <> maybe "-" id (knowledgeSlug k)
     , "title:    " <> knowledgeTitle k
     , "stale:    " <> (if knowledgeStale k then "yes" else "no")
     , "created:  " <> knowledgeCreatedAt k

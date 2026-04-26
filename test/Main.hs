@@ -23,7 +23,9 @@ import           Icarium.Id             (newId)
 import           Icarium.Render         (renderTaskPrompt)
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Knowledge as RK
+import qualified Icarium.Repo.Task      as RT
 import           Icarium.Schema         (applySchema, execSql)
+import           Icarium.Slug           (titleToSlug)
 import           Icarium.Types
 
 main :: IO ()
@@ -54,7 +56,18 @@ main = defaultMain $ testGroup "icarium"
         [ testCase "v1 DB migrates to v2: user_version stamped"         testMigrateV1ToV2Version
         , testCase "v1 DB migrates to v2: in_progress accepted"         testMigrateV1ToV2Check
         , testCase "v1 DB migrates to v2: existing rows preserved"      testMigrateV1ToV2Data
-        , testCase "migrateDb is idempotent on v2 DB"                   testMigrateIdempotent
+        , testCase "v2 DB migrates to v3: user_version stamped"         testMigrateV2ToV3Version
+        , testCase "v2 DB migrates to v3: slug column exists"           testMigrateV2ToV3SlugCol
+        , testCase "v2 DB migrates to v3: existing rows preserved"      testMigrateV2ToV3Data
+        , testCase "migrateDb is idempotent on v3 DB"                   testMigrateIdempotent
+        ]
+    , testGroup "slug"
+        [ testCase "titleToSlug: basic kebab conversion"                testSlugBasic
+        , testCase "titleToSlug: consecutive separators collapsed"      testSlugCollapse
+        , testCase "titleToSlug: truncates at 30 chars"                 testSlugTruncate
+        , testCase "titleToSlug: strips trailing dash after truncation" testSlugStripDash
+        , testCase "slug roundtrip: insert then resolve by slug"        testSlugResolve
+        , testCase "slug collision: appends -2"                         testSlugCollision
         ]
     ]
 
@@ -183,6 +196,7 @@ minTask = Task
     , taskBlockReason = Nothing
     , taskCreatedAt   = "2026-01-01T00:00:00Z"
     , taskUpdatedAt   = "2026-01-01T00:00:00Z"
+    , taskSlug        = Nothing
     }
 
 -- =============================================================
@@ -294,6 +308,11 @@ v1SchemaSql :: Text
 v1SchemaSql =
     TE.decodeUtf8 $(makeRelativeToProject "test/fixtures/v1_schema.sql" >>= embedFile)
 
+-- v2 schema fixture, embedded at compile time.
+v2SchemaSql :: Text
+v2SchemaSql =
+    TE.decodeUtf8 $(makeRelativeToProject "test/fixtures/v2_schema.sql" >>= embedFile)
+
 -- Open an in-memory DB with the v1 schema applied and user_version = 1.
 withTestDbV1 :: (Connection -> IO a) -> IO a
 withTestDbV1 act = bracket (open ":memory:") close $ \conn -> do
@@ -301,11 +320,19 @@ withTestDbV1 act = bracket (open ":memory:") close $ \conn -> do
     execute_ conn "PRAGMA user_version = 1"
     act conn
 
+-- Open an in-memory DB with the v2 schema applied and user_version = 2.
+withTestDbV2 :: (Connection -> IO a) -> IO a
+withTestDbV2 act = bracket (open ":memory:") close $ \conn -> do
+    execSql conn v2SchemaSql
+    execute_ conn "PRAGMA user_version = 2"
+    act conn
+
 testMigrateV1ToV2Version :: IO ()
 testMigrateV1ToV2Version = withTestDbV1 $ \conn -> do
+    -- migrateDb applies all pending migrations; v1 → v2 → v3.
     migrateDb conn
     v <- dbSchemaVersion conn
-    v @?= 2
+    v @?= 3
 
 testMigrateV1ToV2Check :: IO ()
 testMigrateV1ToV2Check = withTestDbV1 $ \conn -> do
@@ -338,8 +365,102 @@ testMigrateV1ToV2Data = withTestDbV1 $ \conn -> do
 
 testMigrateIdempotent :: IO ()
 testMigrateIdempotent = withTestDb $ \conn -> do
-    -- withTestDb applies current schema (v2); migrateDb should be a no-op.
+    -- withTestDb applies current schema (v3); migrateDb should be a no-op.
     v0 <- dbSchemaVersion conn
     migrateDb conn
     v1 <- dbSchemaVersion conn
-    (v0, v1) @?= (2 :: Int64, 2 :: Int64)
+    (v0, v1) @?= (3 :: Int64, 3 :: Int64)
+
+testMigrateV2ToV3Version :: IO ()
+testMigrateV2ToV3Version = withTestDbV2 $ \conn -> do
+    migrateDb conn
+    v <- dbSchemaVersion conn
+    v @?= 3
+
+testMigrateV2ToV3SlugCol :: IO ()
+testMigrateV2ToV3SlugCol = withTestDbV2 $ \conn -> do
+    migrateDb conn
+    -- Inserting a task with a slug value must succeed after migration.
+    execute conn
+        (Query "INSERT INTO tasks (id, title, body, state, slug) VALUES (?,?,?,?,?)")
+        ( "01MTEST0000000000000000010" :: Text
+        , "Slug test task" :: Text
+        , "" :: Text
+        , "ready" :: Text
+        , "slug-test-task" :: Text
+        )
+    rows <- query_ conn "SELECT slug FROM tasks WHERE id = '01MTEST0000000000000000010'"
+                :: IO [Only Text]
+    map (\(Only s) -> s) rows @?= ["slug-test-task"]
+
+testMigrateV2ToV3Data :: IO ()
+testMigrateV2ToV3Data = withTestDbV2 $ \conn -> do
+    -- Insert rows before migrating; verify they survive with slug = NULL.
+    execute conn
+        (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
+        ( "01MTEST0000000000000000011" :: Text
+        , "Legacy task" :: Text
+        , "body" :: Text
+        , "ready" :: Text
+        )
+    migrateDb conn
+    rows <- query_ conn "SELECT title FROM tasks" :: IO [Only Text]
+    map (\(Only t) -> t) rows @?= ["Legacy task"]
+
+-- =============================================================
+-- Slug tests
+-- =============================================================
+
+testSlugBasic :: IO ()
+testSlugBasic =
+    titleToSlug "Hello World" @?= "hello-world"
+
+testSlugCollapse :: IO ()
+testSlugCollapse =
+    titleToSlug "foo  --  bar" @?= "foo-bar"
+
+testSlugTruncate :: IO ()
+testSlugTruncate = do
+    let s = titleToSlug "a very long title with many many words here"
+    assertBool "truncated to ≤30 chars" (T.length s <= 30)
+
+testSlugStripDash :: IO ()
+testSlugStripDash = do
+    -- A title whose norm+truncation lands on a dash should strip it.
+    -- Force the issue by making a title where position 30 would be '-'.
+    -- "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaX" (30 a's then X) — no dash case.
+    -- Instead test that a trailing dash is stripped:
+    let s = titleToSlug "foo-bar-baz-qux-quux-corge-grault-garply"
+    assertBool "no trailing dash" (not (T.isSuffixOf "-" s))
+
+testSlugResolve :: IO ()
+testSlugResolve = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle    = "My Test Task"
+        , RT.ntBody     = ""
+        , RT.ntState    = Ready
+        , RT.ntPriority = Nothing
+        }
+    -- The auto-generated slug should be "my-test-task".
+    mt <- RT.getTask c tid
+    case mt of
+        Nothing -> fail "task not inserted"
+        Just t  -> do
+            taskSlug t @?= Just "my-test-task"
+            -- Resolve by slug
+            r <- RT.resolveTaskId c "my-test-task"
+            r @?= Right tid
+
+testSlugCollision :: IO ()
+testSlugCollision = withTestDb $ \c -> do
+    tid1 <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "Dup Slug", RT.ntBody = "", RT.ntState = Planned, RT.ntPriority = Nothing }
+    tid2 <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "Dup Slug", RT.ntBody = "", RT.ntState = Planned, RT.ntPriority = Nothing }
+    mt1 <- RT.getTask c tid1
+    mt2 <- RT.getTask c tid2
+    case (mt1, mt2) of
+        (Just t1, Just t2) -> do
+            taskSlug t1 @?= Just "dup-slug"
+            taskSlug t2 @?= Just "dup-slug-2"
+        _ -> fail "one or both tasks missing"

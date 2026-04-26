@@ -7,6 +7,7 @@ maintainer:         frank.w1lk3rs0n@gmail.com
 build-type:         Simple
 extra-source-files: spec/schema.sql
                     test/fixtures/v1_schema.sql
+                    test/fixtures/v2_schema.sql
 
 common lang
     default-language:   GHC2021
@@ -21,6 +22,7 @@ library
     hs-source-dirs:   src
     exposed-modules:  Icarium.Types
                       Icarium.Id
+                      Icarium.Slug
                       Icarium.Schema
                       Icarium.Migrations
                       Icarium.Db

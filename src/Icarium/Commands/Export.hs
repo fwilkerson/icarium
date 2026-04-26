@@ -11,6 +11,7 @@ import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
+import           Icarium.Schema         (schemaVersion)
 import           Icarium.Types          ()
 
 data Options = Options
@@ -32,7 +33,7 @@ run Options{..} = withDb defaultDbPath $ \conn -> do
     categories <- RC.listCategories conn Nothing
     dispatches <- RD.listDispatches conn Nothing
     let snapshot = object
-            [ "schema_version" .= (1 :: Int)
+            [ "schema_version" .= schemaVersion
             , "tasks"          .= tasks
             , "knowledge"      .= knowledge
             , "edges"          .= edges
