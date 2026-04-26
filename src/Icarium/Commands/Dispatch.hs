@@ -289,18 +289,18 @@ runShow o = withDb defaultDbPath $ \c -> do
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack (sId o))
         Just d -> do
             mt <- RT.getTask c (dispatchTaskId d)
+            ks <- RE.knowledgeDerivedFromDispatch c (dispatchTaskId d)
+                    (dispatchStartedAt d) (dispatchEndedAt d)
             if sJson o
-                then do
-                    produced <- RE.knowledgeDerivedFromTask c (dispatchTaskId d)
-                    BL.putStr (encode (object
+                then BL.putStr (encode (object
                         [ "dispatch"            .= d
                         , "task"                .= mt
-                        , "knowledge_produced"  .= produced
+                        , "knowledge_produced"  .= ks
                         ])) >> putStrLn ""
-                else TIO.putStr (renderDispatch d mt)
+                else TIO.putStr (renderDispatch d mt ks)
 
-renderDispatch :: Dispatch -> Maybe Task -> Text
-renderDispatch d mt = T.unlines
+renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
+renderDispatch d mt ks = T.unlines $
     [ field "id"            (dispatchId d)
     , field "task_id"       (dispatchTaskId d)
     , field "task_title"    (maybe "(task missing)" taskTitle mt)
@@ -318,9 +318,14 @@ renderDispatch d mt = T.unlines
     , field "last_commit"   (fromMaybe "" (dispatchLastCommit d))
     , field "log_path"      (fromMaybe "" (dispatchLogPath d))
     , field "notes"         (fromMaybe "" (dispatchNotes d))
-    ]
+    , ""
+    , "Knowledge added:"
+    ] ++ knowledgeLines
   where
     field k v = padR 14 (k <> ":") <> " " <> v
+    knowledgeLines = case ks of
+        [] -> ["  (none)"]
+        _  -> map (\k -> "  " <> knowledgeId k <> "  " <> knowledgeTitle k) ks
 
 -- =============================================================
 -- logs

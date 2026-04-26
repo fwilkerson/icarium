@@ -5,10 +5,12 @@ module Icarium.Repo.Edge
     , referencedKnowledge
     , dependencyTasks
     , knowledgeDerivedFromTask
+    , knowledgeDerivedFromDispatch
     ) where
 
 import           Data.Text              (Text)
-import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
+                                         query, query_)
 
 import           Icarium.Id             (newId)
 import           Icarium.Types          (Edge (..), EdgeKind (..), Knowledge, NodeKind (..), Task)
@@ -96,3 +98,26 @@ knowledgeDerivedFromTask conn tid = query conn
            \  AND e.dst_kind = 'task' AND e.dst_id = ? \
            \ORDER BY e.created_at ASC")
     (Only tid)
+
+-- | Knowledge derived from a task during a specific dispatch window.
+-- Filters by knowledge.created_at >= started_at (and <= ended_at when present)
+-- so that only entries from this dispatch are returned when the same task has
+-- had multiple dispatches.
+knowledgeDerivedFromDispatch :: Connection -> Text -> Text -> Maybe Text -> IO [Knowledge]
+knowledgeDerivedFromDispatch conn tid startedAt mEndedAt =
+    query conn q params
+  where
+    endClause = case mEndedAt of
+        Nothing -> ""
+        Just _  -> " AND k.created_at <= ?"
+    q = Query $ "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
+                \FROM edges e \
+                \JOIN knowledge k ON k.id = e.src_id \
+                \WHERE e.kind = 'derived_from' \
+                \  AND e.src_kind = 'knowledge' \
+                \  AND e.dst_kind = 'task' AND e.dst_id = ? \
+                \  AND k.created_at >= ?" <> endClause <>
+                " ORDER BY k.created_at ASC"
+    params = case mEndedAt of
+        Nothing -> [SQLText tid, SQLText startedAt]
+        Just ea -> [SQLText tid, SQLText startedAt, SQLText ea]
