@@ -127,7 +127,12 @@ updateTask conn tid TaskUpdate{..} = do
                 newBody  = fromMaybe (taskBody t)  tuBody
                 newState = fromMaybe (taskState t) tuState
                 newPrio  = fromMaybe (taskPriority t)    tuPriority
-                newBlock = fromMaybe (taskBlockReason t) tuBlockReason
+                -- Invariant: block_reason is meaningful only for Blocked.
+                -- Clear it on any transition out of Blocked so it doesn't
+                -- linger as stale text on done/in_progress tasks.
+                newBlock = if newState == Blocked
+                           then fromMaybe (taskBlockReason t) tuBlockReason
+                           else Nothing
             execute conn
                 (Query "UPDATE tasks SET title=?, body=?, state=?, \
                        \priority=?, block_reason=? WHERE id=?")

@@ -122,6 +122,11 @@ main = defaultMain $ testGroup "icarium"
         , testCase "ICARIUM_TASK_ID unset → no auto edge"                 testAutoDeriveDepsNoEnv
         , testCase "ICARIUM_TASK_ID set but task missing → empty"         testAutoDeriveDepsTaskMissing
         ]
+    , testGroup "updateTask block_reason invariant"
+        [ testCase "transition Blocked → Done clears block_reason"         testUpdateClearsBlockReasonOnDone
+        , testCase "transition Blocked → Ready clears block_reason"        testUpdateClearsBlockReasonOnReady
+        , testCase "Blocked → Blocked preserves block_reason"              testUpdateBlockedPreservesReason
+        ]
     , testGroup "task show links section"
         [ testCase "no edges renders (none)"                               testLinksNoEdges
         , testCase "only depends-on edges"                                 testLinksOnlyDeps
@@ -989,6 +994,45 @@ testAutoDeriveDepsTaskMissing :: IO ()
 testAutoDeriveDepsTaskMissing = withTestDb $ \c -> do
     result <- autoDeriveDeps c [] (Just "01ZZZZZZZZ0000000000000000")
     result @?= []
+
+-- =============================================================
+-- updateTask block_reason invariant tests
+-- =============================================================
+
+-- Insert a Blocked task with a block_reason, then update its state and
+-- assert what happens to block_reason. The invariant: block_reason is
+-- only meaningful for Blocked, so transitioning out should clear it.
+
+insertBlockedTask :: Connection -> Text -> IO Text
+insertBlockedTask c reason = do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    _ <- RT.updateTask c tid RT.emptyUpdate
+        { RT.tuState       = Just Blocked
+        , RT.tuBlockReason = Just (Just reason)
+        }
+    pure tid
+
+testUpdateClearsBlockReasonOnDone :: IO ()
+testUpdateClearsBlockReasonOnDone = withTestDb $ \c -> do
+    tid <- insertBlockedTask c "old reason"
+    _ <- RT.updateTask c tid RT.emptyUpdate { RT.tuState = Just Done }
+    Just t <- RT.getTask c tid
+    taskBlockReason t @?= Nothing
+
+testUpdateClearsBlockReasonOnReady :: IO ()
+testUpdateClearsBlockReasonOnReady = withTestDb $ \c -> do
+    tid <- insertBlockedTask c "old reason"
+    _ <- RT.updateTask c tid RT.emptyUpdate { RT.tuState = Just Ready }
+    Just t <- RT.getTask c tid
+    taskBlockReason t @?= Nothing
+
+testUpdateBlockedPreservesReason :: IO ()
+testUpdateBlockedPreservesReason = withTestDb $ \c -> do
+    tid <- insertBlockedTask c "still blocked"
+    _ <- RT.updateTask c tid RT.emptyUpdate { RT.tuPriority = Just (Just 5) }
+    Just t <- RT.getTask c tid
+    taskBlockReason t @?= Just "still blocked"
 
 -- =============================================================
 -- task show links section tests
