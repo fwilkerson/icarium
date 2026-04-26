@@ -1,6 +1,6 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary, renderDispatch) where
 
-import           Control.Monad         (unless)
+import           Control.Monad         (unless, when)
 import           Data.Aeson            (FromJSON (..), decode, encode, object, withObject, (.:?),
                                         (.=))
 import qualified Data.ByteString.Lazy  as BL
@@ -9,14 +9,17 @@ import           Data.Text             (Text)
 import qualified Data.Text             as T
 import qualified Data.Text.Encoding    as TE
 import qualified Data.Text.IO          as TIO
+import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
 import           System.Directory      (doesFileExist)
+import           System.IO             (hPutStrLn, stderr)
 import           Text.Printf           (printf)
 
 import qualified Icarium.Git           as Git
 
 import           Icarium.Commands.Util
-import           Icarium.Config        (defaultConfigPath, loadConfig)
+import           Icarium.Config        (Config, DispatchConfig (..), cfgDispatch,
+                                        defaultConfigPath, loadConfig)
 import           Icarium.Db            (defaultDbPath, withDb)
 import qualified Icarium.Dispatch      as D
 import qualified Icarium.Repo.Dispatch as RD
@@ -32,10 +35,12 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "run"  "Dispatch a task to a headless agent" (Run  <$> runP)
-   <> subcmd "list" "List dispatches"                     (List <$> listP)
-   <> subcmd "show" "Show a single dispatch"              (Show <$> showP)
-   <> subcmd "logs" "Print the jsonl event log"           (Logs <$> logsP)
+    ( subcmd "run"
+        "Dispatch a task. With TASK_ID: run one. Without: drain the ready queue (priority order) until empty or --max reached."
+        (Run  <$> runP)
+   <> subcmd "list" "List dispatches"       (List <$> listP)
+   <> subcmd "show" "Show a single dispatch" (Show <$> showP)
+   <> subcmd "logs" "Print the jsonl event log" (Logs <$> logsP)
     )
 
 run :: Command -> IO ()
@@ -46,11 +51,12 @@ run = \case
     Logs o -> runLogs o
 
 -- =============================================================
--- run  (the original dispatch behavior, unchanged)
+-- run  (single-task dispatch or queue drain)
 -- =============================================================
 
 data RunOpts = RunOpts
-    { rTaskId :: Text
+    { rTaskId :: Maybe Text
+    , rMax    :: Maybe Int
     , rModel  :: Maybe Text
     , rEffort :: Maybe Effort
     , rBase   :: Maybe Text
@@ -58,8 +64,10 @@ data RunOpts = RunOpts
     }
 
 runP :: Parser RunOpts
-runP = RunOpts . T.pack
-    <$> strArgument (metavar "TASK_ID")
+runP = RunOpts
+    <$> optional (T.pack <$> strArgument (metavar "TASK_ID"))
+    <*> optional (option auto (long "max" <> metavar "N"
+           <> help "Cap dispatches in queue mode (ignored with TASK_ID)"))
     <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"
            <> help "Override the model for this dispatch"))
     <*> optional (option effortReader (long "effort" <> metavar "LEVEL"
@@ -73,24 +81,55 @@ runRun o = do
     cfg <- loadConfig defaultConfigPath >>= \case
         Left  e  -> fatal 2 ("config parse error:\n" <> e)
         Right c  -> pure c
-    withDb defaultDbPath $ \c -> do
-        tid <- RT.resolveTaskId c (rTaskId o) >>= \case
-            Left err -> fatal 1 err
-            Right x  -> pure x
-        mt <- RT.getTask c tid
-        case mt of
-            Nothing   -> fatal 1 ("task not found: " <> T.unpack tid)
-            Just task -> do
-                res <- D.dispatch c D.DispatchRequest
-                    { D.drTask            = task
-                    , D.drConfig          = cfg
-                    , D.drDryRun          = rDryRun o
-                    , D.drModelOverride   = rModel o
-                    , D.drEffortOverride  = rEffort o
-                    , D.drBaseOverride    = rBase  o
+    case rTaskId o of
+        Just rawId ->
+            withDb defaultDbPath $ \c -> do
+                tid <- RT.resolveTaskId c rawId >>= \case
+                    Left err -> fatal 1 err
+                    Right x  -> pure x
+                mt <- RT.getTask c tid
+                case mt of
+                    Nothing   -> fatal 1 ("task not found: " <> T.unpack tid)
+                    Just task -> do
+                        res <- D.dispatch c D.DispatchRequest
+                            { D.drTask            = task
+                            , D.drConfig          = cfg
+                            , D.drDryRun          = rDryRun o
+                            , D.drModelOverride   = rModel o
+                            , D.drEffortOverride  = rEffort o
+                            , D.drBaseOverride    = rBase  o
+                            }
+                        D.applyOutcomeToTask c task res
+                        summarize res
+        Nothing -> do
+            let cap = fromMaybe (dcMaxDispatchesPerRun (cfgDispatch cfg)) (rMax o)
+            when (cap <= 0) $ fatal 2 "max must be > 0"
+            withDb defaultDbPath (drainLoop o cfg cap 0)
+
+drainLoop :: RunOpts -> Config -> Int -> Int -> Connection -> IO ()
+drainLoop opts cfg cap !i conn
+    | i >= cap = hPutStrLn stderr
+        ("icarium: reached max dispatches (" <> show cap <> "); stopping")
+    | otherwise = do
+        ts <- RT.listTasks conn [] True Nothing Nothing
+        case ts of
+            [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
+            (t : _) -> do
+                hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
+                res <- D.dispatch conn D.DispatchRequest
+                    { D.drTask           = t
+                    , D.drConfig         = cfg
+                    , D.drDryRun         = rDryRun opts
+                    , D.drModelOverride  = rModel  opts
+                    , D.drEffortOverride = rEffort opts
+                    , D.drBaseOverride   = rBase   opts
                     }
-                D.applyOutcomeToTask c task res
-                summarize res
+                D.applyOutcomeToTask conn t res
+                TIO.hPutStrLn stderr $
+                    "icarium: " <> dispatchOutcomeText (D.dresOutcome res)
+                    <> " \x2014 " <> D.dresNotes res
+                printSummary res
+                drainLoop opts cfg cap (i + 1) conn
 
 -- =============================================================
 -- Log parsing

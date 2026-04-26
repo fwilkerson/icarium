@@ -75,7 +75,7 @@ main = defaultMain $ testGroup "icarium"
         ]
     -- PREFIX_RESOLUTION: one group per id-taking CLI surface.
     -- Grep for PREFIX_RESOLUTION to audit coverage when adding new commands.
-    , testGroup "resolveTaskId (PREFIX_RESOLUTION: task show/update/rm, task add --depends-on, dispatch list --task)"
+    , testGroup "resolveTaskId (PREFIX_RESOLUTION: task show/update/rm, task add --depends-on, dispatch run, dispatch list --task)"
         [ testCase "right on unique prefix" testResolveTaskPrefix
         , testCase "left on missing"        testResolveTaskMissing
         , testCase "left on ambiguous"      testResolveTaskAmbiguous
