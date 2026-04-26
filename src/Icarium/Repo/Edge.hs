@@ -2,6 +2,8 @@ module Icarium.Repo.Edge
     ( insertEdge
     , listEdges
     , deleteEdge
+    , getEdgesByPrefix
+    , resolveEdgeId
     , referencedKnowledge
     , dependencyTasks
     , taskEdgeCounts
@@ -64,6 +66,29 @@ deleteEdge conn eid = do
         _  -> do
             execute conn (Query "DELETE FROM edges WHERE id = ?") (Only eid)
             pure True
+
+escapeLike :: Text -> Text
+escapeLike = T.concatMap esc
+  where
+    esc c | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
+           | otherwise                  = T.singleton c
+
+-- | Edges whose ULID starts with @prefix@.
+getEdgesByPrefix :: Connection -> Text -> IO [Edge]
+getEdgesByPrefix conn prefix =
+    query conn
+        (Query $ "SELECT " <> edgeCols <> " FROM edges WHERE id LIKE ? ESCAPE '\\'")
+        (Only (escapeLike prefix <> "%"))
+
+-- | Resolve a user-supplied string to a canonical edge ULID via prefix match.
+resolveEdgeId :: Connection -> Text -> IO (Either String Text)
+resolveEdgeId conn input = do
+    es <- getEdgesByPrefix conn input
+    case es of
+        [e] -> pure (Right (edgeId e))
+        []  -> pure (Left $ "edge not found: " <> T.unpack input)
+        _   -> pure (Left $ "ambiguous id: " <> T.unpack input
+                          <> " (matches " <> show (length es) <> " edges)")
 
 -- | Knowledge linked by @references@ edges from the given task.
 referencedKnowledge :: Connection -> Text -> IO [Knowledge]

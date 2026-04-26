@@ -239,7 +239,10 @@ outcomeReader = eitherReader $ \s ->
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
-    ds <- RD.listDispatches c (lTask o)
+    mTaskId <- mapM (\raw -> RT.resolveTaskId c raw >>= \case
+        Left err -> fatal 1 err
+        Right x  -> pure x) (lTask o)
+    ds <- RD.listDispatches c mTaskId
     let filtered = case lOutcome o of
             Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds

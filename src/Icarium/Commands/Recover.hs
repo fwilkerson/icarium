@@ -39,7 +39,10 @@ run o = do
     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
     withDb defaultDbPath $ \c -> do
         open <- case oDispatchId o of
-            Just did -> do
+            Just raw -> do
+                did <- RD.resolveDispatchId c raw >>= \case
+                    Left err -> fatal 1 err
+                    Right x  -> pure x
                 md <- RD.getDispatch c did
                 pure $ case md of
                     Just d | isNothing (dispatchOutcome d) -> [d]

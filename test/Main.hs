@@ -25,6 +25,7 @@ import           Icarium.Render         (renderKnowledge, renderKnowledgeList, r
 import           Icarium.Commands.Dispatch (renderDispatch)
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Dispatch  as RD
+import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
 import           Icarium.Schema         (applySchema, execSql)
@@ -70,6 +71,28 @@ main = defaultMain $ testGroup "icarium"
         , testCase "right on unique prefix" testResolveDispatchPrefix
         , testCase "left on missing"        testResolveDispatchMissing
         , testCase "left on ambiguous"      testResolveDispatchAmbiguous
+        ]
+    -- PREFIX_RESOLUTION: one group per id-taking CLI surface.
+    -- Grep for PREFIX_RESOLUTION to audit coverage when adding new commands.
+    , testGroup "resolveTaskId (PREFIX_RESOLUTION: task show/update/rm, task add --depends-on, dispatch list --task)"
+        [ testCase "right on unique prefix" testResolveTaskPrefix
+        , testCase "left on missing"        testResolveTaskMissing
+        , testCase "left on ambiguous"      testResolveTaskAmbiguous
+        ]
+    , testGroup "resolveKnowledgeId (PREFIX_RESOLUTION: know show/update/rm, know add --supersedes, task add --references)"
+        [ testCase "right on unique prefix" testResolveKnowledgePrefix
+        , testCase "left on missing"        testResolveKnowledgeMissing
+        , testCase "left on ambiguous"      testResolveKnowledgeAmbiguous
+        ]
+    , testGroup "resolveEdgeId (PREFIX_RESOLUTION: link rm)"
+        [ testCase "right on unique prefix" testResolveEdgePrefix
+        , testCase "left on missing"        testResolveEdgeMissing
+        , testCase "left on ambiguous"      testResolveEdgeAmbiguous
+        ]
+    , testGroup "resolveNode (PREFIX_RESOLUTION: link add src/dst, link list --from/--to, know add --derived-from)"
+        [ testCase "resolves task prefix"      testResolveNodeTask
+        , testCase "resolves knowledge prefix" testResolveNodeKnowledge
+        , testCase "left on ambiguous cross-type" testResolveNodeAmbiguous
         ]
     , testGroup "10-char ULID prefix rendering"
         [ testCase "task list id column is 10 chars"      testTaskListIdWidth
@@ -539,6 +562,146 @@ testResolveDispatchAmbiguous = withTestDb $ \c -> do
         Right _  -> fail "expected Left for ambiguous dispatch"
   where
     isInfixOf needle haystack = T.isInfixOf (T.pack needle) (T.pack haystack)
+
+-- =============================================================
+-- resolveTaskId tests
+-- =============================================================
+
+testResolveTaskPrefix :: IO ()
+testResolveTaskPrefix = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    r <- RT.resolveTaskId c (T.take 10 tid)
+    r @?= Right tid
+
+testResolveTaskMissing :: IO ()
+testResolveTaskMissing = withTestDb $ \c -> do
+    r <- RT.resolveTaskId c "01ZZZZZZZZ"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01ZZZZZZZZ" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for missing task"
+
+testResolveTaskAmbiguous :: IO ()
+testResolveTaskAmbiguous = withTestDb $ \c -> do
+    let tid1 = "01CCCC000000000000000000AA" :: Text
+        tid2 = "01CCCC000000000000000000BB" :: Text
+    forM_ [tid1, tid2] $ \tid ->
+        execute c
+            (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
+            (tid, "T" :: Text, "" :: Text, "ready" :: Text)
+    r <- RT.resolveTaskId c "01CCCC0000"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01CCCC0000" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for ambiguous task"
+
+-- =============================================================
+-- resolveKnowledgeId tests
+-- =============================================================
+
+testResolveKnowledgePrefix :: IO ()
+testResolveKnowledgePrefix = withTestDb $ \c -> do
+    kid <- mkKnowledge c "K" "body"
+    r <- RK.resolveKnowledgeId c (T.take 10 kid)
+    r @?= Right kid
+
+testResolveKnowledgeMissing :: IO ()
+testResolveKnowledgeMissing = withTestDb $ \c -> do
+    r <- RK.resolveKnowledgeId c "01ZZZZZZZZ"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01ZZZZZZZZ" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for missing knowledge"
+
+testResolveKnowledgeAmbiguous :: IO ()
+testResolveKnowledgeAmbiguous = withTestDb $ \c -> do
+    let kid1 = "01DDDD000000000000000000AA" :: Text
+        kid2 = "01DDDD000000000000000000BB" :: Text
+    forM_ [kid1, kid2] $ \kid ->
+        execute c
+            (Query "INSERT INTO knowledge (id, title, body) VALUES (?,?,?)")
+            (kid, "K" :: Text, "" :: Text)
+    r <- RK.resolveKnowledgeId c "01DDDD0000"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01DDDD0000" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for ambiguous knowledge"
+
+-- =============================================================
+-- resolveEdgeId tests
+-- =============================================================
+
+-- Insert a depends_on edge between two tasks; return the edge id.
+insertTestEdge :: Connection -> Text -> Text -> IO Text
+insertTestEdge c src dst =
+    RE.insertEdge c DependsOn TaskNode src TaskNode dst
+
+testResolveEdgePrefix :: IO ()
+testResolveEdgePrefix = withTestDb $ \c -> do
+    t1 <- RT.insertTask c RT.NewTask { RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    t2 <- RT.insertTask c RT.NewTask { RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    eid <- insertTestEdge c t1 t2
+    r <- RE.resolveEdgeId c (T.take 10 eid)
+    r @?= Right eid
+
+testResolveEdgeMissing :: IO ()
+testResolveEdgeMissing = withTestDb $ \c -> do
+    r <- RE.resolveEdgeId c "01ZZZZZZZZ"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01ZZZZZZZZ" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for missing edge"
+
+testResolveEdgeAmbiguous :: IO ()
+testResolveEdgeAmbiguous = withTestDb $ \c -> do
+    -- Two tasks; two edges between different fixed-id pairs share a prefix.
+    t1 <- RT.insertTask c RT.NewTask { RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    t2 <- RT.insertTask c RT.NewTask { RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    t3 <- RT.insertTask c RT.NewTask { RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    let eid1 = "01EEEE000000000000000000AA" :: Text
+        eid2 = "01EEEE000000000000000000BB" :: Text
+    execute c
+        (Query "INSERT INTO edges (id, kind, src_kind, src_id, dst_kind, dst_id) VALUES (?,?,?,?,?,?)")
+        (eid1, "depends_on" :: Text, "task" :: Text, t1, "task" :: Text, t2)
+    execute c
+        (Query "INSERT INTO edges (id, kind, src_kind, src_id, dst_kind, dst_id) VALUES (?,?,?,?,?,?)")
+        (eid2, "depends_on" :: Text, "task" :: Text, t1, "task" :: Text, t3)
+    r <- RE.resolveEdgeId c "01EEEE0000"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01EEEE0000" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for ambiguous edge"
+
+-- =============================================================
+-- resolveNode tests (shared between link add and know --derived-from)
+-- =============================================================
+
+testResolveNodeTask :: IO ()
+testResolveNodeTask = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    ts <- RT.getTasksByPrefix c (T.take 10 tid)
+    ks <- RK.getKnowledgesByPrefix c (T.take 10 tid)
+    (length ts, length ks) @?= (1, 0)
+    taskId (head ts) @?= tid
+
+testResolveNodeKnowledge :: IO ()
+testResolveNodeKnowledge = withTestDb $ \c -> do
+    kid <- mkKnowledge c "K" "body"
+    ts <- RT.getTasksByPrefix c (T.take 10 kid)
+    ks <- RK.getKnowledgesByPrefix c (T.take 10 kid)
+    (length ts, length ks) @?= (0, 1)
+    knowledgeId (head ks) @?= kid
+
+testResolveNodeAmbiguous :: IO ()
+testResolveNodeAmbiguous = withTestDb $ \c -> do
+    -- Force a task and knowledge to share a prefix by inserting with fixed ids.
+    let sharedPrefix = "01FFFF0000"
+        tid = sharedPrefix <> "0000000000000000" :: Text
+        kid = sharedPrefix <> "1111111111111111" :: Text
+    execute c
+        (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
+        (tid, "T" :: Text, "" :: Text, "ready" :: Text)
+    execute c
+        (Query "INSERT INTO knowledge (id, title, body) VALUES (?,?,?)")
+        (kid, "K" :: Text, "" :: Text)
+    ts <- RT.getTasksByPrefix c sharedPrefix
+    ks <- RK.getKnowledgesByPrefix c sharedPrefix
+    assertBool "both task and knowledge match prefix" (length ts == 1 && length ks == 1)
 
 -- =============================================================
 -- 10-char ULID prefix rendering tests

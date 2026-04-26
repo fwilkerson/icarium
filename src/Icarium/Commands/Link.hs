@@ -51,17 +51,16 @@ addP = AddOpts . T.pack
              <> help "depends_on | references | derived_from | supersedes")
     <*> (T.pack <$> strArgument (metavar "DST_ID"))
 
--- | Resolve a node id to (kind, id), failing if not found.
+-- | Resolve a node id (ULID prefix or full) to (kind, canonical id).
 resolveNode :: Connection -> Text -> IO (NodeKind, Text)
-resolveNode c nid = do
-    mt <- RT.getTask c nid
-    case mt of
-        Just _  -> pure (TaskNode, nid)
-        Nothing -> do
-            mk <- RK.getKnowledge c nid
-            case mk of
-                Just _  -> pure (KnowledgeNode, nid)
-                Nothing -> fatal 2 ("unknown node: " <> T.unpack nid)
+resolveNode c input = do
+    ts <- RT.getTasksByPrefix c input
+    ks <- RK.getKnowledgesByPrefix c input
+    case (ts, ks) of
+        ([t], [] ) -> pure (TaskNode, taskId t)
+        ([], [k] ) -> pure (KnowledgeNode, knowledgeId k)
+        ([], []  ) -> fatal 2 ("unknown node: " <> T.unpack input)
+        _          -> fatal 2 ("ambiguous id: " <> T.unpack input)
 
 -- | Validate that the edge endpoints match the edge kind's typing rules.
 -- Mirrors the CHECK constraint in schema.sql; catching it here gives a
@@ -116,7 +115,9 @@ listP = ListOpts
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
-    es <- RE.listEdges c (lFrom o) (lTo o) (lKind o)
+    mFrom <- mapM (\raw -> snd <$> resolveNode c raw) (lFrom o)
+    mTo   <- mapM (\raw -> snd <$> resolveNode c raw) (lTo o)
+    es <- RE.listEdges c mFrom mTo (lKind o)
     case es of
         [] -> TIO.putStrLn "(no edges)"
         _  -> mapM_ (TIO.putStrLn . Render.renderEdgeLine) es
@@ -132,6 +133,9 @@ rmP = RmOpts . T.pack <$> strArgument (metavar "EDGE_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do
-    ok <- RE.deleteEdge c (rId o)
-    if ok then TIO.putStrLn ("deleted " <> rId o)
+    eid <- RE.resolveEdgeId c (rId o) >>= \case
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    ok <- RE.deleteEdge c eid
+    if ok then TIO.putStrLn ("deleted " <> eid)
           else fatal 1 ("edge not found: " <> T.unpack (rId o))
