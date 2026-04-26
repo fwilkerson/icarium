@@ -74,9 +74,12 @@ runRun o = do
         Left  e  -> fatal 2 ("config parse error:\n" <> e)
         Right c  -> pure c
     withDb defaultDbPath $ \c -> do
-        mt <- RT.getTask c (rTaskId o)
+        tid <- RT.resolveTaskId c (rTaskId o) >>= \case
+            Left err -> fatal 1 err
+            Right x  -> pure x
+        mt <- RT.getTask c tid
         case mt of
-            Nothing   -> fatal 1 ("task not found: " <> T.unpack (rTaskId o))
+            Nothing   -> fatal 1 ("task not found: " <> T.unpack tid)
             Just task -> do
                 res <- D.dispatch c D.DispatchRequest
                     { D.drTask            = task
