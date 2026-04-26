@@ -163,7 +163,7 @@ T_CLAUDE_FLAGS=$($I task add \
     --body-file "$T/t_claude_flags")
 
 cat > "$T/t_export" <<'EOF'
-Add `icarium export [--out PATH]`. Default: stdout.
+Add `icarium export [FILE]`. Default: stdout.
 
 Dump all tasks, knowledge, edges, categories, and dispatches as a single
 JSON object:

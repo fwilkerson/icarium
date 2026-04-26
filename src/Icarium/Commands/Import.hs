@@ -42,14 +42,14 @@ parser = Options
     <$> switch
           ( long "merge"
          <> help "Allow import into a non-empty DB; existing records are skipped" )
-    <*> optional (strOption
-          ( long  "in"
-         <> metavar "PATH"
-         <> help "Read JSON snapshot from PATH instead of stdin" ))
+    <*> optional (strArgument (metavar "FILE"))
 
 run :: Options -> IO ()
 run Options{..} = do
-    bytes   <- maybe (BL.hGetContents stdin) BL.readFile optIn
+    bytes   <- case optIn of
+        Nothing  -> BL.hGetContents stdin
+        Just "-" -> BL.hGetContents stdin
+        Just path -> BL.readFile path
     payload <- either (ioError . userError . ("JSON parse error: " <>)) pure
                    (eitherDecode bytes)
     when (ipSchemaVersion payload /= schemaVersion) $

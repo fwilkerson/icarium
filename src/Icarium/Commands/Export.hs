@@ -20,10 +20,7 @@ data Options = Options
 
 parser :: Parser Options
 parser = Options
-    <$> optional (strOption
-          ( long "out"
-         <> metavar "PATH"
-         <> help "Write output to PATH instead of stdout" ))
+    <$> optional (strArgument (metavar "FILE"))
 
 run :: Options -> IO ()
 run Options{..} = withDb defaultDbPath $ \conn -> do
@@ -42,5 +39,6 @@ run Options{..} = withDb defaultDbPath $ \conn -> do
             ]
         bytes = encode snapshot
     case optOut of
-        Nothing   -> BL.hPutStr stdout bytes >> putStrLn ""
+        Nothing  -> BL.hPutStr stdout bytes >> putStrLn ""
+        Just "-" -> BL.hPutStr stdout bytes >> putStrLn ""
         Just path -> BL.writeFile path bytes

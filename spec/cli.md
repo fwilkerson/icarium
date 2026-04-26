@@ -17,12 +17,13 @@ icarium doctor
     Validate config, schema version, git state, claude CLI presence,
     allowed-tools list. Prints a checklist; exit 2 on any failure.
 
-icarium export [--out <file>]
+icarium export [FILE]
     Dump tasks/knowledge/edges/categories/dispatches as JSON. Used for
-    backup and hand-off. Default: stdout.
+    backup and hand-off. Default: stdout. Use - for explicit stdout.
 
-icarium import <file>
-    Apply a JSON export. Refuses if DB is non-empty without --merge.
+icarium import [FILE]
+    Apply a JSON export. Reads from FILE (or stdin if omitted / -).
+    Refuses if DB is non-empty without --merge.
 ```
 
 ## Tasks
