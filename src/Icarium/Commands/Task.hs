@@ -145,7 +145,7 @@ listP = ListOpts
     <$> many (option taskStateReader (long "state" <> metavar "STATE"
            <> help "Filter by task state (repeatable)"))
     <*> switch (long "all"   <> help "Include done tasks")
-    <*> switch (long "ready" <> help "Only tasks ready to dispatch")
+    <*> switch (long "ready" <> help "Only state=ready tasks with all depends-on satisfied (matches what `dispatch run` and `task next` pick)")
     <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
