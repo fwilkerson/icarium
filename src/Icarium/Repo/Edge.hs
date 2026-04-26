@@ -4,6 +4,7 @@ module Icarium.Repo.Edge
     , deleteEdge
     , referencedKnowledge
     , dependencyTasks
+    , knowledgeDerivedFromTask
     ) where
 
 import           Data.Text              (Text)
@@ -81,5 +82,17 @@ dependencyTasks conn tid = query conn
            \WHERE e.kind = 'depends_on' \
            \  AND e.src_kind = 'task' AND e.src_id = ? \
            \  AND e.dst_kind = 'task' \
+           \ORDER BY e.created_at ASC")
+    (Only tid)
+
+-- | Knowledge entries that have a derived_from edge pointing at the given task.
+knowledgeDerivedFromTask :: Connection -> Text -> IO [Knowledge]
+knowledgeDerivedFromTask conn tid = query conn
+    (Query "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
+           \FROM edges e \
+           \JOIN knowledge k ON k.id = e.src_id \
+           \WHERE e.kind = 'derived_from' \
+           \  AND e.src_kind = 'knowledge' \
+           \  AND e.dst_kind = 'task' AND e.dst_id = ? \
            \ORDER BY e.created_at ASC")
     (Only tid)

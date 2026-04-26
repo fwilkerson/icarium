@@ -1,7 +1,8 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
 import           Control.Monad         (unless)
-import           Data.Aeson            (FromJSON (..), decode, withObject, (.:?))
+import           Data.Aeson            (FromJSON (..), decode, encode, object, withObject, (.:?),
+                                        (.=))
 import qualified Data.ByteString.Lazy  as BL
 import           Data.Maybe            (fromMaybe, listToMaybe, mapMaybe)
 import           Data.Text             (Text)
@@ -19,6 +20,7 @@ import           Icarium.Config        (defaultConfigPath, loadConfig)
 import           Icarium.Db            (defaultDbPath, withDb)
 import qualified Icarium.Dispatch      as D
 import qualified Icarium.Repo.Dispatch as RD
+import qualified Icarium.Repo.Edge     as RE
 import qualified Icarium.Repo.Task     as RT
 import           Icarium.Types
 
@@ -215,6 +217,7 @@ summarize r = do
 data ListOpts = ListOpts
     { lTask    :: Maybe Text
     , lOutcome :: Maybe DispatchOutcome
+    , lJson    :: Bool
     }
 
 listP :: Parser ListOpts
@@ -223,6 +226,7 @@ listP = ListOpts
                                         <> help "Only dispatches for this task"))
     <*> optional (option outcomeReader (long "outcome" <> metavar "OUTCOME"
                                         <> help "success | failure | interrupted"))
+    <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
 outcomeReader :: ReadM DispatchOutcome
 outcomeReader = eitherReader $ \s ->
@@ -236,7 +240,9 @@ runList o = withDb defaultDbPath $ \c -> do
     let filtered = case lOutcome o of
             Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
-    TIO.putStr (renderDispatchList filtered)
+    if lJson o
+        then BL.putStr (encode filtered) >> putStrLn ""
+        else TIO.putStr (renderDispatchList filtered)
 
 renderDispatchList :: [Dispatch] -> Text
 renderDispatchList ds =
@@ -266,10 +272,15 @@ padR n t
 -- show
 -- =============================================================
 
-data ShowOpts = ShowOpts { sId :: Text }
+data ShowOpts = ShowOpts
+    { sId   :: Text
+    , sJson :: Bool
+    }
 
 showP :: Parser ShowOpts
-showP = ShowOpts . T.pack <$> strArgument (metavar "DISPATCH_ID")
+showP = ShowOpts . T.pack
+    <$> strArgument (metavar "DISPATCH_ID")
+    <*> switch (long "json" <> help "Output JSON instead of human-formatted text")
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -278,7 +289,15 @@ runShow o = withDb defaultDbPath $ \c -> do
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack (sId o))
         Just d -> do
             mt <- RT.getTask c (dispatchTaskId d)
-            TIO.putStr (renderDispatch d mt)
+            if sJson o
+                then do
+                    produced <- RE.knowledgeDerivedFromTask c (dispatchTaskId d)
+                    BL.putStr (encode (object
+                        [ "dispatch"            .= d
+                        , "task"                .= mt
+                        , "knowledge_produced"  .= produced
+                        ])) >> putStrLn ""
+                else TIO.putStr (renderDispatch d mt)
 
 renderDispatch :: Dispatch -> Maybe Task -> Text
 renderDispatch d mt = T.unlines

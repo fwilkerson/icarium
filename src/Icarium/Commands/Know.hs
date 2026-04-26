@@ -1,6 +1,8 @@
 module Icarium.Commands.Know (Command, parser, run) where
 
 import           Control.Monad          (forM_, void, when)
+import           Data.Aeson             (encode, object, (.=))
+import qualified Data.ByteString.Lazy   as BL
 import           Data.Foldable          (for_)
 import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
@@ -140,6 +142,7 @@ data ListOpts = ListOpts
     { lStale      :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
+    , lJson       :: Bool
     }
 
 listP :: Parser ListOpts
@@ -149,22 +152,30 @@ listP = ListOpts
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Filter by discipline category"))
+    <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     ks <- RK.listKnowledge c (lStale o) (lDomain o) (lDiscipline o)
-    TIO.putStr (Render.renderKnowledgeList ks)
+    if lJson o
+        then BL.putStr (encode ks) >> putStrLn ""
+        else TIO.putStr (Render.renderKnowledgeList ks)
 
 -- =============================================================
 -- show
 -- =============================================================
 
-data ShowOpts = ShowOpts { sId :: Text }
+data ShowOpts = ShowOpts
+    { sId   :: Text
+    , sJson :: Bool
+    }
 
 showP :: Parser ShowOpts
-showP = ShowOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
+showP = ShowOpts . T.pack
+    <$> strArgument (metavar "KNOWLEDGE_ID")
+    <*> switch (long "json" <> help "Output JSON instead of human-formatted text")
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -173,7 +184,12 @@ runShow o = withDb defaultDbPath $ \c -> do
         Nothing -> fatal 1 ("knowledge not found: " <> T.unpack (sId o))
         Just k  -> do
             cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
-            TIO.putStr (Render.renderKnowledge k cats)
+            if sJson o
+                then BL.putStr (encode (object
+                        [ "knowledge" .= k
+                        , "categories" .= cats
+                        ])) >> putStrLn ""
+                else TIO.putStr (Render.renderKnowledge k cats)
 
 -- =============================================================
 -- update

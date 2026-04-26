@@ -1,6 +1,8 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
 import           Control.Monad          (forM_, unless, void, when)
+import           Data.Aeson             (encode, object, (.=))
+import qualified Data.ByteString.Lazy   as BL
 import           Data.Maybe             (isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
@@ -129,6 +131,7 @@ data ListOpts = ListOpts
     , lReady      :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
+    , lJson       :: Bool
     }
 
 listP :: Parser ListOpts
@@ -140,13 +143,16 @@ listP = ListOpts
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Filter by discipline category"))
+    <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     ts <- RT.listTasks c (lStates o) (lReady o) (lDomain o) (lDiscipline o)
-    TIO.putStr (Render.renderTaskList ts)
+    if lJson o
+        then BL.putStr (encode ts) >> putStrLn ""
+        else TIO.putStr (Render.renderTaskList ts)
 
 -- =============================================================
 -- show
@@ -155,12 +161,14 @@ runList o = withDb defaultDbPath $ \c -> do
 data ShowOpts = ShowOpts
     { sId     :: Text
     , sPrompt :: Bool
+    , sJson   :: Bool
     }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "TASK_ID")
     <*> switch (long "prompt" <> help "Render the dispatch prompt instead")
+    <*> switch (long "json" <> help "Output JSON instead of human-formatted text")
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -168,15 +176,23 @@ runShow o = withDb defaultDbPath $ \c -> do
     case mt of
         Nothing -> fatal 1 ("task not found: " <> T.unpack (sId o))
         Just t  -> do
-            refs     <- RE.referencedKnowledge c (taskId t)
-            deps     <- RE.dependencyTasks     c (taskId t)
-            cats     <- RC.taskCategoriesFor   c (taskId t)
-            catMatch <- RK.categoryMatchedKnowledge c cats 5
-            let refIds     = map knowledgeId refs
-                dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
-            TIO.putStr $ if sPrompt o
-                then Render.renderTaskPrompt t refs dedupedCat deps
-                else Render.renderTaskHuman  t refs deps cats
+            refs <- RE.referencedKnowledge c (taskId t)
+            deps <- RE.dependencyTasks     c (taskId t)
+            cats <- RC.taskCategoriesFor   c (taskId t)
+            if sJson o
+                then BL.putStr (encode (object
+                        [ "task"       .= t
+                        , "deps"       .= deps
+                        , "refs"       .= refs
+                        , "categories" .= cats
+                        ])) >> putStrLn ""
+                else do
+                    catMatch <- RK.categoryMatchedKnowledge c cats 5
+                    let refIds     = map knowledgeId refs
+                        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+                    TIO.putStr $ if sPrompt o
+                        then Render.renderTaskPrompt t refs dedupedCat deps
+                        else Render.renderTaskHuman  t refs deps cats
 
 -- =============================================================
 -- update
