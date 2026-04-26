@@ -82,6 +82,9 @@ main = defaultMain $ testGroup "icarium"
         , testCase "edge counts omitted when both zero, shown otherwise"    testEdgeCountFormat
         , testCase "category formatting handles missing slots"              testCategoryFormatting
         , testCase "NULL priority sorts last within group"                  testNullPrioritySort
+        , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis" testTitleTruncatedUtf8
+        , testCase "90-char title truncated with ASCII ... in ASCII mode"  testTitleTruncatedAscii
+        , testCase "title at exactly 72 chars renders without truncation"  testTitleExactlyAtLimit
         ]
     ]
 
@@ -549,7 +552,7 @@ testKnowledgeListIdWidth = withTestDb $ \c -> do
     case mk of
         Nothing -> fail "knowledge not found"
         Just k  -> do
-            let out = renderKnowledgeList [k]
+            let out = renderKnowledgeList True [k]
                 ls  = T.lines out
             assertBool "at least one data row" (length ls >= 2)
             let dataRow = ls !! 1
@@ -676,3 +679,34 @@ testNullPrioritySort = do
     (idx "low-pri"  < idx "null-pri") @?= True
     -- silence unused warning
     seq titles (return ())
+
+testTitleTruncatedUtf8 :: IO ()
+testTitleTruncatedUtf8 = do
+    let longTitle = T.replicate 90 "x"
+        rows = [mkRow "01ABCDEFGH01" longTitle Ready (Just 5) [] 0 0 Nothing]
+        out  = renderTaskList True rows [Ready]
+        ls   = T.lines out
+    assertBool "has a data row" (not (null ls))
+    let dataRow = head ls
+    -- The title column is at most 72 chars and ends with the UTF-8 ellipsis.
+    assertBool "row contains UTF-8 ellipsis" ("…" `T.isInfixOf` dataRow)
+    assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` dataRow))
+    let titlePart = T.take (Icarium.Render.recommendedTitleMax) (T.drop 14 dataRow)
+    assertBool "title column is exactly 72 chars" (T.length titlePart == Icarium.Render.recommendedTitleMax)
+
+testTitleTruncatedAscii :: IO ()
+testTitleTruncatedAscii = do
+    let longTitle = T.replicate 90 "y"
+        rows = [mkRow "01ABCDEFGH01" longTitle Ready (Just 5) [] 0 0 Nothing]
+        out  = renderTaskList False rows [Ready]
+    assertBool "row contains ASCII ellipsis" ("..." `T.isInfixOf` out)
+    assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` out))
+    assertBool "no UTF-8 ellipsis in ASCII mode" (not ("…" `T.isInfixOf` out))
+
+testTitleExactlyAtLimit :: IO ()
+testTitleExactlyAtLimit = do
+    let exactTitle = T.replicate 72 "z"
+        rows = [mkRow "01ABCDEFGH01" exactTitle Ready (Just 5) [] 0 0 Nothing]
+        out  = renderTaskList True rows [Ready]
+    assertBool "title at limit appears untruncated" (exactTitle `T.isInfixOf` out)
+    assertBool "no ellipsis when title fits" (not ("…" `T.isInfixOf` out))

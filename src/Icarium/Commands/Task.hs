@@ -3,15 +3,12 @@ module Icarium.Commands.Task (Command, parser, run) where
 import           Control.Monad          (forM_, unless, void, when)
 import           Data.Aeson             (encode, object, (.=))
 import qualified Data.ByteString.Lazy   as BL
-import           Data.Char              (toUpper)
-import           Data.List              (isInfixOf)
 import           Data.Maybe             (fromMaybe)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
-import           System.Environment     (lookupEnv)
 
 import           Icarium.Commands.Util
 import           Icarium.Db             (defaultDbPath, withDb)
@@ -63,7 +60,7 @@ data AddOpts = AddOpts
 
 addP :: Parser AddOpts
 addP = AddOpts . T.pack
-    <$> strArgument (metavar "TITLE")
+    <$> strArgument (metavar "TITLE" <> help "Task title. Keep ≤ 72 chars; longer titles are truncated in `task list`.")
     <*> bodyInputParser
     <*> option taskStateReader
             ( long "state" <> metavar "STATE" <> value Planned
@@ -177,15 +174,6 @@ runList o = withDb defaultDbPath $ \c -> do
             utf8     <- detectUtf8
             TIO.putStr (Render.renderTaskList utf8 taskRows displayFilter)
 
--- | Detect whether the terminal locale is UTF-8 capable.
-detectUtf8 :: IO Bool
-detectUtf8 = do
-    lcAll  <- lookupEnv "LC_ALL"
-    lcCtype <- lookupEnv "LC_CTYPE"
-    lang   <- lookupEnv "LANG"
-    let envVal = map toUpper $ fromMaybe "" (lcAll <|> lcCtype <|> lang)
-    return ("UTF" `isInfixOf` envVal)
-
 -- | Load per-task categories and edge counts in batch, build TaskRow list.
 buildTaskRows :: Connection -> [Task] -> IO [Render.TaskRow]
 buildTaskRows c ts = do
@@ -265,7 +253,7 @@ updateP = UpdateOpts . T.pack
     <*> optional (option auto (long "priority" <> metavar "N"
            <> help "Set priority (lower = higher priority)"))
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
-           <> help "Replace task title"))
+           <> help "Replace task title. Keep ≤ 72 chars; longer titles are truncated in `task list`."))
     <*> bodyInputParser
     <*> optional (T.pack <$> strOption (long "block-reason" <> metavar "TEXT"
            <> help "Reason for blocked state (required with --state blocked)"))

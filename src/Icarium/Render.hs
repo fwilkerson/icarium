@@ -7,6 +7,7 @@ module Icarium.Render
     , renderKnowledgeList
     , renderEdgeLine
     , renderCategory
+    , recommendedTitleMax
     ) where
 
 import           Data.List     (sortBy)
@@ -148,6 +149,11 @@ workingAgreement t =
     , ""
     ]
 
+-- | Recommended maximum title length (matches git commit subject convention).
+-- Titles exceeding this are truncated with an ellipsis in list views.
+recommendedTitleMax :: Int
+recommendedTitleMax = 72
+
 -- =============================================================
 -- Grouped task list rendering
 -- =============================================================
@@ -195,8 +201,8 @@ renderTaskList useUnicode rows filterStates
                     o  -> o
         compareUlid r1 r2 = compare (taskId (trTask r1)) (taskId (trTask r2))
 
-    -- Global column widths across all rows.
-    titleWidth = maxLen 5 (map (T.length . taskTitle . trTask) rows)
+    -- Global column widths across all rows. Title capped at recommendedTitleMax.
+    titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . taskTitle . trTask) rows))
     catWidth   = maxLen 3 (map (T.length . formatCats . trCats) rows)
 
     maxLen def [] = def
@@ -214,7 +220,7 @@ renderTaskList useUnicode rows filterStates
     renderRow s row =
         let t       = trTask row
             idPart  = "  " <> padr 10 (T.take 10 (taskId t))
-            titPart = padr titleWidth (taskTitle t)
+            titPart = padr titleWidth (truncateTitle useUnicode titleWidth (taskTitle t))
             barPart = case s of
                 Blocked -> truncateReason (fromMaybe "" (taskBlockReason t))
                 _       -> mkBar useUnicode (taskPriority t)
@@ -240,6 +246,14 @@ mkBar utf8 (Just p) = T.replicate filled bullet <> T.replicate empty dot
     empty  = 10 - filled
     bullet = if utf8 then "●" else "#"
     dot    = if utf8 then "·" else "."
+
+-- | Truncate a title to fit within @width@ characters, appending an ellipsis
+-- when truncation occurs. UTF-8 mode uses the single-char @…@; ASCII uses @...@.
+truncateTitle :: Bool -> Int -> Text -> Text
+truncateTitle utf8 width title
+    | T.length title <= width = title
+    | utf8                    = T.take (width - 1) title <> "…"
+    | otherwise               = T.take (width - 3) title <> "..."
 
 -- | Format categories as [dom/disc], [-/disc], [dom/-], or [-].
 formatCats :: [Category] -> Text
@@ -280,14 +294,14 @@ renderKnowledge k cats = T.unlines $
        , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
        ]
 
-renderKnowledgeList :: [Knowledge] -> Text
-renderKnowledgeList [] = "(no knowledge)\n"
-renderKnowledgeList ks = T.unlines $ header : map row ks
+renderKnowledgeList :: Bool -> [Knowledge] -> Text
+renderKnowledgeList _ [] = "(no knowledge)\n"
+renderKnowledgeList utf8 ks = T.unlines $ header : map row ks
   where
     header = padr 12 "id" <> "  " <> padr 6 "stale" <> "  title"
     row k = padr 12 (T.take 10 (knowledgeId k)) <> "  "
          <> padr 6 (if knowledgeStale k then "yes" else "no") <> "  "
-         <> knowledgeTitle k
+         <> truncateTitle utf8 recommendedTitleMax (knowledgeTitle k)
 
 renderEdgeLine :: Edge -> Text
 renderEdgeLine e =

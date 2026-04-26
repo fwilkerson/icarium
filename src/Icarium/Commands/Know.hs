@@ -58,7 +58,7 @@ data AddOpts = AddOpts
 
 addP :: Parser AddOpts
 addP = AddOpts . T.pack
-    <$> strArgument (metavar "TITLE")
+    <$> strArgument (metavar "TITLE" <> help "Entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`.")
     <*> bodyInputParser
     <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"
            <> help "Tag with this domain category"))
@@ -167,7 +167,9 @@ runList o = withDb defaultDbPath $ \c -> do
     ks <- RK.listKnowledge c staleFilter (lDomain o) (lDiscipline o)
     if lJson o
         then BL.putStr (encode ks) >> putStrLn ""
-        else TIO.putStr (Render.renderKnowledgeList ks)
+        else do
+            utf8 <- detectUtf8
+            TIO.putStr (Render.renderKnowledgeList utf8 ks)
 
 -- =============================================================
 -- show
@@ -215,7 +217,7 @@ updateP :: Parser UpdateOpts
 updateP = UpdateOpts . T.pack
     <$> strArgument (metavar "KNOWLEDGE_ID")
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
-           <> help "Replace entry title"))
+           <> help "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`."))
     <*> bodyInputParser
     <*> optional staleFlag
     <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"

@@ -12,12 +12,17 @@ module Icarium.Commands.Util
     , resolveBody
       -- * Small helpers
     , subcmd
+    , detectUtf8
     ) where
 
+import           Data.Char           (toUpper)
+import           Data.List           (isInfixOf)
+import           Data.Maybe          (fromMaybe)
 import           Data.Text           (Text)
 import qualified Data.Text           as T
 import qualified Data.Text.IO        as TIO
 import           Options.Applicative
+import           System.Environment  (lookupEnv)
 import           System.Exit         (ExitCode (..), exitWith)
 import           System.IO           (hPutStrLn, stderr)
 
@@ -74,3 +79,12 @@ resolveBody BodyStdin      = TIO.getContents
 -- | Shorthand for a subcommand with helper automatically attached.
 subcmd :: String -> String -> Parser a -> Mod CommandFields a
 subcmd n desc p = command n (info (p <**> helper) (progDesc desc))
+
+-- | Detect whether the terminal locale is UTF-8 capable.
+detectUtf8 :: IO Bool
+detectUtf8 = do
+    lcAll   <- lookupEnv "LC_ALL"
+    lcCtype <- lookupEnv "LC_CTYPE"
+    lang    <- lookupEnv "LANG"
+    let envVal = map toUpper $ fromMaybe "" (lcAll <|> lcCtype <|> lang)
+    return ("UTF" `isInfixOf` envVal)
