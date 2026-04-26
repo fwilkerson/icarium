@@ -1,4 +1,4 @@
-.PHONY: build install init test lint format clean
+.PHONY: build install init test lint format watch clean
 
 build:
 	cabal build all
@@ -24,6 +24,11 @@ lint:
 
 format:
 	find src app test -name '*.hs' | xargs ./bin/stylish-haskell -i
+
+# Live recompile loop. Foreground; Ctrl-C to stop. Library only — faster
+# reload than including the executable.
+watch:
+	./bin/ghcid --command="cabal repl lib:icarium" --warnings
 
 clean:
 	cabal clean
