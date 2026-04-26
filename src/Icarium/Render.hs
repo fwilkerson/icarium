@@ -20,7 +20,7 @@ import           Icarium.Types
 -- | Human-facing task view. Shows metadata + body + linked nodes.
 renderTaskHuman :: Task -> [Knowledge] -> [Task] -> [Category] -> Text
 renderTaskHuman t refs deps cats = T.unlines $
-    [ "id:        " <> taskId t
+    [ "id:        " <> T.take 10 (taskId t)
     , "slug:      " <> maybe "-" id (taskSlug t)
     , "title:     " <> taskTitle t
     , "state:     " <> taskStateText (taskState t)
@@ -54,14 +54,14 @@ depSection :: [Task] -> [Text]
 depSection []   = ["## Dependencies", "", "(none)", ""]
 depSection deps = ["## Dependencies", ""]
     <> map (\d -> "- [" <> taskStateText (taskState d) <> "] "
-                       <> taskId d <> "  " <> taskTitle d) deps
+                       <> T.take 10 (taskId d) <> "  " <> taskTitle d) deps
     <> [""]
 
 refSection :: [Knowledge] -> [Text]
 refSection []   = ["## Referenced knowledge", "", "(none)", ""]
 refSection refs = ["## Referenced knowledge", ""]
     <> concatMap (\k ->
-        [ "### " <> knowledgeId k <> "  " <> knowledgeTitle k
+        [ "### " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k
             <> if knowledgeStale k then "  [STALE]" else ""
         , ""
         , knowledgeBody k
@@ -143,11 +143,11 @@ renderTaskList :: [Task] -> Text
 renderTaskList [] = "(no tasks)\n"
 renderTaskList ts = T.unlines $ header : map row ts
   where
-    header = padr 28 "id" <> "  "
+    header = padr 12 "id" <> "  "
           <> padr 10 "state" <> "  "
           <> padr 4  "pri"   <> "  "
           <> "title"
-    row t = padr 28 (taskId t) <> "  "
+    row t = padr 12 (T.take 10 (taskId t)) <> "  "
          <> padr 10 (taskStateText (taskState t)) <> "  "
          <> padr 4  (prio (taskPriority t)) <> "  "
          <> taskTitle t
@@ -156,7 +156,7 @@ renderTaskList ts = T.unlines $ header : map row ts
 
 renderKnowledge :: Knowledge -> [Category] -> Text
 renderKnowledge k cats = T.unlines $
-    [ "id:       " <> knowledgeId k
+    [ "id:       " <> T.take 10 (knowledgeId k)
     , "slug:     " <> maybe "-" id (knowledgeSlug k)
     , "title:    " <> knowledgeTitle k
     , "stale:    " <> (if knowledgeStale k then "yes" else "no")
@@ -174,18 +174,18 @@ renderKnowledgeList :: [Knowledge] -> Text
 renderKnowledgeList [] = "(no knowledge)\n"
 renderKnowledgeList ks = T.unlines $ header : map row ks
   where
-    header = padr 28 "id" <> "  " <> padr 6 "stale" <> "  title"
-    row k = padr 28 (knowledgeId k) <> "  "
+    header = padr 12 "id" <> "  " <> padr 6 "stale" <> "  title"
+    row k = padr 12 (T.take 10 (knowledgeId k)) <> "  "
          <> padr 6 (if knowledgeStale k then "yes" else "no") <> "  "
          <> knowledgeTitle k
 
 renderEdgeLine :: Edge -> Text
 renderEdgeLine e =
-    edgeId e <> "  "
+    T.take 10 (edgeId e) <> "  "
     <> edgeKindText (edgeKind e) <> "  "
-    <> nodeKindText (edgeSrcKind e) <> ":" <> edgeSrcId e
+    <> nodeKindText (edgeSrcKind e) <> ":" <> T.take 10 (edgeSrcId e)
     <> "  ->  "
-    <> nodeKindText (edgeDstKind e) <> ":" <> edgeDstId e
+    <> nodeKindText (edgeDstKind e) <> ":" <> T.take 10 (edgeDstId e)
 
 renderCategory :: Category -> Text
 renderCategory c =

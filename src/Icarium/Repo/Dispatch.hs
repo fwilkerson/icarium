@@ -2,6 +2,8 @@ module Icarium.Repo.Dispatch
     ( NewDispatch(..)
     , insertDispatch
     , getDispatch
+    , getDispatchesByPrefix
+    , resolveDispatchId
     , listOpenDispatches
     , listDispatches
     , updateHeartbeat
@@ -12,6 +14,7 @@ module Icarium.Repo.Dispatch
     ) where
 
 import           Data.Text              (Text, unpack)
+import qualified Data.Text              as T
 import           Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
 import           Icarium.Types          (Dispatch (..), DispatchOutcome, Effort)
@@ -54,6 +57,36 @@ getDispatch conn did = do
     pure $ case rows of
         (d:_) -> Just d
         []    -> Nothing
+
+escapeLike :: Text -> Text
+escapeLike = T.concatMap esc
+  where
+    esc c | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
+           | otherwise                  = T.singleton c
+
+-- | Dispatches whose ULID starts with @prefix@.
+getDispatchesByPrefix :: Connection -> Text -> IO [Dispatch]
+getDispatchesByPrefix conn prefix =
+    query conn
+        (Query $ "SELECT " <> dispatchCols <> " FROM dispatches WHERE id LIKE ? ESCAPE '\\'")
+        (Only (escapeLike prefix <> "%"))
+
+-- | Resolve a user-supplied string to a canonical dispatch ULID.
+-- Tries exact-id match first, then ULID prefix match.
+resolveDispatchId :: Connection -> Text -> IO (Either String Text)
+resolveDispatchId conn input = do
+    md <- getDispatch conn input
+    case md of
+        Just d  -> pure (Right (dispatchId d))
+        Nothing -> do
+            ds <- getDispatchesByPrefix conn input
+            case ds of
+                [d] -> pure (Right (dispatchId d))
+                []  -> pure (Left $ "dispatch not found: " <> T.unpack input)
+                _   -> pure (Left $ "ambiguous id: " <> T.unpack input
+                                 <> " (matches: "
+                                 <> T.unpack (T.intercalate ", " (map dispatchId ds))
+                                 <> ")")
 
 -- | Every dispatch whose outcome column is NULL. Heartbeat freshness
 -- is the caller's concern (recovery, status).

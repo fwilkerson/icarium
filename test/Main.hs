@@ -20,8 +20,9 @@ import           Icarium.Config         (loadConfig, defaultConfigText)
 import           Icarium.Db             (dbSchemaVersion, migrateDb)
 import           Icarium.Dispatch       (postClaudeGuard)
 import           Icarium.Id             (newId)
-import           Icarium.Render         (renderTaskPrompt)
+import           Icarium.Render         (renderKnowledgeList, renderTaskList, renderTaskPrompt)
 import qualified Icarium.Repo.Category  as RC
+import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
 import           Icarium.Schema         (applySchema, execSql)
@@ -68,6 +69,16 @@ main = defaultMain $ testGroup "icarium"
         , testCase "titleToSlug: strips trailing dash after truncation" testSlugStripDash
         , testCase "slug roundtrip: insert then resolve by slug"        testSlugResolve
         , testCase "slug collision: appends -2"                         testSlugCollision
+        ]
+    , testGroup "resolveDispatchId"
+        [ testCase "right on full id"      testResolveDispatchFullId
+        , testCase "right on unique prefix" testResolveDispatchPrefix
+        , testCase "left on missing"        testResolveDispatchMissing
+        , testCase "left on ambiguous"      testResolveDispatchAmbiguous
+        ]
+    , testGroup "10-char ULID prefix rendering"
+        [ testCase "task list id column is 10 chars"      testTaskListIdWidth
+        , testCase "knowledge list id column is 10 chars" testKnowledgeListIdWidth
         ]
     ]
 
@@ -464,3 +475,100 @@ testSlugCollision = withTestDb $ \c -> do
             taskSlug t1 @?= Just "dup-slug"
             taskSlug t2 @?= Just "dup-slug-2"
         _ -> fail "one or both tasks missing"
+
+-- =============================================================
+-- resolveDispatchId tests
+-- =============================================================
+
+insertTestDispatch :: Connection -> Text -> Text -> IO ()
+insertTestDispatch c did tid =
+    execute c
+        (Query "INSERT INTO dispatches \
+               \(id, task_id, branch, base_branch, base_sha, model, effort) \
+               \VALUES (?,?,?,?,?,?,?)")
+        ( did
+        , tid
+        , ("dispatch/" <> did :: Text)
+        , ("main" :: Text)
+        , ("0000000000000000000000000000000000000000" :: Text)
+        , ("claude-sonnet-4-6" :: Text)
+        , ("medium" :: Text)
+        )
+
+testResolveDispatchFullId :: IO ()
+testResolveDispatchFullId = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    let did = "01AAAA000000000000000000AA" :: Text
+    insertTestDispatch c did tid
+    r <- RD.resolveDispatchId c did
+    r @?= Right did
+
+testResolveDispatchPrefix :: IO ()
+testResolveDispatchPrefix = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    let did = "01AAAA000000000000000000AA" :: Text
+    insertTestDispatch c did tid
+    r <- RD.resolveDispatchId c "01AAAA0000"
+    r @?= Right did
+
+testResolveDispatchMissing :: IO ()
+testResolveDispatchMissing = withTestDb $ \c -> do
+    r <- RD.resolveDispatchId c "01ZZZZZZZZ"
+    case r of
+        Left msg -> assertBool "error mentions input" ("01ZZZZZZZZ" `T.isInfixOf` T.pack msg)
+        Right _  -> fail "expected Left for missing dispatch"
+
+testResolveDispatchAmbiguous :: IO ()
+testResolveDispatchAmbiguous = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    let did1 = "01BBBB000000000000000000AA" :: Text
+        did2 = "01BBBB000000000000000000BB" :: Text
+    insertTestDispatch c did1 tid
+    insertTestDispatch c did2 tid
+    r <- RD.resolveDispatchId c "01BBBB0000"
+    case r of
+        Left msg -> do
+            assertBool "error mentions input"  ("01BBBB0000" `T.isInfixOf` T.pack msg)
+            assertBool "error lists first id"  (T.unpack did1 `isInfixOf` msg)
+            assertBool "error lists second id" (T.unpack did2 `isInfixOf` msg)
+        Right _  -> fail "expected Left for ambiguous dispatch"
+  where
+    isInfixOf needle haystack = T.isInfixOf (T.pack needle) (T.pack haystack)
+
+-- =============================================================
+-- 10-char ULID prefix rendering tests
+-- =============================================================
+
+testTaskListIdWidth :: IO ()
+testTaskListIdWidth = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "Width test", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    mt <- RT.getTask c tid
+    case mt of
+        Nothing -> fail "task not found"
+        Just t  -> do
+            let out = renderTaskList [t]
+                ls  = T.lines out
+            assertBool "at least one data row" (length ls >= 2)
+            let dataRow = ls !! 1
+                prefix  = T.take 12 dataRow
+            assertBool "id prefix is 10 chars padded to 12" (T.length prefix == 12)
+            assertBool "id matches task prefix" (T.take 10 tid `T.isPrefixOf` T.stripEnd prefix)
+
+testKnowledgeListIdWidth :: IO ()
+testKnowledgeListIdWidth = withTestDb $ \c -> do
+    kid <- mkKnowledge c "Width K" "body"
+    mk  <- RK.getKnowledge c kid
+    case mk of
+        Nothing -> fail "knowledge not found"
+        Just k  -> do
+            let out = renderKnowledgeList [k]
+                ls  = T.lines out
+            assertBool "at least one data row" (length ls >= 2)
+            let dataRow = ls !! 1
+                prefix  = T.take 12 dataRow
+            assertBool "id prefix is 10 chars padded to 12" (T.length prefix == 12)
+            assertBool "id matches knowledge prefix" (T.take 10 kid `T.isPrefixOf` T.stripEnd prefix)

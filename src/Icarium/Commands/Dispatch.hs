@@ -247,16 +247,16 @@ runList o = withDb defaultDbPath $ \c -> do
 renderDispatchList :: [Dispatch] -> Text
 renderDispatchList ds =
     let header = T.intercalate "  "
-            [ padR 26 "id"
-            , padR 26 "task_id"
+            [ padR 12 "id"
+            , padR 12 "task_id"
             , padR 11 "outcome"
             , padR 34 "branch"
             , "started_at"
             ]
         rows = map row ds
         row d = T.intercalate "  "
-            [ padR 26 (dispatchId d)
-            , padR 26 (dispatchTaskId d)
+            [ padR 12 (T.take 10 (dispatchId d))
+            , padR 12 (T.take 10 (dispatchTaskId d))
             , padR 11 (maybe "open" dispatchOutcomeText (dispatchOutcome d))
             , padR 34 (dispatchBranch d)
             , dispatchStartedAt d
@@ -284,9 +284,12 @@ showP = ShowOpts . T.pack
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
-    md <- RD.getDispatch c (sId o)
+    did <- RD.resolveDispatchId c (sId o) >>= \case
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    md <- RD.getDispatch c did
     case md of
-        Nothing -> fatal 1 ("dispatch not found: " <> T.unpack (sId o))
+        Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
         Just d -> do
             mt <- RT.getTask c (dispatchTaskId d)
             ks <- RE.knowledgeDerivedFromDispatch c (dispatchTaskId d)
@@ -301,8 +304,8 @@ runShow o = withDb defaultDbPath $ \c -> do
 
 renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
 renderDispatch d mt ks = T.unlines $
-    [ field "id"            (dispatchId d)
-    , field "task_id"       (dispatchTaskId d)
+    [ field "id"            (T.take 10 (dispatchId d))
+    , field "task_id"       (T.take 10 (dispatchTaskId d))
     , field "task_title"    (maybe "(task missing)" taskTitle mt)
     , field "branch"        (dispatchBranch d)
     , field "base_branch"   (dispatchBaseBranch d)
@@ -325,7 +328,7 @@ renderDispatch d mt ks = T.unlines $
     field k v = padR 14 (k <> ":") <> " " <> v
     knowledgeLines = case ks of
         [] -> ["  (none)"]
-        _  -> map (\k -> "  " <> knowledgeId k <> "  " <> knowledgeTitle k) ks
+        _  -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
 
 -- =============================================================
 -- logs
@@ -344,11 +347,14 @@ logsP = LogsOpts . T.pack
 
 runLogs :: LogsOpts -> IO ()
 runLogs o = withDb defaultDbPath $ \c -> do
-    md <- RD.getDispatch c (gId o)
+    did <- RD.resolveDispatchId c (gId o) >>= \case
+        Left err -> fatal 1 err
+        Right x  -> pure x
+    md <- RD.getDispatch c did
     case md of
-        Nothing -> fatal 1 ("dispatch not found: " <> T.unpack (gId o))
+        Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
         Just d  -> case dispatchLogPath d of
-            Nothing -> fatal 1 ("no log recorded for dispatch " <> T.unpack (gId o))
+            Nothing -> fatal 1 ("no log recorded for dispatch " <> T.unpack did)
             Just p  -> do
                 let path = T.unpack p
                 exists <- doesFileExist path
