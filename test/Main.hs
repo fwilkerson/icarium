@@ -1,35 +1,36 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Main (main) where
 
-import           Control.Exception      (bracket)
-import           Control.Monad          (forM, forM_, void)
-import           Data.FileEmbed         (embedFile, makeRelativeToProject)
-import           Data.Int               (Int64)
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-import qualified Data.Text.Encoding     as TE
-import qualified Data.Text.IO           as TIO
-import           Database.SQLite.Simple (Connection, Only (..), Query (..), close,
-                                         execute, execute_, open, query_)
-import           System.IO.Temp         (withSystemTempFile)
-import           System.IO              (hClose)
-import           Test.Tasty             (defaultMain, testGroup, TestTree)
-import           Test.Tasty.HUnit       (testCase, (@?=), assertBool)
+import           Control.Exception         (bracket)
+import           Control.Monad             (forM, forM_, void)
+import           Data.FileEmbed            (embedFile, makeRelativeToProject)
+import           Data.Int                  (Int64)
+import           Data.Text                 (Text)
+import qualified Data.Text                 as T
+import qualified Data.Text.Encoding        as TE
+import qualified Data.Text.IO              as TIO
+import           Database.SQLite.Simple    (Connection, Only (..), Query (..), close, execute,
+                                            execute_, open, query_)
+import           System.IO                 (hClose)
+import           System.IO.Temp            (withSystemTempFile)
+import           Test.Tasty                (TestTree, defaultMain, testGroup)
+import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
 
-import           Icarium.Config         (loadConfig, defaultConfigText)
-import           Icarium.Db             (dbSchemaVersion, migrateDb)
-import           Icarium.Dispatch       (postClaudeGuard)
-import           Icarium.Id             (newId)
-import qualified Icarium.Render
-import           Icarium.Render         (renderKnowledge, renderKnowledgeList, renderTaskHuman, renderTaskList, renderTaskPrompt)
 import           Icarium.Commands.Dispatch (renderDispatch)
-import           Icarium.Commands.Know  (autoDeriveDeps)
-import qualified Icarium.Repo.Category  as RC
-import qualified Icarium.Repo.Dispatch  as RD
-import qualified Icarium.Repo.Edge      as RE
-import qualified Icarium.Repo.Knowledge as RK
-import qualified Icarium.Repo.Task      as RT
-import           Icarium.Schema         (applySchema, execSql)
+import           Icarium.Commands.Know     (autoDeriveDeps)
+import           Icarium.Config            (defaultConfigText, loadConfig)
+import           Icarium.Db                (dbSchemaVersion, migrateDb)
+import           Icarium.Dispatch          (postClaudeGuard)
+import           Icarium.Id                (newId)
+import           Icarium.Render            (renderKnowledge, renderKnowledgeList, renderTaskHuman,
+                                            renderTaskList, renderTaskPrompt)
+import qualified Icarium.Render
+import qualified Icarium.Repo.Category     as RC
+import qualified Icarium.Repo.Dispatch     as RD
+import qualified Icarium.Repo.Edge         as RE
+import qualified Icarium.Repo.Knowledge    as RK
+import qualified Icarium.Repo.Task         as RT
+import           Icarium.Schema            (applySchema, execSql)
 import           Icarium.Types
 
 main :: IO ()
