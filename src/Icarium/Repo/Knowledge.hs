@@ -148,8 +148,8 @@ categoryMatchedKnowledge conn cats cap
         in "id IN (SELECT knowledge_id FROM knowledge_categories kc \
            \JOIN categories c ON c.id = kc.category_id \
            \WHERE c.axis = '" <> axis <> "' AND c.name IN (" <> ph <> "))"
-    clauses = (if null domains then [] else [axisClause "domain"     domains])
-           <> (if null discs   then [] else [axisClause "discipline" discs  ])
+    clauses = [axisClause "domain"     domains | not (null domains)]
+           <> [axisClause "discipline" discs   | not (null discs)]
     q = Query $ "SELECT " <> knowCols <> " FROM knowledge"
              <> " WHERE stale = 0 AND " <> T.intercalate " AND " clauses
              <> " ORDER BY created_at DESC LIMIT ?"

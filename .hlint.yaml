@@ -1,8 +1,5 @@
-# HLint configuration — start permissive, tighten over time.
-# Add ignores here for suggestions we explicitly disagree with.
-
-- ignore: {name: Use camelCase}           # snake_case appears in TOML/DB key strings
-- ignore: {name: Redundant $}             # common style choice in this codebase
-- ignore: {name: Use newtype instead of data}   # single-field option records; data is intentional
-- ignore: {name: Use <$>}                 # fmap f $ x style is deliberate in Git helpers
-- ignore: {name: Use list comprehension}  # if-then-else is clearer than list guard here
+# HLint configuration.
+#
+# Policy: treat hlint hints as design feedback first. The default rule
+# set is curated; before adding an ignore, exhaust the refactor option.
+# This file should stay near-empty.

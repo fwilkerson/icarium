@@ -3,7 +3,7 @@ module Icarium.Commands.Task (Command, parser, run) where
 import           Control.Monad          (forM_, unless, void, when)
 import           Data.Aeson             (encode, object, (.=))
 import qualified Data.ByteString.Lazy   as BL
-import           Data.Maybe             (fromMaybe)
+import           Data.Maybe             (fromMaybe, isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -222,10 +222,7 @@ showP = ShowOpts . T.pack
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
-    eId <- RT.resolveTaskId c (sId o)
-    tid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
     Just t <- RT.getTask c tid
     refs <- RE.referencedKnowledge c (taskId t)
     deps <- RE.dependencyTasks     c (taskId t)
@@ -274,12 +271,9 @@ updateP = UpdateOpts . T.pack
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do
-    when (uState o == Just Blocked && uBlockReason o == Nothing) $
+    when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
-    eId <- RT.resolveTaskId c (uId o)
-    tid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
@@ -298,17 +292,14 @@ runUpdate o = withDb defaultDbPath $ \c -> do
 -- rm
 -- =============================================================
 
-data RmOpts = RmOpts { rId :: Text }
+newtype RmOpts = RmOpts { rId :: Text }
 
 rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runRm :: RmOpts -> IO ()
 runRm o = withDb defaultDbPath $ \c -> do
-    eId <- RT.resolveTaskId c (rId o)
-    tid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    tid <- resolveOrFatal (RT.resolveTaskId c (rId o))
     ok <- RT.deleteTask c tid
     if ok then TIO.putStrLn ("deleted " <> tid)
           else fatal 1 ("task not found: " <> T.unpack (rId o))

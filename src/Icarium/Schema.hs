@@ -34,4 +34,4 @@ applySchema conn = do
 -- | Execute arbitrary (potentially multi-statement) SQL against a connection.
 -- Useful for applying DDL fixtures in tests.
 execSql :: Connection -> Text -> IO ()
-execSql conn sql = Direct.exec (Internal.connectionHandle conn) sql
+execSql conn = Direct.exec (Internal.connectionHandle conn)

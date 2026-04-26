@@ -300,7 +300,7 @@ runUpdate o = withDb defaultDbPath $ \c -> do
 -- rm
 -- =============================================================
 
-data RmOpts = RmOpts { rId :: Text }
+newtype RmOpts = RmOpts { rId :: Text }
 
 rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")

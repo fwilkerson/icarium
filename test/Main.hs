@@ -346,9 +346,9 @@ testCap = withTestDb $ \c -> do
         execute c
             (Query "INSERT INTO knowledge (id, title, body, created_at) VALUES (?,?,?,?)")
             ( kid
-            , ("K" <> T.pack (show i) :: Text)
-            , ("" :: Text)
-            , ("2026-01-0" <> T.pack (show i) <> "T00:00:00" :: Text)
+            , "K" <> T.pack (show i) :: Text
+            , "" :: Text
+            , "2026-01-0" <> T.pack (show i) <> "T00:00:00" :: Text
             )
         RC.attachKnowledgeCategory c kid (categoryId domCat)
         pure kid
@@ -538,11 +538,11 @@ insertTestDispatch c did tid =
                \VALUES (?,?,?,?,?,?,?)")
         ( did
         , tid
-        , ("dispatch/" <> did :: Text)
-        , ("main" :: Text)
-        , ("0000000000000000000000000000000000000000" :: Text)
-        , ("claude-sonnet-4-6" :: Text)
-        , ("medium" :: Text)
+        , "dispatch/" <> did :: Text
+        , "main" :: Text
+        , "0000000000000000000000000000000000000000" :: Text
+        , "claude-sonnet-4-6" :: Text
+        , "medium" :: Text
         )
 
 testResolveDispatchFullId :: IO ()
@@ -655,8 +655,8 @@ testResolveKnowledgeAmbiguous = withTestDb $ \c -> do
 
 -- Insert a depends_on edge between two tasks; return the edge id.
 insertTestEdge :: Connection -> Text -> Text -> IO Text
-insertTestEdge c src dst =
-    RE.insertEdge c DependsOn TaskNode src TaskNode dst
+insertTestEdge c src =
+    RE.insertEdge c DependsOn TaskNode src TaskNode
 
 testResolveEdgePrefix :: IO ()
 testResolveEdgePrefix = withTestDb $ \c -> do
@@ -877,14 +877,11 @@ testNullPrioritySort = do
                ]
         out  = renderTaskList True rows [Idea]
         ls   = filter (\l -> "pri" `T.isInfixOf` l) (T.lines out)
-        titles = map (T.strip . snd . T.breakOn "high" . T.intercalate "|") [ls]  -- guard list non-empty
     assertBool "non-empty rendered rows" (not (null ls))
     -- Expected order: high-pri, low-pri, null-pri (NULL last).
     let idx t = head [i | (i, l) <- zip [0::Int ..] ls, t `T.isInfixOf` l]
     (idx "high-pri" < idx "low-pri") @?= True
     (idx "low-pri"  < idx "null-pri") @?= True
-    -- silence unused warning
-    seq titles (return ())
 
 testTitleTruncatedUtf8 :: IO ()
 testTitleTruncatedUtf8 = do
@@ -897,7 +894,7 @@ testTitleTruncatedUtf8 = do
     -- The title column is at most 72 chars and ends with the UTF-8 ellipsis.
     assertBool "row contains UTF-8 ellipsis" ("…" `T.isInfixOf` dataRow)
     assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` dataRow))
-    let titlePart = T.take (Icarium.Render.recommendedTitleMax) (T.drop 14 dataRow)
+    let titlePart = T.take Icarium.Render.recommendedTitleMax (T.drop 14 dataRow)
     assertBool "title column is exactly 72 chars" (T.length titlePart == Icarium.Render.recommendedTitleMax)
 
 testTitleTruncatedAscii :: IO ()

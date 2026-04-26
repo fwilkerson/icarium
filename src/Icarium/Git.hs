@@ -12,6 +12,7 @@ module Icarium.Git
     , deleteBranch
     ) where
 
+import           Control.Monad        (void)
 import qualified Data.ByteString.Lazy as BL
 import           Data.Text            (Text)
 import qualified Data.Text            as T
@@ -61,26 +62,26 @@ revParse ref = runGit ["rev-parse", "--verify", T.unpack ref]
 
 -- | Create and check out a new branch from the given base.
 createBranch :: Text -> Text -> IO (Either GitError ())
-createBranch name base = fmap (() <$) $ runGit
+createBranch name base = void <$> runGit
     ["checkout", "-b", T.unpack name, T.unpack base]
 
 checkout :: Text -> IO (Either GitError ())
-checkout branch = fmap (() <$) $ runGit ["checkout", T.unpack branch]
+checkout branch = void <$> runGit ["checkout", T.unpack branch]
 
 -- | Fast-forward the current branch to the named branch. Fails if
 -- the FF isn't possible — we never want a merge commit.
 ffMerge :: Text -> IO (Either GitError ())
-ffMerge branch = fmap (() <$) $ runGit
+ffMerge branch = void <$> runGit
     ["merge", "--ff-only", T.unpack branch]
 
 -- | Stash working-tree changes including untracked files with a
 -- deterministic message. Used by recovery to preserve in-flight work.
 stashUntracked :: Text -> IO (Either GitError ())
-stashUntracked msg = fmap (() <$) $ runGit
+stashUntracked msg = void <$> runGit
     ["stash", "push", "-u", "-m", T.unpack msg]
 
 -- | Delete a fully-merged local branch. Uses -d (safe delete) so git
 -- will refuse if the branch has unmerged commits.
 deleteBranch :: Text -> IO (Either GitError ())
-deleteBranch name = fmap (() <$) $ runGit
+deleteBranch name = void <$> runGit
     ["branch", "-d", T.unpack name]

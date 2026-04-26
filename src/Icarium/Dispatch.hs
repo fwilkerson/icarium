@@ -15,7 +15,7 @@ import qualified Data.Aeson.Key         as AK
 import qualified Data.Aeson.KeyMap      as AKM
 import qualified Data.ByteString.Char8  as BC
 import qualified Data.ByteString.Lazy   as BL
-import           Data.Maybe             (fromMaybe, maybeToList)
+import           Data.Maybe             (fromMaybe, mapMaybe, maybeToList)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.Encoding     as TE
@@ -343,16 +343,20 @@ summariseTick ts bytes st0 =
 
     handleUser st obj =
         let msg      = lookObj "message" obj
-            contents = maybe [] id (msg >>= lookArr "content")
-            errLines = [ row 'x' "tool_result" cnt
-                       | Object cObj <- contents
-                       , Just (String "tool_result") <- [lookRaw "type"     cObj]
-                       , Just (Bool True)            <- [lookRaw "is_error" cObj]
-                       , let cnt = case lookRaw "content" cObj of
-                                     Just (String t) -> take 80 (T.unpack t)
-                                     _               -> "error"
-                       ]
-        in (errLines, st)
+            contents = fromMaybe [] (msg >>= lookArr "content")
+        in (mapMaybe toolResultError contents, st)
+
+    -- | A tool_result content block whose @is_error@ is true. Returns a
+    -- one-line summary; non-errors and non-tool_result blocks return Nothing.
+    toolResultError (Object o)
+        | Just (String "tool_result") <- lookRaw "type"     o
+        , Just (Bool True)            <- lookRaw "is_error" o
+        = Just (row 'x' "tool_result" (errBody o))
+      where
+        errBody c = case lookRaw "content" c of
+            Just (String t) -> take 80 (T.unpack t)
+            _               -> "error"
+    toolResultError _ = Nothing
 
     handleResult st obj =
         let subtype   = maybe "?" T.unpack (lookStr "subtype" obj)
@@ -367,7 +371,7 @@ summariseTick ts bytes st0 =
                     [row '=' "usage" ("in " ++ show i ++ " / out " ++ show o
                                     ++ " / cache_read " ++ show c)]
                 _ -> []
-        in ([resultLine] ++ usageLine, st)
+        in (resultLine : usageLine, st)
 
     checkUsagePeriodic st
         | tsEventCount st >= 20 =

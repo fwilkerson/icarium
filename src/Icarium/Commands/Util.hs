@@ -1,6 +1,7 @@
 module Icarium.Commands.Util
     ( -- * Errors
       fatal
+    , resolveOrFatal
       -- * Shared option readers
     , taskStateReader
     , edgeKindReader
@@ -32,6 +33,12 @@ fatal :: Int -> String -> IO a
 fatal code msg = do
     hPutStrLn stderr ("icarium: error: " <> msg)
     exitWith (ExitFailure code)
+
+-- | Run an IO action returning Either; exit fatally with code 1 (the
+-- convention for ID-resolution failures) and the Left's message, or
+-- return the Right value.
+resolveOrFatal :: IO (Either String a) -> IO a
+resolveOrFatal m = m >>= either (fatal 1) pure
 
 taskStateReader :: ReadM TaskState
 taskStateReader = eitherReader $ \s ->

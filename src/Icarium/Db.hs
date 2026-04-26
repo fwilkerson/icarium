@@ -8,6 +8,7 @@ module Icarium.Db
     ) where
 
 import           Control.Exception      (bracket)
+import           Control.Monad          (forM_)
 import           Data.Int               (Int64)
 import           Database.SQLite.Simple (Connection, Only (..), close, open, query_)
 import           Icarium.Migrations     (Migration (..), migrations)
@@ -38,8 +39,8 @@ withDb path action = bracket (openDb path) close $ \conn -> do
 migrateDb :: Connection -> IO ()
 migrateDb conn = do
     current <- fromIntegral <$> dbSchemaVersion conn
-    mapM_ (\m -> migrationUp m conn)
-          (filter (\m -> migrationVersion m > current) migrations)
+    let pending = filter ((> current) . migrationVersion) migrations
+    forM_ pending $ \m -> migrationUp m conn
 
 -- | Create the DB file and apply the schema. Fails if the file
 -- already exists — the caller decides whether to handle that.

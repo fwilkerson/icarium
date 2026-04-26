@@ -48,7 +48,7 @@ runAdd o = withDb defaultDbPath $ \c -> do
             cid <- RC.insertCategory c (aAxis o) (aName o)
             TIO.putStrLn cid
 
-data ListOpts = ListOpts { lAxis :: Maybe CategoryAxis }
+newtype ListOpts = ListOpts { lAxis :: Maybe CategoryAxis }
 
 listP :: Parser ListOpts
 listP = ListOpts

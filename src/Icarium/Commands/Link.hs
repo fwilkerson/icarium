@@ -115,8 +115,8 @@ listP = ListOpts
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
-    mFrom <- mapM (\raw -> snd <$> resolveNode c raw) (lFrom o)
-    mTo   <- mapM (\raw -> snd <$> resolveNode c raw) (lTo o)
+    mFrom <- traverse (fmap snd . resolveNode c) (lFrom o)
+    mTo   <- traverse (fmap snd . resolveNode c) (lTo o)
     es <- RE.listEdges c mFrom mTo (lKind o)
     case es of
         [] -> TIO.putStrLn "(no edges)"
@@ -126,7 +126,7 @@ runList o = withDb defaultDbPath $ \c -> do
 -- rm
 -- =============================================================
 
-data RmOpts = RmOpts { rId :: Text }
+newtype RmOpts = RmOpts { rId :: Text }
 
 rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "EDGE_ID")

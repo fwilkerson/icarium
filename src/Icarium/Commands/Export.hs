@@ -14,7 +14,7 @@ import qualified Icarium.Repo.Task      as RT
 import           Icarium.Schema         (schemaVersion)
 import           Icarium.Types          ()
 
-data Options = Options
+newtype Options = Options
     { optOut :: Maybe FilePath
     }
 

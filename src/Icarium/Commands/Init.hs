@@ -10,7 +10,7 @@ import           System.IO           (hPutStrLn, stderr)
 import           Icarium.Config      (defaultConfigPath, defaultConfigText)
 import           Icarium.Db          (defaultDbPath, initDb)
 
-data Options = Options
+newtype Options = Options
     { optForce :: Bool
     }
 

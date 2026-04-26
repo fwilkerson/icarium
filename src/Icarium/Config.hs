@@ -31,7 +31,7 @@ data Config = Config
     , cfgCategories :: CategoriesConfig
     } deriving (Show)
 
-data ProjectConfig = ProjectConfig
+newtype ProjectConfig = ProjectConfig
     { pcIntegrationBranch :: Text
     } deriving (Show)
 

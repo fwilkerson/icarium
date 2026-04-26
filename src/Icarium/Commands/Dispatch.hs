@@ -92,9 +92,7 @@ runRun o = do
     case rTaskId o of
         Just rawId ->
             withDb defaultDbPath $ \c -> do
-                tid <- RT.resolveTaskId c rawId >>= \case
-                    Left err -> fatal 1 err
-                    Right x  -> pure x
+                tid <- resolveOrFatal (RT.resolveTaskId c rawId)
                 mt <- RT.getTask c tid
                 case mt of
                     Nothing   -> fatal 1 ("task not found: " <> T.unpack tid)
@@ -241,9 +239,7 @@ printSummary r = do
                     let shown = take 10 files
                         extra = length files - length shown
                         pad   = T.replicate 10 " "
-                        extraLine = if extra > 0
-                                    then [T.pack (show extra) <> " more"]
-                                    else []
+                        extraLine = [T.pack (show extra) <> " more" | extra > 0]
                         allItems  = shown ++ extraLine
                     TIO.putStrLn $ "files:    " <> T.intercalate ("\n" <> pad) allItems
   where
@@ -286,9 +282,7 @@ outcomeReader = eitherReader $ \s ->
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
-    mTaskId <- mapM (\raw -> RT.resolveTaskId c raw >>= \case
-        Left err -> fatal 1 err
-        Right x  -> pure x) (lTask o)
+    mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <- RD.listDispatches c mTaskId
     let filtered = case lOutcome o of
             Nothing -> ds
@@ -424,7 +418,7 @@ runLogs o = withDb defaultDbPath $ \c -> do
 -- recover  (reconcile orphaned dispatches)
 -- =============================================================
 
-data RecoverOpts = RecoverOpts
+newtype RecoverOpts = RecoverOpts
     { recDispatchId :: Maybe Text
     }
 

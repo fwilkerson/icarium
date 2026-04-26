@@ -201,7 +201,7 @@ renderTaskList useUnicode rows filterStates
 
     stateGroups = case filterStates of
         [] -> primaryStates
-           ++ filter (\s -> not (null (inState s))) secondaryStates
+           ++ filter (not . null . inState) secondaryStates
         _  -> filterStates
 
     -- Sort within a group: priority DESC (higher = first), NULL last;
@@ -231,8 +231,8 @@ renderTaskList useUnicode rows filterStates
     renderBlock s =
         let groupRows = sortGroup (inState s)
             n         = length groupRows
-            header    = if singleFilter then []
-                        else [T.toUpper (taskStateText s) <> "  (" <> T.pack (show n) <> ")"]
+            header    = [T.toUpper (taskStateText s) <> "  (" <> T.pack (show n) <> ")"
+                        | not singleFilter]
             rowLines  = map (renderRow s) groupRows
         in T.unlines (header ++ rowLines)
 
@@ -291,8 +291,8 @@ formatEdgeCounts 0 0 = ""
 formatEdgeCounts d r =
     "[" <> T.intercalate " " parts <> "]"
   where
-    parts = (if d > 0 then ["deps:" <> T.pack (show d)] else [])
-         <> (if r > 0 then ["refs:" <> T.pack (show r)] else [])
+    parts = ["deps:" <> T.pack (show d) | d > 0]
+         <> ["refs:" <> T.pack (show r) | r > 0]
 
 -- =============================================================
 -- Knowledge rendering
@@ -343,8 +343,8 @@ categoriesBlock cats =
   where
     axisLine axis =
         let names = [categoryName c | c <- cats, categoryAxis c == axis]
-        in if null names then []
-           else ["  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names]
+        in [ "  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names
+           | not (null names) ]
 
 -- =============================================================
 -- Utilities
