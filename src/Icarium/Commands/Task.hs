@@ -136,7 +136,6 @@ requireKnowledge c input = do
 
 data ListOpts = ListOpts
     { lStates     :: [TaskState]
-    , lAll        :: Bool
     , lReady      :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
@@ -147,7 +146,6 @@ listP :: Parser ListOpts
 listP = ListOpts
     <$> many (option taskStateReader (long "state" <> metavar "STATE"
            <> help "Filter by task state (repeatable)"))
-    <*> switch (long "all"   <> help "Include done tasks")
     <*> switch (long "ready" <> help "Only state=ready tasks with all depends-on satisfied (matches what `dispatch run` and `task next` pick)")
     <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Filter by domain category"))
@@ -163,7 +161,6 @@ runList o = withDb defaultDbPath $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let effectiveStates
-            | lAll o                 = []
             | not (null (lStates o)) = lStates o
             | otherwise              = defaultActiveStates
         displayFilter
