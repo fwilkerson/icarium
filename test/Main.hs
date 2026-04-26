@@ -92,6 +92,16 @@ main = defaultMain $ testGroup "icarium"
         , testCase "90-char title truncated with ASCII ... in ASCII mode"  testTitleTruncatedAscii
         , testCase "title at exactly 72 chars renders without truncation"  testTitleExactlyAtLimit
         ]
+    , testGroup "task show links section"
+        [ testCase "no edges renders (none)"                               testLinksNoEdges
+        , testCase "only depends-on edges"                                 testLinksOnlyDeps
+        , testCase "only references edges"                                 testLinksOnlyRefs
+        , testCase "both kinds present, deps before refs"                  testLinksBothKinds
+        , testCase "stale knowledge gets [STALE] suffix"                   testLinksStaleKnowledge
+        , testCase "done task gets [done] suffix"                          testLinksTaskDone
+        , testCase "blocked task gets [blocked] suffix"                    testLinksTaskBlocked
+        , testCase "ASCII mode uses +- and \\- glyphs"                     testLinksAscii
+        ]
     ]
 
 -- =============================================================
@@ -186,6 +196,8 @@ renderTest :: IO ()
 renderTest = do
     let out = renderTaskPrompt minTask [] [] []
     assertBool "renderTaskPrompt returned empty" (not (T.null out))
+    let outH = renderTaskHuman True minTask [] [] []
+    assertBool "renderTaskHuman returned empty" (not (T.null outH))
 
 -- =============================================================
 -- In-memory DB helpers
@@ -753,7 +765,7 @@ minDispatch = Dispatch
 
 testTaskShowIdFull :: IO ()
 testTaskShowIdFull = do
-    let out  = renderTaskHuman minTask [] [] []
+    let out  = renderTaskHuman True minTask [] [] []
         ls   = T.lines out
         idLine = head $ filter ("id:" `T.isPrefixOf`) ls
         val  = T.strip (T.drop (T.length "id:") idLine)
@@ -777,3 +789,99 @@ testDispatchShowIdFull = do
         taskIdVal  = fieldVal "task_id:"
     T.length idVal     @?= 26
     T.length taskIdVal @?= 26
+
+-- =============================================================
+-- task show links section tests
+-- =============================================================
+
+-- Shared fixtures for links section tests.
+depTask :: TaskState -> Task
+depTask st = minTask
+    { taskId    = "01DDDD000000000000000000DD"
+    , taskTitle = "Dep task"
+    , taskState = st
+    , taskBlockReason = Nothing
+    }
+
+refKnow :: Bool -> Knowledge
+refKnow stale = minKnowledge
+    { knowledgeId    = "01RRRR000000000000000000RR"
+    , knowledgeTitle = "Ref knowledge"
+    , knowledgeStale = stale
+    }
+
+testLinksNoEdges :: IO ()
+testLinksNoEdges = do
+    let out = renderTaskHuman True minTask [] [] []
+    assertBool "## Links header"        ("## Links"  `T.isInfixOf` out)
+    assertBool "(none) line"            ("(none)"    `T.isInfixOf` out)
+    assertBool "no depends-on edge"     (not ("depends-on" `T.isInfixOf` out))
+    assertBool "no references edge"     (not ("references" `T.isInfixOf` out))
+
+testLinksOnlyDeps :: IO ()
+testLinksOnlyDeps = do
+    let dep = depTask Planned
+        out = renderTaskHuman True minTask [] [dep] []
+    assertBool "## Links header"        ("## Links"   `T.isInfixOf` out)
+    assertBool "depends-on edge"        ("depends-on" `T.isInfixOf` out)
+    assertBool "dep id prefix"          (T.take 10 (taskId dep) `T.isInfixOf` out)
+    assertBool "dep state"              ("[planned]"  `T.isInfixOf` out)
+    assertBool "no references"          (not ("references" `T.isInfixOf` out))
+    assertBool "last glyph is └─"      ("└─"         `T.isInfixOf` out)
+
+testLinksOnlyRefs :: IO ()
+testLinksOnlyRefs = do
+    let ref = refKnow False
+        out = renderTaskHuman True minTask [ref] [] []
+    assertBool "## Links header"        ("## Links"   `T.isInfixOf` out)
+    assertBool "references edge"        ("references" `T.isInfixOf` out)
+    assertBool "ref id prefix"          (T.take 10 (knowledgeId ref) `T.isInfixOf` out)
+    assertBool "no [STALE] suffix"      (not ("[STALE]"    `T.isInfixOf` out))
+    assertBool "no depends-on"          (not ("depends-on" `T.isInfixOf` out))
+    assertBool "last glyph is └─"      ("└─"         `T.isInfixOf` out)
+
+testLinksBothKinds :: IO ()
+testLinksBothKinds = do
+    let dep = depTask Ready
+        ref = refKnow False
+        out = renderTaskHuman True minTask [ref] [dep] []
+    assertBool "depends-on edge"        ("depends-on" `T.isInfixOf` out)
+    assertBool "references edge"        ("references" `T.isInfixOf` out)
+    -- depends-on appears before references in the output
+    let Just iDep = posOf "depends-on" out
+        Just iRef = posOf "references" out
+    assertBool "depends-on before references" (iDep < iRef)
+    -- branch glyph on dep (not last), last glyph on ref
+    assertBool "branch glyph ├─"       ("├─" `T.isInfixOf` out)
+    assertBool "last glyph └─"         ("└─" `T.isInfixOf` out)
+  where
+    posOf needle h = let (pre, suf) = T.breakOn needle h
+                     in if T.null suf then Nothing else Just (T.length pre)
+
+testLinksStaleKnowledge :: IO ()
+testLinksStaleKnowledge = do
+    let ref = refKnow True
+        out = renderTaskHuman True minTask [ref] [] []
+    assertBool "[STALE] suffix present" ("[STALE]" `T.isInfixOf` out)
+
+testLinksTaskDone :: IO ()
+testLinksTaskDone = do
+    let dep = depTask Done
+        out = renderTaskHuman True minTask [] [dep] []
+    assertBool "[done] suffix" ("[done]" `T.isInfixOf` out)
+
+testLinksTaskBlocked :: IO ()
+testLinksTaskBlocked = do
+    let dep = (depTask Blocked) { taskBlockReason = Just "waiting" }
+        out = renderTaskHuman True minTask [] [dep] []
+    assertBool "[blocked] suffix" ("[blocked]" `T.isInfixOf` out)
+
+testLinksAscii :: IO ()
+testLinksAscii = do
+    let dep = depTask Planned
+        ref = refKnow False
+        out = renderTaskHuman False minTask [ref] [dep] []
+    assertBool "ASCII branch glyph +- present" ("+-" `T.isInfixOf` out)
+    assertBool "ASCII last glyph \\- present"   ("\\-" `T.isInfixOf` out)
+    assertBool "no UTF-8 branch glyph"          (not ("├─" `T.isInfixOf` out))
+    assertBool "no UTF-8 last glyph"            (not ("└─" `T.isInfixOf` out))

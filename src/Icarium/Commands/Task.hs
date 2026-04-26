@@ -228,9 +228,10 @@ runShow o = withDb defaultDbPath $ \c -> do
             catMatch <- RK.categoryMatchedKnowledge c cats 5
             let refIds     = map knowledgeId refs
                 dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+            utf8 <- detectUtf8
             TIO.putStr $ if sPrompt o
                 then Render.renderTaskPrompt t refs dedupedCat deps
-                else Render.renderTaskHuman  t refs deps cats
+                else Render.renderTaskHuman utf8 t refs deps cats
 
 -- =============================================================
 -- update

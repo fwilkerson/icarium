@@ -33,8 +33,10 @@ data TaskRow = TaskRow
 -- =============================================================
 
 -- | Human-facing task view. Shows metadata + body + linked nodes.
-renderTaskHuman :: Task -> [Knowledge] -> [Task] -> [Category] -> Text
-renderTaskHuman t refs deps cats = T.unlines $
+--
+-- @utf8@: True → Unicode tree glyphs; False → ASCII fallback.
+renderTaskHuman :: Bool -> Task -> [Knowledge] -> [Task] -> [Category] -> Text
+renderTaskHuman utf8 t refs deps cats = T.unlines $
     [ "id:        " <> taskId t
     , "title:     " <> taskTitle t
     , "state:     " <> taskStateText (taskState t)
@@ -51,8 +53,7 @@ renderTaskHuman t refs deps cats = T.unlines $
        , if T.null (taskBody t) then "(no body)" else taskBody t
        , ""
        ]
-    <> depSection deps
-    <> refSection refs
+    <> linksSection utf8 t deps refs
 
 priorityLine :: Task -> Text
 priorityLine t = case taskPriority t of
@@ -64,23 +65,39 @@ blockReasonLines t = case taskBlockReason t of
     Just r  | not (T.null r) -> ["block_reason: " <> r]
     _                        -> []
 
-depSection :: [Task] -> [Text]
-depSection []   = ["## Dependencies", "", "(none)", ""]
-depSection deps = ["## Dependencies", ""]
-    <> map (\d -> "- [" <> taskStateText (taskState d) <> "] "
-                       <> T.take 10 (taskId d) <> "  " <> taskTitle d) deps
-    <> [""]
+-- | Combined links tree replacing the old flat dep/ref sections.
+--
+-- All depends-on edges first (sorted by target id ASC), then references.
+-- Last edge gets └─ (or \- in ASCII mode); others get ├─ (or +-).
+linksSection :: Bool -> Task -> [Task] -> [Knowledge] -> [Text]
+linksSection _    _ []   []   = ["## Links", "", "(none)", ""]
+linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
+  where
+    rootLine = T.take 10 (taskId t) <> "  " <> taskTitle t
 
-refSection :: [Knowledge] -> [Text]
-refSection []   = ["## Referenced knowledge", "", "(none)", ""]
-refSection refs = ["## Referenced knowledge", ""]
-    <> concatMap (\k ->
-        [ "### " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k
-            <> if knowledgeStale k then "  [STALE]" else ""
-        , ""
-        , knowledgeBody k
-        , ""
-        ]) refs
+    sortedDeps = sortBy (\a b -> compare (taskId a) (taskId b)) deps
+    sortedRefs = sortBy (\a b -> compare (knowledgeId a) (knowledgeId b)) refs
+
+    allEdges :: [Either Task Knowledge]
+    allEdges = map Left sortedDeps <> map Right sortedRefs
+    n = length allEdges
+
+    kindWidth = max (T.length "depends-on") (T.length "references")
+
+    branchG = if utf8 then "├─" else "+-"
+    lastG   = if utf8 then "└─" else "\\-"
+
+    mkEdge i e =
+        let g       = if i == n - 1 then lastG else branchG
+            kindStr = either (const "depends-on") (const "references") e
+            idStr   = either (T.take 10 . taskId) (T.take 10 . knowledgeId) e
+            titStr  = either taskTitle knowledgeTitle e
+            suffix  = case e of
+                Left  dep -> "  [" <> taskStateText (taskState dep) <> "]"
+                Right ref -> if knowledgeStale ref then "  [STALE]" else ""
+        in g <> " " <> padr kindWidth kindStr <> "  " <> idStr <> "  " <> titStr <> suffix
+
+    edgeLines = zipWith mkEdge [0..] allEdges
 
 -- | The exact prompt the dispatcher will send to the headless agent.
 -- Sharing this with @task show --prompt@ keeps the two in lockstep.
