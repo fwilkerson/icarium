@@ -68,7 +68,7 @@ deleteEdge conn eid = do
 -- | Knowledge linked by @references@ edges from the given task.
 referencedKnowledge :: Connection -> Text -> IO [Knowledge]
 referencedKnowledge conn tid = query conn
-    (Query "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at, k.slug \
+    (Query "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
            \FROM edges e \
            \JOIN knowledge k ON k.id = e.dst_id \
            \WHERE e.kind = 'references' \
@@ -81,7 +81,7 @@ referencedKnowledge conn tid = query conn
 dependencyTasks :: Connection -> Text -> IO [Task]
 dependencyTasks conn tid = query conn
     (Query "SELECT t.id, t.title, t.body, t.state, t.priority, \
-           \       t.block_reason, t.created_at, t.updated_at, t.slug \
+           \       t.block_reason, t.created_at, t.updated_at \
            \FROM edges e \
            \JOIN tasks t ON t.id = e.dst_id \
            \WHERE e.kind = 'depends_on' \

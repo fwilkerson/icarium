@@ -20,7 +20,6 @@ import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
 import qualified Icarium.Repo.Task      as RT
-import qualified Icarium.Slug           as Slug
 import           Icarium.Types
 
 data Command
@@ -29,7 +28,6 @@ data Command
     | Show ShowOpts
     | Update UpdateOpts
     | Rm RmOpts
-    | SlugSet SlugSetOpts
 
 parser :: Parser Command
 parser = subparser
@@ -38,7 +36,6 @@ parser = subparser
    <> subcmd "show"     "Show a task"         (Show    <$> showP)
    <> subcmd "update"   "Update a task"       (Update  <$> updateP)
    <> subcmd "rm"       "Delete a task"       (Rm      <$> rmP)
-   <> subcmd "slug-set" "Set a task's slug"   (SlugSet <$> slugSetP)
     )
 
 run :: Command -> IO ()
@@ -48,7 +45,6 @@ run = \case
     Show o    -> runShow o
     Update o  -> runUpdate o
     Rm o      -> runRm o
-    SlugSet o -> runSlugSet o
 
 -- =============================================================
 -- add
@@ -117,7 +113,7 @@ requireCategory c axis name = do
         Nothing  -> fatal 2 ("unknown " <> T.unpack (categoryAxisText axis)
                                        <> ": " <> T.unpack name)
 
--- | Resolve a task input (slug or ULID prefix) to a canonical ULID.
+-- | Resolve a task input (ULID prefix) to a canonical ULID.
 requireTask :: Connection -> Text -> IO Text
 requireTask c input = do
     r <- RT.resolveTaskId c input
@@ -125,7 +121,7 @@ requireTask c input = do
         Right tid -> pure tid
         Left err  -> fatal 2 err
 
--- | Resolve a knowledge input (slug or ULID prefix) to a canonical ULID.
+-- | Resolve a knowledge input (ULID prefix) to a canonical ULID.
 requireKnowledge :: Connection -> Text -> IO Text
 requireKnowledge c input = do
     r <- RK.resolveKnowledgeId c input
@@ -314,35 +310,3 @@ runRm o = withDb defaultDbPath $ \c -> do
     ok <- RT.deleteTask c tid
     if ok then TIO.putStrLn ("deleted " <> tid)
           else fatal 1 ("task not found: " <> T.unpack (rId o))
-
--- =============================================================
--- slug-set
--- =============================================================
-
-data SlugSetOpts = SlugSetOpts
-    { ssId   :: Text
-    , ssSlug :: Text
-    }
-
-slugSetP :: Parser SlugSetOpts
-slugSetP = SlugSetOpts . T.pack
-    <$> strArgument (metavar "TASK_ID")
-    <*> (T.pack <$> strArgument (metavar "SLUG"))
-
-runSlugSet :: SlugSetOpts -> IO ()
-runSlugSet o = withDb defaultDbPath $ \c -> do
-    eId <- RT.resolveTaskId c (ssId o)
-    tid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
-    let newSlug = Slug.titleToSlug (ssSlug o)
-    when (T.null newSlug) $
-        fatal 2 "slug cannot be empty"
-    existing <- RT.getTaskBySlug c newSlug
-    case existing of
-        Just t | taskId t /= tid ->
-            fatal 1 ("slug already in use by task: " <> T.unpack (taskId t))
-        _ -> do
-            ok <- RT.setTaskSlug c tid newSlug
-            if ok then TIO.putStrLn ("slug set: " <> newSlug)
-                  else fatal 1 ("task not found: " <> T.unpack (ssId o))

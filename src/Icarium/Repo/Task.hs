@@ -4,10 +4,8 @@ module Icarium.Repo.Task
     , emptyUpdate
     , insertTask
     , getTask
-    , getTaskBySlug
     , getTasksByPrefix
     , resolveTaskId
-    , setTaskSlug
     , listTasks
     , updateTask
     , deleteTask
@@ -20,7 +18,6 @@ import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLD
                                          query)
 
 import           Icarium.Id             (newId)
-import           Icarium.Slug           (titleToSlug, uniqueTaskSlug)
 import           Icarium.Types          (Task (..), TaskState (..))
 
 data NewTask = NewTask
@@ -42,16 +39,15 @@ emptyUpdate :: TaskUpdate
 emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
 
 taskCols :: Text
-taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at, slug"
+taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at"
 
 insertTask :: Connection -> NewTask -> IO Text
 insertTask conn NewTask{..} = do
     tid  <- newId
-    slug <- uniqueTaskSlug conn (titleToSlug ntTitle)
     execute conn
-        (Query "INSERT INTO tasks (id, title, body, state, priority, slug) \
-               \VALUES (?, ?, ?, ?, ?, ?)")
-        (tid, ntTitle, ntBody, ntState, ntPriority, slug)
+        (Query "INSERT INTO tasks (id, title, body, state, priority) \
+               \VALUES (?, ?, ?, ?, ?)")
+        (tid, ntTitle, ntBody, ntState, ntPriority)
     pure tid
 
 getTask :: Connection -> Text -> IO (Maybe Task)
@@ -59,15 +55,6 @@ getTask conn tid = do
     rows <- query conn
         (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id = ?")
         (Only tid)
-    pure $ case rows of
-        (t:_) -> Just t
-        []    -> Nothing
-
-getTaskBySlug :: Connection -> Text -> IO (Maybe Task)
-getTaskBySlug conn slug = do
-    rows <- query conn
-        (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE slug = ?")
-        (Only slug)
     pure $ case rows of
         (t:_) -> Just t
         []    -> Nothing
@@ -86,32 +73,15 @@ getTasksByPrefix conn prefix =
         (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id LIKE ? ESCAPE '\\'")
         (Only (escapeLike prefix <> "%"))
 
--- | Resolve a user-supplied string to a canonical task ULID.
--- Tries slug exact match, then ULID prefix match.
+-- | Resolve a user-supplied string to a canonical task ULID via prefix match.
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
 resolveTaskId conn input = do
-    mt <- getTaskBySlug conn input
-    case mt of
-        Just t  -> pure (Right (taskId t))
-        Nothing -> do
-            ts <- getTasksByPrefix conn input
-            case ts of
-                [t] -> pure (Right (taskId t))
-                []  -> pure (Left $ "task not found: " <> T.unpack input)
-                _   -> pure (Left $ "ambiguous id: " <> T.unpack input
-                                 <> " (matches " <> show (length ts) <> " tasks)")
-
--- | Overwrite a task's slug. Returns False if the task does not exist.
-setTaskSlug :: Connection -> Text -> Text -> IO Bool
-setTaskSlug conn tid newSlug = do
-    mt <- getTask conn tid
-    case mt of
-        Nothing -> pure False
-        Just _  -> do
-            execute conn
-                (Query "UPDATE tasks SET slug = ? WHERE id = ?")
-                (newSlug, tid)
-            pure True
+    ts <- getTasksByPrefix conn input
+    case ts of
+        [t] -> pure (Right (taskId t))
+        []  -> pure (Left $ "task not found: " <> T.unpack input)
+        _   -> pure (Left $ "ambiguous id: " <> T.unpack input
+                          <> " (matches " <> show (length ts) <> " tasks)")
 
 -- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
 -- (state='ready' with all depends_on satisfied). Otherwise pulls from

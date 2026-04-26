@@ -23,6 +23,7 @@ migrations :: [Migration]
 migrations =
     [ Migration 2 migrate_1_to_2
     , Migration 3 migrate_2_to_3
+    , Migration 4 migrate_3_to_4
     ]
 
 -- ---------------------------------------------------------------------------
@@ -51,6 +52,27 @@ migrate_2_to_3_sql = T.unlines
     , "ALTER TABLE knowledge ADD COLUMN slug TEXT;"
     , "CREATE UNIQUE INDEX knowledge_slug_idx ON knowledge(slug) WHERE slug IS NOT NULL;"
     , "PRAGMA user_version = 3;"
+    , "COMMIT;"
+    ]
+
+-- ---------------------------------------------------------------------------
+-- 3 → 4: Drop the 'slug' column from tasks and knowledge.
+-- Drop the partial unique indexes first (required before DROP COLUMN).
+-- SQLite 3.35+ supports ALTER TABLE DROP COLUMN.
+-- ---------------------------------------------------------------------------
+
+migrate_3_to_4 :: Connection -> IO ()
+migrate_3_to_4 conn =
+    Direct.exec (Internal.connectionHandle conn) migrate_3_to_4_sql
+
+migrate_3_to_4_sql :: Text
+migrate_3_to_4_sql = T.unlines
+    [ "BEGIN;"
+    , "DROP INDEX IF EXISTS tasks_slug_idx;"
+    , "ALTER TABLE tasks DROP COLUMN slug;"
+    , "DROP INDEX IF EXISTS knowledge_slug_idx;"
+    , "ALTER TABLE knowledge DROP COLUMN slug;"
+    , "PRAGMA user_version = 4;"
     , "COMMIT;"
     ]
 

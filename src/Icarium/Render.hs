@@ -35,7 +35,6 @@ data TaskRow = TaskRow
 renderTaskHuman :: Task -> [Knowledge] -> [Task] -> [Category] -> Text
 renderTaskHuman t refs deps cats = T.unlines $
     [ "id:        " <> T.take 10 (taskId t)
-    , "slug:      " <> maybe "-" id (taskSlug t)
     , "title:     " <> taskTitle t
     , "state:     " <> taskStateText (taskState t)
     , priorityLine t
@@ -269,7 +268,6 @@ formatEdgeCounts d r =
 renderKnowledge :: Knowledge -> [Category] -> Text
 renderKnowledge k cats = T.unlines $
     [ "id:       " <> T.take 10 (knowledgeId k)
-    , "slug:     " <> maybe "-" id (knowledgeSlug k)
     , "title:    " <> knowledgeTitle k
     , "stale:    " <> (if knowledgeStale k then "yes" else "no")
     , "created:  " <> knowledgeCreatedAt k
