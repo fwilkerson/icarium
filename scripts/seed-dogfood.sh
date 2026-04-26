@@ -297,7 +297,7 @@ Open questions before implementing:
   - Trigger-based vs an explicit `icarium know recompute-stale` pass?
   - Should cascade be bounded to prevent runaway updates?
   - How do we re-un-stale an entry once a human has verified it's
-    still accurate? manual `know update --fresh` — already exists.
+    still accurate? manual `know update --stale false` — already exists.
 
 This is marked idea deliberately: think before implementing.
 EOF

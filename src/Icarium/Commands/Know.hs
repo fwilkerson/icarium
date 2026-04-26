@@ -3,6 +3,7 @@ module Icarium.Commands.Know (Command, parser, run, autoDeriveDeps) where
 import           Control.Monad          (forM_, void)
 import           Data.Aeson             (encode, object, (.=))
 import qualified Data.ByteString.Lazy   as BL
+import           Data.Char              (toLower)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -207,6 +208,12 @@ showFormatReader = eitherReader $ \s -> case s of
     "json"  -> Right SFJson
     _       -> Left ("invalid format: " <> s <> "; expected human or json")
 
+staleBoolReader :: ReadM Bool
+staleBoolReader = eitherReader $ \s -> case map toLower s of
+    "true"  -> Right True
+    "false" -> Right False
+    _       -> Left ("invalid value: " <> s <> "; expected true or false")
+
 data ShowOpts = ShowOpts
     { sId     :: Text
     , sFormat :: ShowFormat
@@ -256,15 +263,15 @@ updateP = UpdateOpts . T.pack
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
            <> help "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`."))
     <*> bodyInputParser
-    <*> optional staleFlag
+    <*> optional (option staleBoolReader
+            (  long "stale"
+            <> metavar "BOOL"
+            <> help "Set stale flag: true or false"
+            ))
     <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Tag with this domain category"))
     <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Tag with this discipline category"))
-  where
-    staleFlag =
-            flag' True  (long "stale" <> help "Mark as stale")
-        <|> flag' False (long "fresh" <> help "Clear stale flag")
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do

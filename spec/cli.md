@@ -71,7 +71,7 @@ icarium know
 icarium know show <id> [--format human|json]
 
 icarium know update <id>
-    [--title ...] [--body ...] [--stale | --fresh]
+    [--title ...] [--body ...] [--stale BOOL]
 
 icarium know rm <id> [--force]
 
