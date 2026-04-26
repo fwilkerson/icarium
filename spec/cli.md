@@ -141,12 +141,12 @@ icarium dispatch logs <id> [--tail N]
 ## Recovery
 
 ```
-icarium recover [--dispatch <id>]
+icarium dispatch recover [DISPATCH_ID]
     Scan for dispatches with outcome IS NULL and (dead pid OR stale
     heartbeat). For each: mark outcome=interrupted, inspect branch
     state, move task to blocked with structured reason. Never discards
     uncommitted work; stashes with `git stash -u -m icarium:dispatch:<id>`
-    if needed. With --dispatch, reconciles a single dispatch.
+    if needed. With DISPATCH_ID, reconciles a single dispatch (prefix ok).
 
     Prints, for each reconciled dispatch:
       dispatch:<id> task:<id> branch:<b> uncommitted:<y|n>

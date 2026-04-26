@@ -9,7 +9,6 @@ import qualified Icarium.Commands.Init     as Init
 import qualified Icarium.Commands.Know     as Know
 import qualified Icarium.Commands.Link     as Link
 import qualified Icarium.Commands.Next     as Next
-import qualified Icarium.Commands.Recover  as Recover
 import qualified Icarium.Commands.Task     as Task
 import           Options.Applicative
 
@@ -22,7 +21,6 @@ data Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
     | CmdNext     Next.Options
-    | CmdRecover  Recover.Options
     | CmdExport   Export.Options
     | CmdImport   Import.Options
 
@@ -38,7 +36,6 @@ run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
 run (CmdDispatch c) = Dispatch.run c
 run (CmdNext o)     = Next.run o
-run (CmdRecover o)  = Recover.run o
 run (CmdExport o)   = Export.run o
 run (CmdImport o)   = Import.run o
 
@@ -70,13 +67,10 @@ commands = subparser
               (progDesc "Manage category vocabulary"))
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
-              (progDesc "Manage dispatches (run, list, show, logs)"))
+              (progDesc "Manage dispatches (run, list, show, logs, recover)"))
    <> command "next"
         (info (CmdNext <$> Next.parser <**> helper)
               (progDesc "Print the next ready task id; exit 1 if queue empty"))
-   <> command "recover"
-        (info (CmdRecover <$> Recover.parser <**> helper)
-              (progDesc "Reconcile orphaned in-progress dispatches"))
    <> command "export"
         (info (CmdExport <$> Export.parser <**> helper)
               (progDesc "Dump all data as a JSON snapshot"))

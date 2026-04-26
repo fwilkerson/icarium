@@ -67,7 +67,7 @@ main = defaultMain $ testGroup "icarium"
         , testCase "v3 DB migrates to v4: rows with slug survive"       testMigrateV3ToV4Data
         , testCase "migrateDb is idempotent on v4 DB"                   testMigrateIdempotent
         ]
-    , testGroup "resolveDispatchId"
+    , testGroup "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
         [ testCase "right on full id"      testResolveDispatchFullId
         , testCase "right on unique prefix" testResolveDispatchPrefix
         , testCase "left on missing"        testResolveDispatchMissing

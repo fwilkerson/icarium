@@ -44,7 +44,6 @@ library
                       Icarium.Commands.Category
                       Icarium.Commands.Dispatch
                       Icarium.Commands.Next
-                      Icarium.Commands.Recover
                       Icarium.Commands.Export
                       Icarium.Commands.Import
     build-depends:    base          >= 4.18 && < 5,

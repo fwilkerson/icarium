@@ -1,18 +1,23 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary, renderDispatch) where
 
-import           Control.Monad         (unless, when)
+import           Control.Monad         (forM_, unless, void, when)
 import           Data.Aeson            (FromJSON (..), decode, encode, object, withObject, (.:?),
                                         (.=))
 import qualified Data.ByteString.Lazy  as BL
-import           Data.Maybe            (fromMaybe, listToMaybe, mapMaybe)
+import           Data.Either           (fromRight)
+import           Data.Maybe            (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import           Data.Text             (Text)
 import qualified Data.Text             as T
 import qualified Data.Text.Encoding    as TE
 import qualified Data.Text.IO          as TIO
+import           Data.Time             (UTCTime, defaultTimeLocale, diffUTCTime, getCurrentTime,
+                                        parseTimeM)
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
 import           System.Directory      (doesFileExist)
+import           System.Exit           (ExitCode (..))
 import           System.IO             (hPutStrLn, stderr)
+import           System.Process.Typed  (nullStream, proc, runProcess, setStderr, setStdout)
 import           Text.Printf           (printf)
 
 import qualified Icarium.Git           as Git
@@ -28,10 +33,11 @@ import qualified Icarium.Repo.Task     as RT
 import           Icarium.Types
 
 data Command
-    = Run   RunOpts
-    | List  ListOpts
-    | Show  ShowOpts
-    | Logs  LogsOpts
+    = Run     RunOpts
+    | List    ListOpts
+    | Show    ShowOpts
+    | Logs    LogsOpts
+    | Recover RecoverOpts
 
 parser :: Parser Command
 parser = subparser
@@ -41,14 +47,16 @@ parser = subparser
    <> subcmd "list" "List dispatches"       (List <$> listP)
    <> subcmd "show" "Show a single dispatch" (Show <$> showP)
    <> subcmd "logs" "Print the jsonl event log" (Logs <$> logsP)
+   <> subcmd "recover" "Reconcile orphaned in-progress dispatches" (Recover <$> recoverP)
     )
 
 run :: Command -> IO ()
 run = \case
-    Run o  -> runRun  o
-    List o -> runList o
-    Show o -> runShow o
-    Logs o -> runLogs o
+    Run     o -> runRun     o
+    List    o -> runList    o
+    Show    o -> runShow    o
+    Logs    o -> runLogs    o
+    Recover o -> runRecover o
 
 -- =============================================================
 -- run  (single-task dispatch or queue drain)
@@ -411,3 +419,85 @@ runLogs o = withDb defaultDbPath $ \c -> do
                         Nothing -> ls
                         Just n  -> drop (max 0 (length ls - n)) ls
                 mapM_ putStrLn out
+
+-- =============================================================
+-- recover  (reconcile orphaned dispatches)
+-- =============================================================
+
+data RecoverOpts = RecoverOpts
+    { recDispatchId :: Maybe Text
+    }
+
+recoverP :: Parser RecoverOpts
+recoverP = RecoverOpts
+    <$> optional (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+
+runRecover :: RecoverOpts -> IO ()
+runRecover o = do
+    cfg <- loadConfig defaultConfigPath >>= \case
+        Left  e -> fatal 2 ("config parse error:\n" <> e)
+        Right c -> pure c
+    let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
+    withDb defaultDbPath $ \c -> do
+        open <- case recDispatchId o of
+            Just raw -> do
+                did <- RD.resolveDispatchId c raw >>= \case
+                    Left err -> fatal 1 err
+                    Right x  -> pure x
+                md <- RD.getDispatch c did
+                pure $ case md of
+                    Just d | isNothing (dispatchOutcome d) -> [d]
+                    _ -> []
+            Nothing  -> RD.listOpenDispatches c
+        if null open
+            then TIO.putStrLn "no open dispatches"
+            else do
+                now <- getCurrentTime
+                forM_ open (reconcileDispatch c now staleSec)
+
+reconcileDispatch :: Connection -> UTCTime -> Int -> Dispatch -> IO ()
+reconcileDispatch c now staleSec d = do
+    alive <- maybe (pure False) isPidAlive (dispatchPid d)
+    stale <- isHeartbeatStale now staleSec (dispatchHeartbeat d)
+    if alive && not stale
+        then pure ()
+        else do
+            uncommitted <- fmap not Git.isClean
+            lastCommit  <- fmap (fromRight "") (Git.revParse (dispatchBranch d))
+            let notes = T.intercalate "; "
+                    [ "interrupted"
+                    , "alive=" <> boolText alive
+                    , "stale=" <> boolText stale
+                    , "uncommitted=" <> boolText uncommitted
+                    , "last_commit=" <> lastCommit
+                    ]
+            RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
+            void $ RT.updateTask c (dispatchTaskId d) RT.emptyUpdate
+                { RT.tuState       = Just Blocked
+                , RT.tuBlockReason = Just (Just notes)
+                }
+            TIO.putStrLn $ "dispatch:" <> dispatchId d
+                <> "  task:" <> dispatchTaskId d
+                <> "  branch:" <> dispatchBranch d
+                <> "  " <> notes
+
+isPidAlive :: Int -> IO Bool
+isPidAlive pid = do
+    code <- runProcess
+        $ setStdout nullStream
+        $ setStderr nullStream
+        $ proc "kill" ["-0", show pid]
+    pure $ case code of
+        ExitSuccess   -> True
+        ExitFailure _ -> False
+
+isHeartbeatStale :: UTCTime -> Int -> Text -> IO Bool
+isHeartbeatStale now thresholdSec hbText =
+    pure $ case parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S"
+                           (T.unpack hbText) of
+        Nothing -> True
+        Just hb -> diffUTCTime now hb > fromIntegral thresholdSec
+
+boolText :: Bool -> Text
+boolText True  = "yes"
+boolText False = "no"

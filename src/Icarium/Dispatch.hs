@@ -554,7 +554,7 @@ ioFail = ioError . userError
 -- * success and task still 'ready' -> mark 'done' (the agent
 --   presumably didn't self-update; we don't want to re-pick it).
 -- * failure -> mark 'blocked' with the dispatch notes as reason.
--- * interrupted -> leave to @icarium recover@.
+-- * interrupted -> leave to @icarium dispatch recover@.
 -- * dry-run (dispatch id absent) -> no-op.
 applyOutcomeToTask :: Connection -> Task -> DispatchResult -> IO ()
 applyOutcomeToTask conn t res
