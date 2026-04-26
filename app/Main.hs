@@ -61,10 +61,10 @@ commands = subparser
               (progDesc "Check project health"))
    <> command "task"
         (info (CmdTask <$> Task.parser <**> helper)
-              (progDesc "Manage tasks"))
+              (progDesc "Manage tasks (list is the default)"))
    <> command "know"
         (info (CmdKnow <$> Know.parser <**> helper)
-              (progDesc "Manage knowledge entries"))
+              (progDesc "Manage knowledge entries (list is the default)"))
    <> command "link"
         (info (CmdLink <$> Link.parser <**> helper)
               (progDesc "Manage typed edges between nodes"))

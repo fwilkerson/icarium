@@ -35,6 +35,7 @@ parser = subparser
    <> subcmd "update"   "Update a knowledge entry" (Update  <$> updateP)
    <> subcmd "rm"       "Delete a knowledge entry" (Rm      <$> rmP)
     )
+    <|> (List <$> listP)
 
 run :: Command -> IO ()
 run = \case
