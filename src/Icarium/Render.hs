@@ -1,6 +1,7 @@
 module Icarium.Render
     ( renderTaskHuman
     , renderTaskPrompt
+    , TaskRow (..)
     , renderTaskList
     , renderKnowledge
     , renderKnowledgeList
@@ -8,10 +9,23 @@ module Icarium.Render
     , renderCategory
     ) where
 
+import           Data.List     (sortBy)
+import           Data.Maybe    (fromMaybe, listToMaybe)
 import           Data.Text     (Text)
 import qualified Data.Text     as T
 
 import           Icarium.Types
+
+-- =============================================================
+-- Task list row (carries per-task data for grouped list view)
+-- =============================================================
+
+data TaskRow = TaskRow
+    { trTask :: Task
+    , trCats :: [Category]
+    , trDeps :: Int   -- count of depends_on edges from this task
+    , trRefs :: Int   -- count of references edges from this task
+    }
 
 -- =============================================================
 -- Task rendering
@@ -136,23 +150,121 @@ workingAgreement t =
     ]
 
 -- =============================================================
--- List rendering (human)
+-- Grouped task list rendering
 -- =============================================================
 
-renderTaskList :: [Task] -> Text
-renderTaskList [] = "(no tasks)\n"
-renderTaskList ts = T.unlines $ header : map row ts
+-- | Render tasks grouped by state.
+--
+-- @useUnicode@: True → ● / · bars; False → # / . bars (ASCII fallback).
+-- @filterStates@: the states explicitly requested by the caller.
+--   * Empty → default view: show all four primary group headers (even if
+--     empty) plus any secondary groups that have tasks.
+--   * Length == 1 → single-state filter: suppress the group header.
+--   * Length > 1 → multi-state filter: show a header for each requested
+--     state (even if empty).
+renderTaskList :: Bool -> [TaskRow] -> [TaskState] -> Text
+renderTaskList useUnicode rows filterStates
+    | null rows && singleFilter = "(no tasks)\n"
+    | otherwise = T.intercalate "\n" (map renderBlock stateGroups)
   where
-    header = padr 12 "id" <> "  "
-          <> padr 10 "state" <> "  "
-          <> padr 4  "pri"   <> "  "
-          <> "title"
-    row t = padr 12 (T.take 10 (taskId t)) <> "  "
-         <> padr 10 (taskStateText (taskState t)) <> "  "
-         <> padr 4  (prio (taskPriority t)) <> "  "
-         <> taskTitle t
-    prio Nothing  = "-"
-    prio (Just p) = T.pack (show p)
+    singleFilter = length filterStates == 1
+
+    -- Display order: primary groups always present; secondary only if occupied.
+    primaryStates   = [Ready, Planned, Blocked, Idea]
+    secondaryStates = [InProgress, Abandoned, Done]
+
+    inState s = filter (\r -> taskState (trTask r) == s) rows
+
+    stateGroups = case filterStates of
+        [] -> primaryStates
+           ++ filter (\s -> not (null (inState s))) secondaryStates
+        _  -> filterStates
+
+    -- Sort within a group: priority DESC (higher = first), NULL last;
+    -- then ULID DESC as tiebreaker (newer first).
+    sortGroup = sortBy cmpRow
+      where
+        cmpRow a b =
+            let pa = taskPriority (trTask a)
+                pb = taskPriority (trTask b)
+            in case (pa, pb) of
+                (Nothing, Nothing) -> compareUlid b a
+                (Just _,  Nothing) -> LT
+                (Nothing, Just _)  -> GT
+                (Just x,  Just y)  -> case compare y x of
+                    EQ -> compareUlid b a
+                    o  -> o
+        compareUlid r1 r2 = compare (taskId (trTask r1)) (taskId (trTask r2))
+
+    -- Global column widths across all rows.
+    titleWidth = maxLen 5 (map (T.length . taskTitle . trTask) rows)
+    catWidth   = maxLen 3 (map (T.length . formatCats . trCats) rows)
+
+    maxLen def [] = def
+    maxLen _   xs = maximum xs
+
+    -- Render one state group as a newline-terminated block of lines.
+    renderBlock s =
+        let groupRows = sortGroup (inState s)
+            n         = length groupRows
+            header    = if singleFilter then []
+                        else [T.toUpper (taskStateText s) <> "  (" <> T.pack (show n) <> ")"]
+            rowLines  = map (renderRow s) groupRows
+        in T.unlines (header ++ rowLines)
+
+    renderRow s row =
+        let t       = trTask row
+            idPart  = "  " <> padr 10 (T.take 10 (taskId t))
+            titPart = padr titleWidth (taskTitle t)
+            barPart = case s of
+                Blocked -> truncateReason (fromMaybe "" (taskBlockReason t))
+                _       -> mkBar useUnicode (taskPriority t)
+            catStr  = formatCats (trCats row)
+            catPart = padr catWidth catStr
+            edgePart = case s of
+                Blocked -> ""
+                _       -> let ec = formatEdgeCounts (trDeps row) (trRefs row)
+                            in if T.null ec then "" else "  " <> ec
+        in idPart <> "  " <> titPart <> "  " <> barPart <> "  " <> catPart <> edgePart
+
+    truncateReason r
+        | T.length r <= 60 = r
+        | otherwise        = T.take 57 r <> "..."
+
+-- | 10-cell priority bar. UTF-8 mode: ● filled, · empty. ASCII mode: # / .
+mkBar :: Bool -> Maybe Int -> Text
+mkBar utf8 Nothing  = T.replicate 10 dot
+  where dot = if utf8 then "·" else "."
+mkBar utf8 (Just p) = T.replicate filled bullet <> T.replicate empty dot
+  where
+    filled = max 0 (min 10 p)
+    empty  = 10 - filled
+    bullet = if utf8 then "●" else "#"
+    dot    = if utf8 then "·" else "."
+
+-- | Format categories as [dom/disc], [-/disc], [dom/-], or [-].
+formatCats :: [Category] -> Text
+formatCats cats =
+    let dom  = listToMaybe [categoryName c | c <- cats, categoryAxis c == Domain]
+        disc = listToMaybe [categoryName c | c <- cats, categoryAxis c == Discipline]
+    in case (dom, disc) of
+        (Nothing, Nothing) -> "[-]"
+        (Just d,  Nothing) -> "[" <> d <> "/-]"
+        (Nothing, Just di) -> "[-/" <> di <> "]"
+        (Just d,  Just di) -> "[" <> d <> "/" <> di <> "]"
+
+-- | Edge count annotation. Empty string when both counts are 0.
+formatEdgeCounts :: Int -> Int -> Text
+formatEdgeCounts 0 0 = ""
+formatEdgeCounts d r =
+    "[" <> T.intercalate " " parts <> "]"
+  where
+    parts = (if d > 0 then ["deps:" <> T.pack (show d)] else [])
+         <> (if r > 0 then ["refs:" <> T.pack (show r)] else [])
+
+-- =============================================================
+-- Knowledge rendering
+-- =============================================================
 
 renderKnowledge :: Knowledge -> [Category] -> Text
 renderKnowledge k cats = T.unlines $
@@ -202,6 +314,10 @@ categoriesBlock cats =
         let names = [categoryName c | c <- cats, categoryAxis c == axis]
         in if null names then []
            else ["  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names]
+
+-- =============================================================
+-- Utilities
+-- =============================================================
 
 padr :: Int -> Text -> Text
 padr n s = s <> T.replicate (max 0 (n - T.length s)) " "

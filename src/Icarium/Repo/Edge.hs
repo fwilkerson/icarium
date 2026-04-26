@@ -4,11 +4,14 @@ module Icarium.Repo.Edge
     , deleteEdge
     , referencedKnowledge
     , dependencyTasks
+    , taskEdgeCounts
     , knowledgeDerivedFromTask
     , knowledgeDerivedFromDispatch
     ) where
 
+import           Data.Maybe             (fromMaybe)
 import           Data.Text              (Text)
+import qualified Data.Text              as T
 import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
                                          query, query_)
 
@@ -65,7 +68,7 @@ deleteEdge conn eid = do
 -- | Knowledge linked by @references@ edges from the given task.
 referencedKnowledge :: Connection -> Text -> IO [Knowledge]
 referencedKnowledge conn tid = query conn
-    (Query "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
+    (Query "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at, k.slug \
            \FROM edges e \
            \JOIN knowledge k ON k.id = e.dst_id \
            \WHERE e.kind = 'references' \
@@ -78,7 +81,7 @@ referencedKnowledge conn tid = query conn
 dependencyTasks :: Connection -> Text -> IO [Task]
 dependencyTasks conn tid = query conn
     (Query "SELECT t.id, t.title, t.body, t.state, t.priority, \
-           \       t.block_reason, t.created_at, t.updated_at \
+           \       t.block_reason, t.created_at, t.updated_at, t.slug \
            \FROM edges e \
            \JOIN tasks t ON t.id = e.dst_id \
            \WHERE e.kind = 'depends_on' \
@@ -86,6 +89,23 @@ dependencyTasks conn tid = query conn
            \  AND e.dst_kind = 'task' \
            \ORDER BY e.created_at ASC")
     (Only tid)
+
+-- | Count outgoing depends_on and references edges for multiple task ids.
+-- Returns @(deps_count, refs_count)@ per task id.
+-- Tasks with no edges are included with counts of 0.
+taskEdgeCounts :: Connection -> [Text] -> IO [(Text, (Int, Int))]
+taskEdgeCounts _ [] = pure []
+taskEdgeCounts conn ids = do
+    deps <- query conn (Query (countQ "depends_on")) params :: IO [(Text, Int)]
+    refs <- query conn (Query (countQ "references")) params :: IO [(Text, Int)]
+    pure [ (tid, (fromMaybe 0 (lookup tid deps), fromMaybe 0 (lookup tid refs)))
+         | tid <- ids ]
+  where
+    ph     = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
+    countQ k = "SELECT src_id, COUNT(*) FROM edges \
+               \WHERE kind = '" <> k <> "' AND src_kind = 'task' AND src_id IN " <> ph <> " \
+               \GROUP BY src_id"
+    params = map SQLText ids
 
 -- | Knowledge entries that have a derived_from edge pointing at the given task.
 knowledgeDerivedFromTask :: Connection -> Text -> IO [Knowledge]

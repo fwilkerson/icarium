@@ -20,6 +20,7 @@ import           Icarium.Config         (loadConfig, defaultConfigText)
 import           Icarium.Db             (dbSchemaVersion, migrateDb)
 import           Icarium.Dispatch       (postClaudeGuard)
 import           Icarium.Id             (newId)
+import qualified Icarium.Render
 import           Icarium.Render         (renderKnowledgeList, renderTaskList, renderTaskPrompt)
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Dispatch  as RD
@@ -79,6 +80,15 @@ main = defaultMain $ testGroup "icarium"
     , testGroup "10-char ULID prefix rendering"
         [ testCase "task list id column is 10 chars"      testTaskListIdWidth
         , testCase "knowledge list id column is 10 chars" testKnowledgeListIdWidth
+        ]
+    , testGroup "renderTaskList grouped view"
+        [ testCase "groups in READY/PLANNED/BLOCKED/IDEA order with counts" testGroupedHeaders
+        , testCase "single-state filter suppresses group header"            testSingleStateNoHeader
+        , testCase "ASCII fallback uses # and ."                            testAsciiBars
+        , testCase "blocked row replaces bar with truncated reason"         testBlockedReason
+        , testCase "edge counts omitted when both zero, shown otherwise"    testEdgeCountFormat
+        , testCase "category formatting handles missing slots"              testCategoryFormatting
+        , testCase "NULL priority sorts last within group"                  testNullPrioritySort
         ]
     ]
 
@@ -550,13 +560,16 @@ testTaskListIdWidth = withTestDb $ \c -> do
     case mt of
         Nothing -> fail "task not found"
         Just t  -> do
-            let out = renderTaskList [t]
-                ls  = T.lines out
-            assertBool "at least one data row" (length ls >= 2)
-            let dataRow = ls !! 1
-                prefix  = T.take 12 dataRow
-            assertBool "id prefix is 10 chars padded to 12" (T.length prefix == 12)
-            assertBool "id matches task prefix" (T.take 10 tid `T.isPrefixOf` T.stripEnd prefix)
+            let row = Icarium.Render.TaskRow { Icarium.Render.trTask = t
+                                             , Icarium.Render.trCats = []
+                                             , Icarium.Render.trDeps = 0
+                                             , Icarium.Render.trRefs = 0 }
+                out = renderTaskList True [row] [Ready]
+                ls  = filter (not . T.null) (T.lines out)
+            assertBool "at least one data row" (not (null ls))
+            let dataRow = head ls
+                stripped = T.stripStart dataRow
+            assertBool "id prefix is 10 chars" (T.take 10 stripped == T.take 10 tid)
 
 testKnowledgeListIdWidth :: IO ()
 testKnowledgeListIdWidth = withTestDb $ \c -> do
@@ -572,3 +585,124 @@ testKnowledgeListIdWidth = withTestDb $ \c -> do
                 prefix  = T.take 12 dataRow
             assertBool "id prefix is 10 chars padded to 12" (T.length prefix == 12)
             assertBool "id matches knowledge prefix" (T.take 10 kid `T.isPrefixOf` T.stripEnd prefix)
+
+-- =============================================================
+-- renderTaskList grouped view tests
+-- =============================================================
+
+mkRow :: Text -> Text -> TaskState -> Maybe Int -> [Category] -> Int -> Int -> Maybe Text -> Icarium.Render.TaskRow
+mkRow tid title st pri cats deps refs blockReason = Icarium.Render.TaskRow
+    { Icarium.Render.trTask = Task
+        { taskId          = tid
+        , taskTitle       = title
+        , taskBody        = ""
+        , taskState       = st
+        , taskPriority    = pri
+        , taskBlockReason = blockReason
+        , taskCreatedAt   = "2026-04-26 00:00:00"
+        , taskUpdatedAt   = "2026-04-26 00:00:00"
+        , taskSlug        = Nothing
+        }
+    , Icarium.Render.trCats = cats
+    , Icarium.Render.trDeps = deps
+    , Icarium.Render.trRefs = refs
+    }
+
+mkCatPure :: CategoryAxis -> Text -> Category
+mkCatPure ax nm = Category { categoryId = "cat-" <> nm, categoryAxis = ax, categoryName = nm }
+
+testGroupedHeaders :: IO ()
+testGroupedHeaders = do
+    let rows = [ mkRow "01ABCDEFGH01" "ready task"   Ready   (Just 5) [] 0 0 Nothing
+               , mkRow "01ABCDEFGH02" "planned task" Planned (Just 3) [] 0 0 Nothing
+               , mkRow "01ABCDEFGH03" "idea task"    Idea    Nothing  [] 0 0 Nothing
+               ]
+        out = renderTaskList True rows []
+    assertBool "READY (1) header"   ("READY  (1)"   `T.isInfixOf` out)
+    assertBool "PLANNED (1) header" ("PLANNED  (1)" `T.isInfixOf` out)
+    assertBool "BLOCKED (0) header" ("BLOCKED  (0)" `T.isInfixOf` out)
+    assertBool "IDEA (1) header"    ("IDEA  (1)"    `T.isInfixOf` out)
+    -- Order: READY before PLANNED before BLOCKED before IDEA.
+    let Just iReady   = lengthBefore "READY"   out
+        Just iPlanned = lengthBefore "PLANNED" out
+        Just iBlocked = lengthBefore "BLOCKED" out
+        Just iIdea    = lengthBefore "IDEA"    out
+    assertBool "READY before PLANNED" (iReady < iPlanned)
+    assertBool "PLANNED before BLOCKED" (iPlanned < iBlocked)
+    assertBool "BLOCKED before IDEA" (iBlocked < iIdea)
+  where
+    lengthBefore needle haystack =
+        let (pre, suf) = T.breakOn needle haystack
+        in if T.null suf then Nothing else Just (T.length pre)
+
+testSingleStateNoHeader :: IO ()
+testSingleStateNoHeader = do
+    let rows = [mkRow "01ABCDEFGH01" "only ready" Ready (Just 5) [] 0 0 Nothing]
+        out  = renderTaskList True rows [Ready]
+    assertBool "no READY header" (not ("READY" `T.isInfixOf` out))
+    assertBool "still has the row" ("only ready" `T.isInfixOf` out)
+
+testAsciiBars :: IO ()
+testAsciiBars = do
+    let rows = [mkRow "01ABCDEFGH01" "task" Ready (Just 5) [] 0 0 Nothing]
+        out  = renderTaskList False rows [Ready]
+    assertBool "uses # for filled" ("#####....." `T.isInfixOf` out)
+    assertBool "no unicode bullet" (not ("●" `T.isInfixOf` out))
+
+testBlockedReason :: IO ()
+testBlockedReason = do
+    let longReason = T.replicate 80 "x"
+        rows = [ mkRow "01ABCDEFGH01" "short" Blocked (Just 5) [] 0 0 (Just "nope")
+               , mkRow "01ABCDEFGH02" "long"  Blocked (Just 5) [] 0 0 (Just longReason)
+               ]
+        out = renderTaskList True rows [Blocked]
+    assertBool "shows short reason" ("nope" `T.isInfixOf` out)
+    assertBool "no priority bar in blocked" (not ("●●●●●·····" `T.isInfixOf` out))
+    assertBool "long reason truncated with ellipsis" ((T.replicate 57 "x" <> "...") `T.isInfixOf` out)
+
+testEdgeCountFormat :: IO ()
+testEdgeCountFormat = do
+    let rows = [ mkRow "01ABCDEFGH01" "no edges"   Ready (Just 5) [] 0 0 Nothing
+               , mkRow "01ABCDEFGH02" "deps only"  Ready (Just 5) [] 2 0 Nothing
+               , mkRow "01ABCDEFGH03" "refs only"  Ready (Just 5) [] 0 3 Nothing
+               , mkRow "01ABCDEFGH04" "both"       Ready (Just 5) [] 1 4 Nothing
+               ]
+        out  = renderTaskList True rows [Ready]
+        line title = head $ filter (T.isInfixOf title) (T.lines out)
+    assertBool "no edges → no bracket" (not ("[deps" `T.isInfixOf` line "no edges") && not ("[refs" `T.isInfixOf` line "no edges"))
+    assertBool "deps-only" ("[deps:2]" `T.isInfixOf` line "deps only")
+    assertBool "refs-only" ("[refs:3]" `T.isInfixOf` line "refs only")
+    assertBool "both"      ("[deps:1 refs:4]" `T.isInfixOf` line "both")
+
+testCategoryFormatting :: IO ()
+testCategoryFormatting = do
+    let dom  = mkCatPure Domain     "cli"
+        disc = mkCatPure Discipline "haskell"
+        rows = [ mkRow "01ABCDEFGH01" "both"     Ready (Just 5) [dom, disc] 0 0 Nothing
+               , mkRow "01ABCDEFGH02" "dom-only" Ready (Just 5) [dom]       0 0 Nothing
+               , mkRow "01ABCDEFGH03" "dis-only" Ready (Just 5) [disc]      0 0 Nothing
+               , mkRow "01ABCDEFGH04" "none"     Ready (Just 5) []          0 0 Nothing
+               ]
+        out  = renderTaskList True rows [Ready]
+        line title = head $ filter (T.isInfixOf title) (T.lines out)
+    assertBool "[cli/haskell]" ("[cli/haskell]" `T.isInfixOf` line "both")
+    assertBool "[cli/-]"       ("[cli/-]"       `T.isInfixOf` line "dom-only")
+    assertBool "[-/haskell]"   ("[-/haskell]"   `T.isInfixOf` line "dis-only")
+    assertBool "[-]"           ("[-]"           `T.isInfixOf` line "none")
+
+testNullPrioritySort :: IO ()
+testNullPrioritySort = do
+    let rows = [ mkRow "01ABCDEFGH01" "null-pri" Idea Nothing  [] 0 0 Nothing
+               , mkRow "01ABCDEFGH02" "low-pri"  Idea (Just 1) [] 0 0 Nothing
+               , mkRow "01ABCDEFGH03" "high-pri" Idea (Just 9) [] 0 0 Nothing
+               ]
+        out  = renderTaskList True rows [Idea]
+        ls   = filter (\l -> "pri" `T.isInfixOf` l) (T.lines out)
+        titles = map (T.strip . snd . T.breakOn "high" . T.intercalate "|") [ls]  -- guard list non-empty
+    assertBool "non-empty rendered rows" (not (null ls))
+    -- Expected order: high-pri, low-pri, null-pri (NULL last).
+    let idx t = head [i | (i, l) <- zip [0::Int ..] ls, t `T.isInfixOf` l]
+    (idx "high-pri" < idx "low-pri") @?= True
+    (idx "low-pri"  < idx "null-pri") @?= True
+    -- silence unused warning
+    seq titles (return ())

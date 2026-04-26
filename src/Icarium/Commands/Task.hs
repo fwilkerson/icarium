@@ -3,11 +3,15 @@ module Icarium.Commands.Task (Command, parser, run) where
 import           Control.Monad          (forM_, unless, void, when)
 import           Data.Aeson             (encode, object, (.=))
 import qualified Data.ByteString.Lazy   as BL
+import           Data.Char              (toUpper)
+import           Data.List              (isInfixOf)
+import           Data.Maybe             (fromMaybe)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
+import           System.Environment     (lookupEnv)
 
 import           Icarium.Commands.Util
 import           Icarium.Db             (defaultDbPath, withDb)
@@ -162,13 +166,46 @@ runList o = withDb defaultDbPath $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let effectiveStates
-            | lAll o           = []               -- no state filter
-            | not (null (lStates o)) = lStates o  -- explicit filter
-            | otherwise        = defaultActiveStates
+            | lAll o                 = []
+            | not (null (lStates o)) = lStates o
+            | otherwise              = defaultActiveStates
+        displayFilter
+            | lReady o               = [Ready]
+            | not (null (lStates o)) = lStates o
+            | otherwise              = []
     ts <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
     if lJson o
         then BL.putStr (encode ts) >> putStrLn ""
-        else TIO.putStr (Render.renderTaskList ts)
+        else do
+            taskRows <- buildTaskRows c ts
+            utf8     <- detectUtf8
+            TIO.putStr (Render.renderTaskList utf8 taskRows displayFilter)
+
+-- | Detect whether the terminal locale is UTF-8 capable.
+detectUtf8 :: IO Bool
+detectUtf8 = do
+    lcAll  <- lookupEnv "LC_ALL"
+    lcCtype <- lookupEnv "LC_CTYPE"
+    lang   <- lookupEnv "LANG"
+    let envVal = map toUpper $ fromMaybe "" (lcAll <|> lcCtype <|> lang)
+    return ("UTF" `isInfixOf` envVal)
+
+-- | Load per-task categories and edge counts in batch, build TaskRow list.
+buildTaskRows :: Connection -> [Task] -> IO [Render.TaskRow]
+buildTaskRows c ts = do
+    let ids = map taskId ts
+    catsBatch   <- RC.taskCategoriesBatch c ids
+    countsBatch <- RE.taskEdgeCounts      c ids
+    pure
+        [ Render.TaskRow
+            { Render.trTask = t
+            , Render.trCats = fromMaybe [] (lookup (taskId t) catsBatch)
+            , Render.trDeps = fst counts
+            , Render.trRefs = snd counts
+            }
+        | t <- ts
+        , let counts = fromMaybe (0, 0) (lookup (taskId t) countsBatch)
+        ]
 
 -- =============================================================
 -- show
