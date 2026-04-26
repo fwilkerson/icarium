@@ -1,5 +1,5 @@
 ---
-name: icarium-refine
+name: refinement
 description: Run a refinement session on an icarium project — verify done work, curate the task and knowledge backlogs, prune/prioritize, and write dispatch-ready task bodies. Use when the working directory contains an `.icarium/` dir or `icarium.toml`. Invoke at session start to catch up on prior context, or any time the user wants to plan/curate before the next batch of headless dispatches.
 ---
 
@@ -12,8 +12,8 @@ Icarium is a CLI for managing tasks, knowledge, and headless-Claude dispatches. 
 Catch up on the prior session's handoff:
 
 ```
-icarium know list --discipline planning
-icarium know show <id-of-top-entry>
+./bin/icarium know list --discipline planning
+./bin/icarium know show <id-of-top-entry>
 ```
 
 That entry is the prior session's handoff — what shipped, what's queued, what design questions are open, and the recommended dispatch order for the next batch.
@@ -21,8 +21,8 @@ That entry is the prior session's handoff — what shipped, what's queued, what 
 ## Then survey state
 
 ```
-icarium task list                    # ready/planned/idea backlog
-icarium dispatch list | head         # most recent runs
+./bin/icarium task list                    # ready/planned/idea backlog
+./bin/icarium dispatch list | head         # most recent runs
 ```
 
 If something looks off (interrupted dispatches, stale knowledge, surprising state), investigate before adding new work.
@@ -40,14 +40,14 @@ Standard agile-style backlog refinement, applied to both tasks and knowledge:
 ## Workflow primitives
 
 ```
-icarium task add 'TITLE' --body-stdin --state planned --priority N
-icarium task update ID --state ready
-icarium task show ID
-icarium know add 'TITLE' --body-stdin --derived-from ID
-icarium know show ID
-icarium dispatch show DISPATCH_ID
-icarium drain                        # process the ready queue
-icarium dispatch run TASK_ID         # one-shot a single task
+./bin/icarium task add 'TITLE' --body-stdin --state planned --priority N
+./bin/icarium task update ID --state ready
+./bin/icarium task show ID
+./bin/icarium know add 'TITLE' --body-stdin --derived-from ID
+./bin/icarium know show ID
+./bin/icarium dispatch show DISPATCH_ID
+./bin/icarium drain                        # process the ready queue
+./bin/icarium dispatch run TASK_ID         # one-shot a single task
 ```
 
 State machine: `idea | planned | ready | in_progress | done | blocked | abandoned`. `in_progress` is derived from an open dispatch row. `drain` only runs `ready` tasks in priority order.
@@ -57,7 +57,7 @@ State machine: `idea | planned | ready | in_progress | done | blocked | abandone
 End with a handoff knowledge entry:
 
 ```
-icarium know add 'Handoff: <short context>' \
+./bin/icarium know add 'Handoff: <short context>' \
     --discipline planning \
     --body-stdin <<'EOF'
 ... what shipped, what's queued, design questions open, recommended next moves ...
