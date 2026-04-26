@@ -53,11 +53,11 @@ K_PINNED=$($I know add "Dispatched agents use ./bin/icarium" \
 
 cat > "$T/k_prompt_lockstep" <<'EOF'
 `renderTaskPrompt` in `src/Icarium/Render.hs` is used by BOTH:
-  - `icarium task show --prompt` (preview)
+  - `icarium task show --format prompt` (preview)
   - `Icarium.Dispatch.buildPrompt` (what actually ships to claude)
 
 Changing it affects both. If you adjust the working-agreement text, the
-section headers, or the ordering, test with `task show --prompt` first —
+section headers, or the ordering, test with `task show --format prompt` first —
 that's the cheapest way to see the exact bytes the dispatcher will send.
 EOF
 K_PROMPT_LOCKSTEP=$($I know add "Prompt rendering is shared code" \

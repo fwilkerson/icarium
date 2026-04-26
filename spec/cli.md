@@ -42,10 +42,10 @@ icarium task
     [--domain <name> ...] [--discipline <name> ...]
     [--json]
 
-icarium task show <id> [--prompt]
+icarium task show <id> [--format human|json|prompt]
     Human view of task + linked knowledge + category-matched knowledge
-    + deps. With --prompt, prints the exact prompt the dispatcher would
-    build. Useful for reviewing before dispatching.
+    + deps. With --format prompt, prints the exact prompt the dispatcher
+    would build. With --format json, machine-readable output.
 
 icarium task update <id>
     [--state ...] [--priority ...] [--title ...]
@@ -68,7 +68,7 @@ icarium know add <title>
 icarium know
     [--domain ...] [--discipline ...] [--stale] [--json]
 
-icarium know show <id>
+icarium know show <id> [--format human|json]
 
 icarium know update <id>
     [--title ...] [--body ...] [--stale | --fresh]
@@ -179,4 +179,4 @@ Reads (`task show`, `know show`, `know`) are always permitted. Everything else i
 2. Body input: do we want an `$EDITOR` flow on `task add` with no body flags (like `git commit`)? Nice ergonomics for humans, easy to skip in v0.
 3. `--json` on every list or opt-in per command? I'm proposing universal.
 4. Should `icarium drain` default to `--until-empty`, or require the flag? Safer to require, I think.
-5. Agent-visible `task show --prompt` — do we want this to also be what the dispatcher actually sends, or keep them separate paths? I'd make them literally the same code.
+5. Agent-visible `task show --format prompt` — do we want this to also be what the dispatcher actually sends, or keep them separate paths? I'd make them literally the same code.

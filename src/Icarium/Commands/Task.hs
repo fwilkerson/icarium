@@ -199,17 +199,29 @@ buildTaskRows c ts = do
 -- show
 -- =============================================================
 
+data ShowFormat = SFHuman | SFJson | SFPrompt
+
+showFormatReader :: ReadM ShowFormat
+showFormatReader = eitherReader $ \s -> case s of
+    "human"  -> Right SFHuman
+    "json"   -> Right SFJson
+    "prompt" -> Right SFPrompt
+    _        -> Left ("invalid format: " <> s <> "; expected human, json, or prompt")
+
 data ShowOpts = ShowOpts
     { sId     :: Text
-    , sPrompt :: Bool
-    , sJson   :: Bool
+    , sFormat :: ShowFormat
     }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "TASK_ID")
-    <*> switch (long "prompt" <> help "Render the dispatch prompt instead")
-    <*> switch (long "json" <> help "Output JSON instead of human-formatted text")
+    <*> option showFormatReader
+            (  long "format"
+            <> metavar "FORMAT"
+            <> value SFHuman
+            <> help "Output format: human (default), json, or prompt"
+            )
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -221,21 +233,21 @@ runShow o = withDb defaultDbPath $ \c -> do
     refs <- RE.referencedKnowledge c (taskId t)
     deps <- RE.dependencyTasks     c (taskId t)
     cats <- RC.taskCategoriesFor   c (taskId t)
-    if sJson o
-        then BL.putStr (encode (object
+    case sFormat o of
+        SFJson -> BL.putStr (encode (object
                 [ "task"       .= t
                 , "deps"       .= deps
                 , "refs"       .= refs
                 , "categories" .= cats
                 ])) >> putStrLn ""
-        else do
+        _ -> do
             catMatch <- RK.categoryMatchedKnowledge c cats 5
             let refIds     = map knowledgeId refs
                 dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
             utf8 <- detectUtf8
-            TIO.putStr $ if sPrompt o
-                then Render.renderTaskPrompt t refs dedupedCat deps
-                else Render.renderTaskHuman utf8 t refs deps cats
+            TIO.putStr $ case sFormat o of
+                SFPrompt -> Render.renderTaskPrompt t refs dedupedCat deps
+                _        -> Render.renderTaskHuman utf8 t refs deps cats
 
 -- =============================================================
 -- update

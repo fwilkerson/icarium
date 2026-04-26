@@ -100,7 +100,7 @@ linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
     edgeLines = zipWith mkEdge [0..] allEdges
 
 -- | The exact prompt the dispatcher will send to the headless agent.
--- Sharing this with @task show --prompt@ keeps the two in lockstep.
+-- Sharing this with @task show --format prompt@ keeps the two in lockstep.
 -- @refs@ = explicit references (always rendered); @catMatched@ = auto-pulled
 -- by category (rendered under a separate hedged section, omitted if empty).
 renderTaskPrompt :: Task -> [Knowledge] -> [Knowledge] -> [Task] -> Text

@@ -199,15 +199,28 @@ runList o = withDb defaultDbPath $ \c -> do
 -- show
 -- =============================================================
 
+data ShowFormat = SFHuman | SFJson
+
+showFormatReader :: ReadM ShowFormat
+showFormatReader = eitherReader $ \s -> case s of
+    "human" -> Right SFHuman
+    "json"  -> Right SFJson
+    _       -> Left ("invalid format: " <> s <> "; expected human or json")
+
 data ShowOpts = ShowOpts
-    { sId   :: Text
-    , sJson :: Bool
+    { sId     :: Text
+    , sFormat :: ShowFormat
     }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "KNOWLEDGE_ID")
-    <*> switch (long "json" <> help "Output JSON instead of human-formatted text")
+    <*> option showFormatReader
+            (  long "format"
+            <> metavar "FORMAT"
+            <> value SFHuman
+            <> help "Output format: human (default) or json"
+            )
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -217,12 +230,12 @@ runShow o = withDb defaultDbPath $ \c -> do
         Right x  -> pure x
     Just k <- RK.getKnowledge c kid
     cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
-    if sJson o
-        then BL.putStr (encode (object
+    case sFormat o of
+        SFJson  -> BL.putStr (encode (object
                 [ "knowledge" .= k
                 , "categories" .= cats
                 ])) >> putStrLn ""
-        else TIO.putStr (Render.renderKnowledge k cats)
+        SFHuman -> TIO.putStr (Render.renderKnowledge k cats)
 
 -- =============================================================
 -- update
