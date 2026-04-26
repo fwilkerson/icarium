@@ -124,11 +124,11 @@ autoDeriveDeps c []   (Just tid) = do
         [t] -> pure [(TaskNode, taskId t)]
         []  -> do
             hPutStrLn stderr ("warn: ICARIUM_TASK_ID=" <> tid
-                <> " not found; skipping auto derived_from edge")
+                <> " not found; skipping auto derived-from edge")
             pure []
         _   -> do
             hPutStrLn stderr ("warn: ICARIUM_TASK_ID=" <> tid
-                <> " ambiguous; skipping auto derived_from edge")
+                <> " ambiguous; skipping auto derived-from edge")
             pure []
 
 -- | Look up an id that could refer to either a task or a knowledge entry

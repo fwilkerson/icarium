@@ -76,8 +76,18 @@ edgeKindText = \case
     DerivedFrom -> "derived_from"
     Supersedes  -> "supersedes"
 
+-- | CLI-facing parser: accepts hyphen forms only.
 parseEdgeKind :: Text -> Maybe EdgeKind
 parseEdgeKind = \case
+    "depends-on"   -> Just DependsOn
+    "references"   -> Just References
+    "derived-from" -> Just DerivedFrom
+    "supersedes"   -> Just Supersedes
+    _              -> Nothing
+
+-- | Storage parser: accepts underscore forms stored in the DB/JSON.
+parseEdgeKindDb :: Text -> Maybe EdgeKind
+parseEdgeKindDb = \case
     "depends_on"   -> Just DependsOn
     "references"   -> Just References
     "derived_from" -> Just DerivedFrom
@@ -121,7 +131,7 @@ enumFromField label p f = do
 
 instance FromField TaskState    where fromField = enumFromField "task state"    parseTaskState
 instance FromField Effort       where fromField = enumFromField "effort"        parseEffort
-instance FromField EdgeKind     where fromField = enumFromField "edge kind"     parseEdgeKind
+instance FromField EdgeKind     where fromField = enumFromField "edge kind"     parseEdgeKindDb
 instance FromField NodeKind     where fromField = enumFromField "node kind"     parseNodeKind
 instance FromField CategoryAxis where fromField = enumFromField "category axis" parseCategoryAxis
 
@@ -319,7 +329,7 @@ instance FromJSON Effort where
 
 instance FromJSON EdgeKind where
     parseJSON = withText "EdgeKind" $ \t ->
-        either fail pure (parseEnum "edge kind" parseEdgeKind t)
+        either fail pure (parseEnum "edge kind" parseEdgeKindDb t)
 
 instance FromJSON NodeKind where
     parseJSON = withText "NodeKind" $ \t ->

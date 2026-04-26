@@ -194,10 +194,18 @@ taskStateTests =
 
 edgeKindTests :: [TestTree]
 edgeKindTests =
-    [ roundTrip edgeKindText parseEdgeKind "depends_on"   DependsOn
-    , roundTrip edgeKindText parseEdgeKind "references"   References
-    , roundTrip edgeKindText parseEdgeKind "derived_from" DerivedFrom
-    , roundTrip edgeKindText parseEdgeKind "supersedes"   Supersedes
+    -- parseEdgeKind accepts hyphens (CLI form); edgeKindText still produces
+    -- underscores (storage form) — the two are intentionally asymmetric.
+    [ testCase "depends-on parses"    $ parseEdgeKind "depends-on"   @?= Just DependsOn
+    , testCase "references parses"    $ parseEdgeKind "references"   @?= Just References
+    , testCase "derived-from parses"  $ parseEdgeKind "derived-from" @?= Just DerivedFrom
+    , testCase "supersedes parses"    $ parseEdgeKind "supersedes"   @?= Just Supersedes
+    , testCase "depends_on rejected"  $ parseEdgeKind "depends_on"   @?= Nothing
+    , testCase "derived_from rejected"$ parseEdgeKind "derived_from" @?= Nothing
+    , testCase "edgeKindText DependsOn"   $ edgeKindText DependsOn   @?= "depends_on"
+    , testCase "edgeKindText References"  $ edgeKindText References  @?= "references"
+    , testCase "edgeKindText DerivedFrom" $ edgeKindText DerivedFrom @?= "derived_from"
+    , testCase "edgeKindText Supersedes"  $ edgeKindText Supersedes  @?= "supersedes"
     ]
 
 effortTests :: [TestTree]

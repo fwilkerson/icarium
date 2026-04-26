@@ -48,7 +48,7 @@ addP = AddOpts . T.pack
     <$> strArgument (metavar "SRC_ID")
     <*> argument edgeKindReader
             (metavar "KIND"
-             <> help "depends_on | references | derived_from | supersedes")
+             <> help "depends-on | references | derived-from | supersedes")
     <*> (T.pack <$> strArgument (metavar "DST_ID"))
 
 -- | Resolve a node id (ULID prefix or full) to (kind, canonical id).

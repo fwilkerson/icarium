@@ -66,9 +66,9 @@ K_PROMPT_LOCKSTEP=$($I know add "Prompt rendering is shared code" \
 
 cat > "$T/k_edge_typing" <<'EOF'
 Edge kinds and their allowed endpoints:
-  depends_on   : task -> task
+  depends-on   : task -> task
   references   : task -> knowledge
-  derived_from : knowledge -> task or knowledge
+  derived-from : knowledge -> task or knowledge
   supersedes   : knowledge -> knowledge
 
 Self-edges are forbidden. These rules are enforced by CHECK constraints
@@ -287,11 +287,11 @@ T_SIGINT=$($I task add \
 
 cat > "$T/t_staleness" <<'EOF'
 When a knowledge row is superseded — new knowledge supersedes old —
-mark the old as stale and cascade: any knowledge derived_from the
+mark the old as stale and cascade: any knowledge derived-from the
 old also becomes stale, transitively.
 
 When a knowledge's source task has its body edited, all knowledge
-derived_from that task should be marked stale.
+derived-from that task should be marked stale.
 
 Open questions before implementing:
   - Trigger-based vs an explicit `icarium know recompute-stale` pass?

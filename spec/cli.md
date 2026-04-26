@@ -76,7 +76,7 @@ icarium know update <id>
 icarium know rm <id> [--force]
 
 icarium know prune
-    List knowledge flagged stale (transitively via derived_from or
+    List knowledge flagged stale (transitively via derived-from or
     supersedes). With --delete, remove them. Default: list only.
 ```
 
@@ -84,7 +84,7 @@ icarium know prune
 
 ```
 icarium link add <src-id> <kind> <dst-id>
-    kind ∈ depends_on | references | derived_from | supersedes
+    kind ∈ depends-on | references | derived-from | supersedes
     Endpoint types validated against kind rules.
 
 icarium link list [--from <id>] [--to <id>] [--kind ...] [--json]

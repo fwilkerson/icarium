@@ -43,7 +43,11 @@ edgeKindReader :: ReadM EdgeKind
 edgeKindReader = eitherReader $ \s ->
     case parseEdgeKind (T.pack s) of
         Just k  -> Right k
-        Nothing -> Left ("invalid edge kind: " <> s)
+        Nothing -> Left $ case s of
+            "depends_on"   -> "use `depends-on`, not `depends_on`"
+            "derived_from" -> "use `derived-from`, not `derived_from`"
+            _              -> "invalid edge kind: " <> s
+                           <> "; accepted: depends-on, references, derived-from, supersedes"
 
 axisReader :: ReadM CategoryAxis
 axisReader = eitherReader $ \s ->
