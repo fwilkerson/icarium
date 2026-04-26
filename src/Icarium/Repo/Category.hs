@@ -14,7 +14,8 @@ import           Data.List              (groupBy, sortBy)
 import           Data.Ord               (comparing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
-import           Database.SQLite.Simple (Connection, Query (..), SQLData (..), execute, query, query_)
+import           Database.SQLite.Simple (Connection, Query (..), SQLData (..), execute, query,
+                                         query_)
 
 import           Icarium.Id             (newId)
 import           Icarium.Types          (Category (..), CategoryAxis (..), categoryAxisText)

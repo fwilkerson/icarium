@@ -1,35 +1,35 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary, renderDispatch) where
 
-import           Control.Monad         (forM_, unless, void, when)
-import           Data.Aeson            (FromJSON (..), decode, encode, object, withObject, (.:?),
-                                        (.=))
-import qualified Data.ByteString.Lazy  as BL
-import           Data.Either           (fromRight)
-import           Data.Maybe            (fromMaybe, isNothing, listToMaybe, mapMaybe)
-import           Data.Text             (Text)
-import qualified Data.Text             as T
-import qualified Data.Text.Encoding    as TE
-import qualified Data.Text.IO          as TIO
-import           Data.Time             (UTCTime, defaultTimeLocale, diffUTCTime, getCurrentTime,
-                                        parseTimeM)
+import           Control.Monad          (forM_, unless, void, when)
+import           Data.Aeson             (FromJSON (..), decode, encode, object, withObject, (.:?),
+                                         (.=))
+import qualified Data.ByteString.Lazy   as BL
+import           Data.Either            (fromRight)
+import           Data.Maybe             (fromMaybe, isNothing, listToMaybe, mapMaybe)
+import           Data.Text              (Text)
+import qualified Data.Text              as T
+import qualified Data.Text.Encoding     as TE
+import qualified Data.Text.IO           as TIO
+import           Data.Time              (UTCTime, defaultTimeLocale, diffUTCTime, getCurrentTime,
+                                         parseTimeM)
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
-import           System.Directory      (doesFileExist)
-import           System.Exit           (ExitCode (..))
-import           System.IO             (hPutStrLn, stderr)
-import           System.Process.Typed  (nullStream, proc, runProcess, setStderr, setStdout)
-import           Text.Printf           (printf)
+import           System.Directory       (doesFileExist)
+import           System.Exit            (ExitCode (..))
+import           System.IO              (hPutStrLn, stderr)
+import           System.Process.Typed   (nullStream, proc, runProcess, setStderr, setStdout)
+import           Text.Printf            (printf)
 
-import qualified Icarium.Git           as Git
+import qualified Icarium.Git            as Git
 
 import           Icarium.Commands.Util
-import           Icarium.Config        (Config, DispatchConfig (..), cfgDispatch,
-                                        defaultConfigPath, loadConfig)
-import           Icarium.Db            (defaultDbPath, withDb)
-import qualified Icarium.Dispatch      as D
-import qualified Icarium.Repo.Dispatch as RD
-import qualified Icarium.Repo.Edge     as RE
-import qualified Icarium.Repo.Task     as RT
+import           Icarium.Config         (Config, DispatchConfig (..), cfgDispatch,
+                                         defaultConfigPath, loadConfig)
+import           Icarium.Db             (defaultDbPath, withDb)
+import qualified Icarium.Dispatch       as D
+import qualified Icarium.Repo.Dispatch  as RD
+import qualified Icarium.Repo.Edge      as RE
+import qualified Icarium.Repo.Task      as RT
 import           Icarium.Types
 
 data Command

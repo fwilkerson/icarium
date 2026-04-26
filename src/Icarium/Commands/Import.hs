@@ -1,17 +1,17 @@
 module Icarium.Commands.Import (Options, parser, run) where
 
-import           Control.Monad          (forM_, unless, when)
-import           Data.Aeson             (FromJSON (..), eitherDecode, withObject, (.:))
-import qualified Data.ByteString.Lazy   as BL
-import           Data.Text              (Text)
-import           Database.SQLite.Simple          (Connection, Only (..), Query (..), SQLData,
-                                                  execute, query_, withTransaction)
-import           Database.SQLite.Simple.ToField  (toField)
+import           Control.Monad                  (forM_, unless, when)
+import           Data.Aeson                     (FromJSON (..), eitherDecode, withObject, (.:))
+import qualified Data.ByteString.Lazy           as BL
+import           Data.Text                      (Text)
+import           Database.SQLite.Simple         (Connection, Only (..), Query (..), SQLData,
+                                                 execute, query_, withTransaction)
+import           Database.SQLite.Simple.ToField (toField)
 import           Options.Applicative
-import           System.IO              (stdin)
+import           System.IO                      (stdin)
 
-import           Icarium.Db             (defaultDbPath, withDb)
-import           Icarium.Schema         (schemaVersion)
+import           Icarium.Db                     (defaultDbPath, withDb)
+import           Icarium.Schema                 (schemaVersion)
 import           Icarium.Types
 
 data Options = Options

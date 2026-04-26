@@ -12,7 +12,8 @@ import           System.Directory       (doesFileExist, findExecutable)
 import           System.Exit            (ExitCode (..), exitWith)
 import           System.Process.Typed   (nullStream, proc, runProcess, setStderr, setStdout)
 
-import           Icarium.Config         (DispatchConfig (..), cfgDispatch, defaultConfigPath, loadConfig)
+import           Icarium.Config         (DispatchConfig (..), cfgDispatch, defaultConfigPath,
+                                         loadConfig)
 import           Icarium.Db             (dbSchemaVersion, defaultDbPath, openDb)
 import qualified Icarium.Repo.Dispatch  as RD
 import           Icarium.Schema         (schemaVersion)
