@@ -128,6 +128,7 @@ requireKnowledge c kid = do
 
 data ListOpts = ListOpts
     { lStates     :: [TaskState]
+    , lAll        :: Bool
     , lReady      :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
@@ -138,6 +139,7 @@ listP :: Parser ListOpts
 listP = ListOpts
     <$> many (option taskStateReader (long "state" <> metavar "STATE"
            <> help "Filter by task state (repeatable)"))
+    <*> switch (long "all"   <> help "Include done tasks")
     <*> switch (long "ready" <> help "Only tasks ready to dispatch")
     <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Filter by domain category"))
@@ -145,11 +147,18 @@ listP = ListOpts
            <> help "Filter by discipline category"))
     <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
+defaultActiveStates :: [TaskState]
+defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked, Abandoned]
+
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
-    ts <- RT.listTasks c (lStates o) (lReady o) (lDomain o) (lDiscipline o)
+    let effectiveStates
+            | lAll o           = []               -- no state filter
+            | not (null (lStates o)) = lStates o  -- explicit filter
+            | otherwise        = defaultActiveStates
+    ts <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
     if lJson o
         then BL.putStr (encode ts) >> putStrLn ""
         else TIO.putStr (Render.renderTaskList ts)

@@ -27,7 +27,7 @@ parser = Options
 run :: Options -> IO ()
 run Options{..} = withDb defaultDbPath $ \conn -> do
     tasks      <- RT.listTasks conn [] False Nothing Nothing
-    knowledge  <- RK.listKnowledge conn False Nothing Nothing
+    knowledge  <- RK.listKnowledge conn Nothing Nothing Nothing
     edges      <- RE.listEdges conn Nothing Nothing Nothing
     categories <- RC.listCategories conn Nothing
     dispatches <- RD.listDispatches conn Nothing

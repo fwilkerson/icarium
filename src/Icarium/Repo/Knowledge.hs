@@ -53,19 +53,24 @@ getKnowledge conn kid = do
         (k:_) -> Just k
         []    -> Nothing
 
-listKnowledge :: Connection -> Bool -> Maybe Text -> Maybe Text -> IO [Knowledge]
-listKnowledge conn staleOnly mDomain mDisc =
+-- | List knowledge entries. @staleFilter@: @Nothing@ = all entries,
+-- @Just True@ = stale only, @Just False@ = exclude stale.
+listKnowledge :: Connection -> Maybe Bool -> Maybe Text -> Maybe Text -> IO [Knowledge]
+listKnowledge conn staleFilter mDomain mDisc =
     query conn q params
   where
-    (whereClause, params) = knowCatWhere staleOnly mDomain mDisc
+    (whereClause, params) = knowCatWhere staleFilter mDomain mDisc
     q = Query $ "SELECT " <> knowCols <> " FROM knowledge" <> whereClause <> " ORDER BY created_at ASC"
 
-knowCatWhere :: Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
-knowCatWhere staleOnly mDomain mDisc =
+knowCatWhere :: Maybe Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
+knowCatWhere staleFilter mDomain mDisc =
     let catSubq axis = "id IN (SELECT knowledge_id FROM knowledge_categories kc"
                     <> " JOIN categories c ON c.id = kc.category_id"
                     <> " WHERE c.axis = '" <> axis <> "' AND c.name = ?)"
-        staleClauses = ["stale = 1" | staleOnly]
+        staleClauses = case staleFilter of
+            Nothing    -> []
+            Just True  -> ["stale = 1"]
+            Just False -> ["stale = 0"]
         catFilters   = catMaybes
             [ fmap (\n -> (catSubq "domain",      SQLText n)) mDomain
             , fmap (\n -> (catSubq "discipline",   SQLText n)) mDisc

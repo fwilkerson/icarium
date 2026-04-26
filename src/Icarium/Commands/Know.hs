@@ -140,6 +140,7 @@ requireKnowledge c kid = do
 
 data ListOpts = ListOpts
     { lStale      :: Bool
+    , lAll        :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
     , lJson       :: Bool
@@ -148,6 +149,7 @@ data ListOpts = ListOpts
 listP :: Parser ListOpts
 listP = ListOpts
     <$> switch (long "stale" <> help "Only entries flagged stale")
+    <*> switch (long "all"   <> help "Include stale entries")
     <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
@@ -158,7 +160,11 @@ runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
-    ks <- RK.listKnowledge c (lStale o) (lDomain o) (lDiscipline o)
+    let staleFilter
+            | lStale o  = Just True   -- stale only
+            | lAll o    = Nothing     -- show all
+            | otherwise = Just False  -- hide stale (default)
+    ks <- RK.listKnowledge c staleFilter (lDomain o) (lDiscipline o)
     if lJson o
         then BL.putStr (encode ks) >> putStrLn ""
         else TIO.putStr (Render.renderKnowledgeList ks)
