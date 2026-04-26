@@ -1,4 +1,4 @@
-module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
+module Icarium.Commands.Dispatch (Command, parser, run, printSummary, renderDispatch) where
 
 import           Control.Monad         (unless)
 import           Data.Aeson            (FromJSON (..), decode, encode, object, withObject, (.:?),
@@ -307,8 +307,8 @@ runShow o = withDb defaultDbPath $ \c -> do
 
 renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
 renderDispatch d mt ks = T.unlines $
-    [ field "id"            (T.take 10 (dispatchId d))
-    , field "task_id"       (T.take 10 (dispatchTaskId d))
+    [ field "id"            (dispatchId d)
+    , field "task_id"       (dispatchTaskId d)
     , field "task_title"    (maybe "(task missing)" taskTitle mt)
     , field "branch"        (dispatchBranch d)
     , field "base_branch"   (dispatchBaseBranch d)

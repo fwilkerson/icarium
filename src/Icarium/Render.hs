@@ -35,7 +35,7 @@ data TaskRow = TaskRow
 -- | Human-facing task view. Shows metadata + body + linked nodes.
 renderTaskHuman :: Task -> [Knowledge] -> [Task] -> [Category] -> Text
 renderTaskHuman t refs deps cats = T.unlines $
-    [ "id:        " <> T.take 10 (taskId t)
+    [ "id:        " <> taskId t
     , "title:     " <> taskTitle t
     , "state:     " <> taskStateText (taskState t)
     , priorityLine t
@@ -281,7 +281,7 @@ formatEdgeCounts d r =
 
 renderKnowledge :: Knowledge -> [Category] -> Text
 renderKnowledge k cats = T.unlines $
-    [ "id:       " <> T.take 10 (knowledgeId k)
+    [ "id:       " <> knowledgeId k
     , "title:    " <> knowledgeTitle k
     , "stale:    " <> (if knowledgeStale k then "yes" else "no")
     , "created:  " <> knowledgeCreatedAt k

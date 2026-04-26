@@ -21,7 +21,8 @@ import           Icarium.Db             (dbSchemaVersion, migrateDb)
 import           Icarium.Dispatch       (postClaudeGuard)
 import           Icarium.Id             (newId)
 import qualified Icarium.Render
-import           Icarium.Render         (renderKnowledgeList, renderTaskList, renderTaskPrompt)
+import           Icarium.Render         (renderKnowledge, renderKnowledgeList, renderTaskHuman, renderTaskList, renderTaskPrompt)
+import           Icarium.Commands.Dispatch (renderDispatch)
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Knowledge as RK
@@ -73,6 +74,11 @@ main = defaultMain $ testGroup "icarium"
     , testGroup "10-char ULID prefix rendering"
         [ testCase "task list id column is 10 chars"      testTaskListIdWidth
         , testCase "knowledge list id column is 10 chars" testKnowledgeListIdWidth
+        ]
+    , testGroup "show views render full ULIDs"
+        [ testCase "task show id is 26 chars"      testTaskShowIdFull
+        , testCase "knowledge show id is 26 chars" testKnowledgeShowIdFull
+        , testCase "dispatch show id is 26 chars"  testDispatchShowIdFull
         ]
     , testGroup "renderTaskList grouped view"
         [ testCase "groups in READY/PLANNED/BLOCKED/IDEA order with counts" testGroupedHeaders
@@ -710,3 +716,64 @@ testTitleExactlyAtLimit = do
         out  = renderTaskList True rows [Ready]
     assertBool "title at limit appears untruncated" (exactTitle `T.isInfixOf` out)
     assertBool "no ellipsis when title fits" (not ("…" `T.isInfixOf` out))
+
+-- =============================================================
+-- show views render full ULIDs
+-- =============================================================
+
+minKnowledge :: Knowledge
+minKnowledge = Knowledge
+    { knowledgeId        = "01KNOW000000000000000000KK"
+    , knowledgeTitle     = "Test knowledge"
+    , knowledgeBody      = "Know body"
+    , knowledgeStale     = False
+    , knowledgeCreatedAt = "2026-01-01T00:00:00Z"
+    , knowledgeUpdatedAt = "2026-01-01T00:00:00Z"
+    }
+
+minDispatch :: Dispatch
+minDispatch = Dispatch
+    { dispatchId         = "01DISP000000000000000000DD"
+    , dispatchTaskId     = "01TEST00000000000000000000"
+    , dispatchBranch     = "dispatch/01DISP000000000000000000DD"
+    , dispatchBaseBranch = "main"
+    , dispatchBaseSha    = "0000000000000000000000000000000000000000"
+    , dispatchPid        = Nothing
+    , dispatchModel      = "claude-sonnet-4-6"
+    , dispatchEffort     = Medium
+    , dispatchStartedAt  = "2026-01-01T00:00:00Z"
+    , dispatchHeartbeat  = "2026-01-01T00:00:00Z"
+    , dispatchEndedAt    = Nothing
+    , dispatchOutcome    = Nothing
+    , dispatchMergeSha   = Nothing
+    , dispatchLastCommit = Nothing
+    , dispatchNotes      = Nothing
+    , dispatchLogPath    = Nothing
+    }
+
+testTaskShowIdFull :: IO ()
+testTaskShowIdFull = do
+    let out  = renderTaskHuman minTask [] [] []
+        ls   = T.lines out
+        idLine = head $ filter ("id:" `T.isPrefixOf`) ls
+        val  = T.strip (T.drop (T.length "id:") idLine)
+    T.length val @?= 26
+
+testKnowledgeShowIdFull :: IO ()
+testKnowledgeShowIdFull = do
+    let out  = renderKnowledge minKnowledge []
+        ls   = T.lines out
+        idLine = head $ filter ("id:" `T.isPrefixOf`) ls
+        val  = T.strip (T.drop (T.length "id:") idLine)
+    T.length val @?= 26
+
+testDispatchShowIdFull :: IO ()
+testDispatchShowIdFull = do
+    let out  = renderDispatch minDispatch (Just minTask) []
+        ls   = T.lines out
+        fieldVal prefix = T.strip . T.drop (T.length prefix) . head
+                        $ filter (prefix `T.isPrefixOf`) ls
+        idVal      = fieldVal "id:"
+        taskIdVal  = fieldVal "task_id:"
+    T.length idVal     @?= 26
+    T.length taskIdVal @?= 26
