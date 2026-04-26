@@ -169,7 +169,7 @@ doReal conn req = do
     mBr <- Git.createBranch branch base
     case mBr of
         Left e ->
-            finishWith conn did branch OFailure Nothing
+            finishWith conn did branch base OFailure Nothing
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
@@ -421,7 +421,7 @@ handlePostClaude
     -> IO DispatchResult
 handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
     ExitFailure c ->
-        finishWith conn did branch OFailure Nothing
+        finishWith conn did branch base OFailure Nothing
             ("claude exited " <> T.pack (show c)) ret
             (Just logPath) (Just baseSha)
     ExitSuccess -> do
@@ -429,7 +429,7 @@ handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
         mBranchSha <- Git.revParse branch
         case postClaudeGuard clean mBranchSha baseSha of
             Just msg ->
-                finishWith conn did branch OFailure Nothing msg ret
+                finishWith conn did branch base OFailure Nothing msg ret
                     (Just logPath) (Just baseSha)
             Nothing -> do
                 case mBranchSha of
@@ -441,25 +441,25 @@ handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
                     Right _ -> runGate (ccTest cc)
                 case gated of
                     Left notes ->
-                        finishWith conn did branch OFailure Nothing notes ret
+                        finishWith conn did branch base OFailure Nothing notes ret
                             (Just logPath) (Just baseSha)
                     Right () -> do
                         e1 <- Git.checkout base
                         case e1 of
-                            Left err -> finishWith conn did branch OFailure Nothing
+                            Left err -> finishWith conn did branch base OFailure Nothing
                                 ("checkout base: " <> T.pack (show err)) ret
                                 (Just logPath) (Just baseSha)
                             Right () -> do
                                 e2 <- Git.ffMerge branch
                                 case e2 of
-                                    Left err -> finishWith conn did branch OFailure Nothing
+                                    Left err -> finishWith conn did branch base OFailure Nothing
                                         ("ff-merge: " <> T.pack (show err)) ret
                                         (Just logPath) (Just baseSha)
                                     Right () -> do
                                         _ <- Git.deleteBranch branch
                                         mShaBase <- Git.revParse base
                                         let mergeSha = either (const Nothing) Just mShaBase
-                                        finishWith conn did branch OSuccess mergeSha "merged" ret
+                                        finishWith conn did branch base OSuccess mergeSha "merged" ret
                                             (Just logPath) (Just baseSha)
   where
     ret = dcLogRetentionRuns (cfgDispatch cfg)
@@ -493,10 +493,15 @@ runGate cmdText
 -- =============================================================
 
 finishWith
-    :: Connection -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text -> Int
+    :: Connection -> Text -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text -> Int
     -> Maybe FilePath -> Maybe Text
     -> IO DispatchResult
-finishWith conn did branch outcome mSha notes retention mLogPath mBaseSha = do
+finishWith conn did branch base outcome mSha notes retention mLogPath mBaseSha = do
+    -- Best-effort: on failure, return to the base branch so the next
+    -- dispatch (e.g. drain mode) doesn't fail its on-base-branch
+    -- precondition. Ignore errors here so we don't mask the original
+    -- failure note.
+    when (outcome == OFailure) $ void (Git.checkout base)
     RD.finishDispatch conn did outcome mSha (Just notes)
     pruneLogFiles conn retention
     pure DispatchResult
