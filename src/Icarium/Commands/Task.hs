@@ -31,7 +31,6 @@ data Command
 parser :: Parser Command
 parser = subparser
     ( subcmd "add"      "Add a task"                                 (Add     <$> addP)
-   <> subcmd "list"     "List tasks"                                 (List    <$> listP)
    <> subcmd "show"     "Show a task"                                (Show    <$> showP)
    <> subcmd "update"   "Update a task"                              (Update  <$> updateP)
    <> subcmd "rm"       "Delete a task"                              (Rm      <$> rmP)

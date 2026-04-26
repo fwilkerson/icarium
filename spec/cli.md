@@ -37,7 +37,7 @@ icarium task add <title>
     [--references <knowledge-id> ...]
     Prints the new task id on success.
 
-icarium task list
+icarium task
     [--state <s> ...] [--ready] [--blocked]
     [--domain <name> ...] [--discipline <name> ...]
     [--json]
@@ -65,7 +65,7 @@ icarium know add <title>
     [--derived-from <id> ...]         (task or knowledge id)
     [--supersedes <knowledge-id>]
 
-icarium know list
+icarium know
     [--domain ...] [--discipline ...] [--stale] [--json]
 
 icarium know show <id>
@@ -164,7 +164,7 @@ icarium know add <title> --body-file - [--domain ...] [--discipline ...] [--deri
 icarium link add <src> <kind> <dst>
 ```
 
-Reads (`task show`, `know show`, `know list`) are always permitted. Everything else is discouraged via the system prompt and hard-blocked by `allowed_tools` in `icarium.toml` (icarium CLI is exposed as `Bash(icarium:*)`; we rely on the CLI itself to refuse destructive verbs when run inside a dispatch by checking an env var `ICARIUM_DISPATCH_ID`).
+Reads (`task show`, `know show`, `know`) are always permitted. Everything else is discouraged via the system prompt and hard-blocked by `allowed_tools` in `icarium.toml` (icarium CLI is exposed as `Bash(icarium:*)`; we rely on the CLI itself to refuse destructive verbs when run inside a dispatch by checking an env var `ICARIUM_DISPATCH_ID`).
 
 ## Output conventions
 

@@ -30,7 +30,6 @@ data Command
 parser :: Parser Command
 parser = subparser
     ( subcmd "add"      "Add a knowledge entry"    (Add     <$> addP)
-   <> subcmd "list"     "List knowledge"           (List    <$> listP)
    <> subcmd "show"     "Show a knowledge entry"   (Show    <$> showP)
    <> subcmd "update"   "Update a knowledge entry" (Update  <$> updateP)
    <> subcmd "rm"       "Delete a knowledge entry" (Rm      <$> rmP)

@@ -328,4 +328,4 @@ T_KNOW_PRUNE=$($I task add \
 
 echo ""
 echo "--- seeded ---"
-$I task list
+$I task
