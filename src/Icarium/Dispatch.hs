@@ -87,11 +87,14 @@ doDryRun :: Connection -> DispatchRequest -> IO DispatchResult
 doDryRun conn req = do
     prompt <- buildPrompt conn (drTask req)
     fakeId <- newId
-    let branch = dispatchBranchName fakeId
-        model  = effectiveModel  req
-        effort = effectiveEffort req
-        base   = effectiveBase   req
-        tools  = dcAllowedTools (cfgDispatch (drConfig req))
+    let dcfg       = cfgDispatch (drConfig req)
+        branch     = dispatchBranchName fakeId
+        model      = effectiveModel  req
+        effort     = effectiveEffort req
+        base       = effectiveBase   req
+        tools      = dcTools         dcfg
+        allowed    = dcAllowedTools  dcfg
+        scratchDir = dcScratchDir    dcfg
 
     TIO.putStrLn "=== DRY RUN ==="
     TIO.putStrLn $ "dispatch id (simulated): " <> fakeId
@@ -100,10 +103,12 @@ doDryRun conn req = do
     TIO.putStrLn $ "dispatch branch:         " <> branch
     TIO.putStrLn $ "model:                   " <> model
     TIO.putStrLn $ "effort:                  " <> effortText effort
-    TIO.putStrLn $ "allowed_tools:           " <> T.intercalate "," tools
+    TIO.putStrLn $ "tools:                   " <> T.intercalate "," tools
+    TIO.putStrLn $ "allowed_tools:           " <> T.intercalate "," allowed
+    TIO.putStrLn $ "scratch_dir:             " <> scratchDir
     TIO.putStrLn ""
     TIO.putStrLn "--- claude invocation ---"
-    TIO.putStrLn (renderCmdPreview model tools)
+    TIO.putStrLn (renderCmdPreview model tools allowed)
     TIO.putStrLn ""
     TIO.putStrLn "--- prompt (via stdin) ---"
     TIO.putStr prompt
@@ -117,13 +122,15 @@ doDryRun conn req = do
         , dresBaseSha    = Nothing
         }
 
-renderCmdPreview :: Text -> [Text] -> Text
-renderCmdPreview model tools = T.unwords
+renderCmdPreview :: Text -> [Text] -> [Text] -> Text
+renderCmdPreview model tools allowed = T.unwords
     [ "claude -p"
     , "--model", model
     , "--output-format stream-json"
     , "--verbose"
-    , "--allowedTools \"" <> T.intercalate "," tools <> "\""
+    , "--tools \"" <> T.intercalate "," tools <> "\""
+    , "--disable-slash-commands"
+    , "--allowedTools \"" <> T.intercalate "," allowed <> "\""
     ]
 
 -- =============================================================
@@ -132,12 +139,15 @@ renderCmdPreview model tools = T.unwords
 
 doReal :: Connection -> DispatchRequest -> IO DispatchResult
 doReal conn req = do
-    let cfg   = drConfig req
-        task  = drTask   req
-        base  = effectiveBase   req
-        model = effectiveModel  req
-        effort= effectiveEffort req
-        tools = dcAllowedTools (cfgDispatch cfg)
+    let cfg        = drConfig req
+        dcfg       = cfgDispatch cfg
+        task       = drTask   req
+        base       = effectiveBase   req
+        model      = effectiveModel  req
+        effort     = effectiveEffort req
+        tools      = dcTools         dcfg
+        allowed    = dcAllowedTools  dcfg
+        scratchDir = dcScratchDir    dcfg
 
     checkPreconditions base
     baseSha <- either (ioFail . show) pure =<< Git.revParse base
@@ -148,6 +158,7 @@ doReal conn req = do
         logDir  = ".icarium" </> "logs"
         logPath = logDir </> T.unpack did <> ".jsonl"
     createDirectoryIfMissing True logDir
+    createDirectoryIfMissing True (T.unpack scratchDir)
 
     RD.insertDispatch conn did RD.NewDispatch
         { RD.ndTaskId     = taskId task
@@ -173,7 +184,7 @@ doReal conn req = do
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
-            exit <- runClaudeStreaming did task prompt model tools logPath
+            exit <- runClaudeStreaming did task prompt model tools allowed scratchDir logPath
             handlePostClaude conn did branch base cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
@@ -193,9 +204,9 @@ checkPreconditions base = do
 -- =============================================================
 
 runClaudeStreaming
-    :: Text -> Task -> Text -> Text -> [Text] -> FilePath
+    :: Text -> Task -> Text -> Text -> [Text] -> [Text] -> Text -> FilePath
     -> IO ExitCode
-runClaudeStreaming did task prompt model tools logPath = do
+runClaudeStreaming did task prompt model tools allowed scratchDir logPath = do
     parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args =
@@ -203,13 +214,16 @@ runClaudeStreaming did task prompt model tools logPath = do
             , "--model", T.unpack model
             , "--output-format", "stream-json"
             , "--verbose"
-            , "--allowedTools", T.unpack (T.intercalate "," tools)
+            , "--tools", T.unpack (T.intercalate "," tools)
+            , "--disable-slash-commands"
+            , "--allowedTools", T.unpack (T.intercalate "," allowed)
             ]
         -- Inherit parent env so claude can find ~/.claude credentials
         -- via $HOME; append icarium's own vars.
         env = parentEnv ++
-            [ ("ICARIUM_DISPATCH_ID", T.unpack did)
-            , ("ICARIUM_TASK_ID",     T.unpack (taskId task))
+            [ ("ICARIUM_DISPATCH_ID",  T.unpack did)
+            , ("ICARIUM_TASK_ID",      T.unpack (taskId task))
+            , ("ICARIUM_SCRATCH_DIR",  T.unpack scratchDir)
             ]
         pcfg = setStdin  (byteStringInput promptBytes)
              $ setStdout createPipe
@@ -425,9 +439,9 @@ handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
             ("claude exited " <> T.pack (show c)) ret
             (Just logPath) (Just baseSha)
     ExitSuccess -> do
-        clean      <- Git.isClean
+        porcelain  <- Git.statusPorcelain
         mBranchSha <- Git.revParse branch
-        case postClaudeGuard clean mBranchSha baseSha of
+        case postClaudeGuard porcelain mBranchSha baseSha of
             Just msg ->
                 finishWith conn did branch base OFailure Nothing msg ret
                     (Just logPath) (Just baseSha)
@@ -466,16 +480,22 @@ handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
 
 -- | Pure guard logic for the post-claude checks. Returns Just an error
 -- message if a guard fires, Nothing if both pass.
---   * Dirty-tree guard fires when the working tree has uncommitted edits.
+--   * Dirty-tree guard fires when @porcelain@ (raw `git status --porcelain`
+--     output) is non-empty after stripping. The porcelain content is
+--     embedded in the message so the operator can see *what* was left
+--     behind without digging through the log.
 --   * Empty-diff guard fires when the dispatch branch SHA equals baseSha
 --     (agent exited success but made no commits).
-postClaudeGuard :: Bool -> Either e Text -> Text -> Maybe Text
-postClaudeGuard clean mBranchSha baseSha
-    | not clean                       = Just "agent left uncommitted changes; refusing to merge"
-    | branchSha == Just baseSha       = Just "agent made no commits on dispatch branch"
-    | otherwise                       = Nothing
+postClaudeGuard :: Text -> Either e Text -> Text -> Maybe Text
+postClaudeGuard porcelain mBranchSha baseSha
+    | not (T.null porcStripped) = Just dirtyMsg
+    | branchSha == Just baseSha = Just "agent made no commits on dispatch branch"
+    | otherwise                 = Nothing
   where
-    branchSha = either (const Nothing) Just mBranchSha
+    porcStripped = T.strip porcelain
+    branchSha    = either (const Nothing) Just mBranchSha
+    dirtyMsg     = "agent left uncommitted changes; refusing to merge\nuncommitted:\n"
+                <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
 
 -- | Run a shell command (as a single string, so users can include
 -- pipes and &&). Returns () on exit 0; otherwise a short note.

@@ -2,6 +2,7 @@ module Icarium.Git
     ( GitError(..)
     , runGit
     , isClean
+    , statusPorcelain
     , currentBranch
     , revParse
     , createBranch
@@ -39,11 +40,17 @@ runGit args = do
                                       , gitExit = c }
 
 isClean :: IO Bool
-isClean = do
+isClean = T.null . T.strip <$> statusPorcelain
+
+-- | Raw `git status --porcelain` output (already stripped). Empty means
+-- the working tree is clean. On git failure returns a non-empty sentinel
+-- so callers conservatively treat the tree as dirty.
+statusPorcelain :: IO Text
+statusPorcelain = do
     r <- runGit ["status", "--porcelain"]
     pure $ case r of
-        Right out -> T.null out
-        Left  _   -> False
+        Right out -> out
+        Left  _   -> "?? <git status failed>"
 
 currentBranch :: IO (Either GitError Text)
 currentBranch = runGit ["rev-parse", "--abbrev-ref", "HEAD"]

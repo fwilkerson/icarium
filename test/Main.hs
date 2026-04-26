@@ -151,26 +151,31 @@ newSha = "bbbb1111"
 
 testGuardDirtyTree :: IO ()
 testGuardDirtyTree =
-    postClaudeGuard False (Right newSha) baseSha
-        @?= Just "agent left uncommitted changes; refusing to merge"
+    postClaudeGuard "?? snapshot-test.json\n M src/Foo.hs" (Right newSha) baseSha
+        @?= Just "agent left uncommitted changes; refusing to merge\n\
+                 \uncommitted:\n\
+                 \  ?? snapshot-test.json\n\
+                 \   M src/Foo.hs"
 
 testGuardEmptyDiff :: IO ()
 testGuardEmptyDiff =
-    postClaudeGuard True (Right baseSha) baseSha
+    postClaudeGuard "" (Right baseSha) baseSha
         @?= Just "agent made no commits on dispatch branch"
 
 testGuardDirtyFirst :: IO ()
 testGuardDirtyFirst =
-    postClaudeGuard False (Right baseSha) baseSha
-        @?= Just "agent left uncommitted changes; refusing to merge"
+    postClaudeGuard "?? leftover.txt" (Right baseSha) baseSha
+        @?= Just "agent left uncommitted changes; refusing to merge\n\
+                 \uncommitted:\n\
+                 \  ?? leftover.txt"
 
 testGuardPasses :: IO ()
 testGuardPasses =
-    postClaudeGuard True (Right newSha) baseSha @?= Nothing
+    postClaudeGuard "" (Right newSha) baseSha @?= Nothing
 
 testGuardRevParseError :: IO ()
 testGuardRevParseError =
-    postClaudeGuard True (Left ("git error" :: String)) baseSha @?= Nothing
+    postClaudeGuard "" (Left ("git error" :: String)) baseSha @?= Nothing
 
 -- =============================================================
 -- Round-trip tests

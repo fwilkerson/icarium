@@ -43,7 +43,9 @@ data CommandsConfig = CommandsConfig
 data DispatchConfig = DispatchConfig
     { dcModel                 :: Text
     , dcEffort                :: Effort
+    , dcTools                 :: [Text]
     , dcAllowedTools          :: [Text]
+    , dcScratchDir            :: Text
     , dcMaxMinutesPerDispatch :: Int
     , dcMaxDispatchesPerRun   :: Int
     , dcHeartbeatStaleSeconds :: Int
@@ -78,7 +80,9 @@ dispatchCodec :: TomlCodec DispatchConfig
 dispatchCodec = DispatchConfig
     <$> Toml.text                     "model"                    .= dcModel
     <*> effortField                   "effort"                   .= dcEffort
+    <*> Toml.arrayOf Toml._Text       "tools"                    .= dcTools
     <*> Toml.arrayOf Toml._Text       "allowed_tools"            .= dcAllowedTools
+    <*> Toml.text                     "scratch_dir"              .= dcScratchDir
     <*> Toml.int                      "max_minutes_per_dispatch" .= dcMaxMinutesPerDispatch
     <*> Toml.int                      "max_dispatches_per_run"   .= dcMaxDispatchesPerRun
     <*> Toml.int                      "heartbeat_stale_seconds"  .= dcHeartbeatStaleSeconds
@@ -123,10 +127,12 @@ defaultConfigText =
     \[dispatch]\n\
     \model  = \"claude-sonnet-4-6\"\n\
     \effort = \"medium\"\n\
+    \tools = [\"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\", \"Bash\"]\n\
     \allowed_tools = [\n\
     \  \"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\",\n\
     \  \"Bash(icarium:*)\", \"Bash(git:*)\", \"Bash(cabal:*)\",\n\
     \]\n\
+    \scratch_dir = \".icarium/scratch\"\n\
     \max_minutes_per_dispatch = 30\n\
     \max_dispatches_per_run   = 20\n\
     \heartbeat_stale_seconds  = 300\n\

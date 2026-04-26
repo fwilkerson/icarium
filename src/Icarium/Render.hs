@@ -163,6 +163,8 @@ workingAgreement t =
     , "- Record anything you learn that future tasks should know as knowledge:"
     , "    `./bin/icarium know add '<title>' --body-file -`"
     , "- Commit your code before exiting; the program marks the task done after the gates pass and the FF-merge succeeds."
+    , "- Test artifacts (snapshots, fixtures, scratch files) MUST go in `$ICARIUM_SCRATCH_DIR`,"
+    , "  never in the working tree. The post-claude gate refuses to merge when the tree is dirty."
     , ""
     ]
 
