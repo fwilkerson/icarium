@@ -1,4 +1,4 @@
-module Icarium.Commands.Know (Command, parser, run) where
+module Icarium.Commands.Know (Command, parser, run, autoDeriveDeps) where
 
 import           Control.Monad          (forM_, void)
 import           Data.Aeson             (encode, object, (.=))
@@ -9,6 +9,7 @@ import qualified Data.Text.IO           as TIO
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
 import           System.Environment     (lookupEnv)
+import           System.IO              (hPutStrLn, stderr)
 
 import           Icarium.Commands.Util
 import           Icarium.Db             (defaultDbPath, withDb)
@@ -79,32 +80,55 @@ runAdd o = withDb defaultDbPath $ \c -> do
     derived <- mapM (resolveNode c) (aDerivedFrom o)
     mSupersedesId <- mapM (requireKnowledge c) (aSupersedes o)
 
+    mTaskId <- lookupEnv "ICARIUM_TASK_ID"
+
     -- Per-axis inheritance: if an axis has no explicit flag and
     -- ICARIUM_TASK_ID is set, copy that axis's categories from the task.
     inheritedCats <- if null (aDomains o) || null (aDisciplines o)
-        then do
-            mTaskId <- lookupEnv "ICARIUM_TASK_ID"
-            case mTaskId of
-                Nothing  -> pure []
-                Just tid -> do
-                    allCats <- RC.taskCategoriesFor c (T.pack tid)
-                    pure $ filter (\cat ->
-                        (null (aDomains o)     && categoryAxis cat == Domain) ||
-                        (null (aDisciplines o) && categoryAxis cat == Discipline)
-                        ) allCats
+        then case mTaskId of
+            Nothing  -> pure []
+            Just tid -> do
+                allCats <- RC.taskCategoriesFor c (T.pack tid)
+                pure $ filter (\cat ->
+                    (null (aDomains o)     && categoryAxis cat == Domain) ||
+                    (null (aDisciplines o) && categoryAxis cat == Discipline)
+                    ) allCats
         else pure []
+
+    -- Auto-derive from ICARIUM_TASK_ID when no --derived-from was given.
+    autoDerived <- autoDeriveDeps c (aDerivedFrom o) mTaskId
 
     kid <- RK.insertKnowledge c RK.NewKnowledge
         { RK.nkTitle = aTitle o, RK.nkBody = body }
     forM_ (domains <> disc <> inheritedCats) $ \cat ->
         RC.attachKnowledgeCategory c kid (categoryId cat)
-    forM_ derived $ \(nkind, nid) ->
+    forM_ (derived <> autoDerived) $ \(nkind, nid) ->
         void $ RE.insertEdge c DerivedFrom KnowledgeNode kid nkind nid
     case mSupersedesId of
         Just target ->
             void $ RE.insertEdge c Supersedes KnowledgeNode kid KnowledgeNode target
         Nothing -> pure ()
     TIO.putStrLn kid
+
+-- | If no explicit --derived-from was supplied and ICARIUM_TASK_ID is set,
+-- returns a singleton edge pointing at the dispatched task.
+-- Explicit list non-empty → empty result (explicit wins).
+-- Task missing/ambiguous → warns to stderr and returns empty.
+autoDeriveDeps :: Connection -> [Text] -> Maybe String -> IO [(NodeKind, Text)]
+autoDeriveDeps _ (_:_) _        = pure []
+autoDeriveDeps _ []   Nothing   = pure []
+autoDeriveDeps c []   (Just tid) = do
+    tasks <- RT.getTasksByPrefix c (T.pack tid)
+    case tasks of
+        [t] -> pure [(TaskNode, taskId t)]
+        []  -> do
+            hPutStrLn stderr ("warn: ICARIUM_TASK_ID=" <> tid
+                <> " not found; skipping auto derived_from edge")
+            pure []
+        _   -> do
+            hPutStrLn stderr ("warn: ICARIUM_TASK_ID=" <> tid
+                <> " ambiguous; skipping auto derived_from edge")
+            pure []
 
 -- | Look up an id that could refer to either a task or a knowledge entry
 -- via ULID prefix match.

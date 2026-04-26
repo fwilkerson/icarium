@@ -23,6 +23,7 @@ import           Icarium.Id             (newId)
 import qualified Icarium.Render
 import           Icarium.Render         (renderKnowledge, renderKnowledgeList, renderTaskHuman, renderTaskList, renderTaskPrompt)
 import           Icarium.Commands.Dispatch (renderDispatch)
+import           Icarium.Commands.Know  (autoDeriveDeps)
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Edge      as RE
@@ -114,6 +115,12 @@ main = defaultMain $ testGroup "icarium"
         , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis" testTitleTruncatedUtf8
         , testCase "90-char title truncated with ASCII ... in ASCII mode"  testTitleTruncatedAscii
         , testCase "title at exactly 72 chars renders without truncation"  testTitleExactlyAtLimit
+        ]
+    , testGroup "autoDeriveDeps"
+        [ testCase "ICARIUM_TASK_ID set, no explicit → edge inserted"     testAutoDeriveDepsEdgeInserted
+        , testCase "explicit --derived-from wins over ICARIUM_TASK_ID"    testAutoDeriveDepsExplicitWins
+        , testCase "ICARIUM_TASK_ID unset → no auto edge"                 testAutoDeriveDepsNoEnv
+        , testCase "ICARIUM_TASK_ID set but task missing → empty"         testAutoDeriveDepsTaskMissing
         ]
     , testGroup "task show links section"
         [ testCase "no edges renders (none)"                               testLinksNoEdges
@@ -952,6 +959,36 @@ testDispatchShowIdFull = do
         taskIdVal  = fieldVal "task_id:"
     T.length idVal     @?= 26
     T.length taskIdVal @?= 26
+
+-- =============================================================
+-- autoDeriveDeps tests
+-- =============================================================
+
+testAutoDeriveDepsEdgeInserted :: IO ()
+testAutoDeriveDepsEdgeInserted = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "Dispatch task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    result <- autoDeriveDeps c [] (Just (T.unpack tid))
+    result @?= [(TaskNode, tid)]
+
+testAutoDeriveDepsExplicitWins :: IO ()
+testAutoDeriveDepsExplicitWins = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "Dispatch task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    otherTid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "Other task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    result <- autoDeriveDeps c [otherTid] (Just (T.unpack tid))
+    result @?= []
+
+testAutoDeriveDepsNoEnv :: IO ()
+testAutoDeriveDepsNoEnv = withTestDb $ \c -> do
+    result <- autoDeriveDeps c [] Nothing
+    result @?= []
+
+testAutoDeriveDepsTaskMissing :: IO ()
+testAutoDeriveDepsTaskMissing = withTestDb $ \c -> do
+    result <- autoDeriveDeps c [] (Just "01ZZZZZZZZ0000000000000000")
+    result @?= []
 
 -- =============================================================
 -- task show links section tests
