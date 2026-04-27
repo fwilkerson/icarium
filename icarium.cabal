@@ -43,8 +43,6 @@ library
                       Icarium.Commands.Link
                       Icarium.Commands.Category
                       Icarium.Commands.Dispatch
-                      Icarium.Commands.Export
-                      Icarium.Commands.Import
     build-depends:    base          >= 4.18 && < 5,
                       text,
                       bytestring,

@@ -1,9 +1,6 @@
 module Icarium.Commands.Know (Command, parser, run, autoDeriveDeps) where
 
 import           Control.Monad          (forM_, void)
-import           Data.Aeson             (encode, object, (.=))
-import qualified Data.ByteString.Lazy   as BL
-import           Data.Char              (toLower)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -168,7 +165,6 @@ data ListOpts = ListOpts
     , lAll        :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
-    , lJson       :: Bool
     }
 
 listP :: Parser ListOpts
@@ -179,7 +175,6 @@ listP = ListOpts
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Filter by discipline category"))
-    <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do
@@ -190,44 +185,18 @@ runList o = withDb defaultDbPath $ \c -> do
             | lAll o    = Nothing     -- show all
             | otherwise = Just False  -- hide stale (default)
     ks <- RK.listKnowledge c staleFilter (lDomain o) (lDiscipline o)
-    if lJson o
-        then BL.putStr (encode ks) >> putStrLn ""
-        else do
-            utf8 <- detectUtf8
-            TIO.putStr (Render.renderKnowledgeList utf8 ks)
+    utf8 <- detectUtf8
+    TIO.putStr (Render.renderKnowledgeList utf8 ks)
 
 -- =============================================================
 -- show
 -- =============================================================
 
-data ShowFormat = SFHuman | SFJson
-
-showFormatReader :: ReadM ShowFormat
-showFormatReader = eitherReader $ \s -> case s of
-    "human" -> Right SFHuman
-    "json"  -> Right SFJson
-    _       -> Left ("invalid format: " <> s <> "; expected human or json")
-
-staleBoolReader :: ReadM Bool
-staleBoolReader = eitherReader $ \s -> case map toLower s of
-    "true"  -> Right True
-    "false" -> Right False
-    _       -> Left ("invalid value: " <> s <> "; expected true or false")
-
-data ShowOpts = ShowOpts
-    { sId     :: Text
-    , sFormat :: ShowFormat
-    }
+newtype ShowOpts = ShowOpts { sId :: Text }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "KNOWLEDGE_ID")
-    <*> option showFormatReader
-            (  long "format"
-            <> metavar "FORMAT"
-            <> value SFHuman
-            <> help "Output format: human (default) or json"
-            )
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -237,12 +206,7 @@ runShow o = withDb defaultDbPath $ \c -> do
         Right x  -> pure x
     Just k <- RK.getKnowledge c kid
     cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
-    case sFormat o of
-        SFJson  -> BL.putStr (encode (object
-                [ "knowledge" .= k
-                , "categories" .= cats
-                ])) >> putStrLn ""
-        SFHuman -> TIO.putStr (Render.renderKnowledge k cats)
+    TIO.putStr (Render.renderKnowledge k cats)
 
 -- =============================================================
 -- update
@@ -263,15 +227,17 @@ updateP = UpdateOpts . T.pack
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
            <> help "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`."))
     <*> bodyInputParser
-    <*> optional (option staleBoolReader
-            (  long "stale"
-            <> metavar "BOOL"
-            <> help "Set stale flag: true or false"
-            ))
+    <*> staleFlag
     <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Tag with this domain category"))
     <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Tag with this discipline category"))
+
+staleFlag :: Parser (Maybe Bool)
+staleFlag =
+        (Just True  <$ switch (long "stale"     <> help "Mark entry as stale"))
+    <|> (Just False <$ switch (long "not-stale" <> help "Mark entry as not stale"))
+    <|> pure Nothing
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do

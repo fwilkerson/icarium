@@ -22,10 +22,10 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"  "Add an edge"     (Add  <$> addP)
-   <> subcmd "list" "List edges"      (List <$> listP)
-   <> subcmd "rm"   "Delete an edge"  (Rm   <$> rmP)
+    ( subcmd "add"  "Add an edge"    (Add  <$> addP)
+   <> subcmd "rm"   "Delete an edge" (Rm   <$> rmP)
     )
+    <|> (List <$> listP)
 
 run :: Command -> IO ()
 run = \case
@@ -72,7 +72,7 @@ checkTyping DerivedFrom KnowledgeNode TaskNode      = Right ()
 checkTyping DerivedFrom KnowledgeNode KnowledgeNode = Right ()
 checkTyping Supersedes  KnowledgeNode KnowledgeNode = Right ()
 checkTyping k sk dk = Left $
-    "edge " <> T.unpack (edgeKindText k) <> " requires "
+    "edge " <> T.unpack (edgeKindDisplay k) <> " requires "
     <> expectedShape k <> " but got "
     <> T.unpack (nodeKindText sk) <> " -> " <> T.unpack (nodeKindText dk)
 

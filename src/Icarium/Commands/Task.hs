@@ -1,8 +1,6 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
 import           Control.Monad          (forM_, unless, void, when)
-import           Data.Aeson             (encode, object, (.=))
-import qualified Data.ByteString.Lazy   as BL
 import           Data.Maybe             (fromMaybe, isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
@@ -139,7 +137,6 @@ data ListOpts = ListOpts
     , lReady      :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
-    , lJson       :: Bool
     }
 
 listP :: Parser ListOpts
@@ -151,7 +148,6 @@ listP = ListOpts
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Filter by discipline category"))
-    <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
 defaultActiveStates :: [TaskState]
 defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked, Abandoned]
@@ -168,12 +164,9 @@ runList o = withDb defaultDbPath $ \c -> do
             | not (null (lStates o)) = lStates o
             | otherwise              = []
     ts <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
-    if lJson o
-        then BL.putStr (encode ts) >> putStrLn ""
-        else do
-            taskRows <- buildTaskRows c ts
-            utf8     <- detectUtf8
-            TIO.putStr (Render.renderTaskList utf8 taskRows displayFilter)
+    taskRows <- buildTaskRows c ts
+    utf8     <- detectUtf8
+    TIO.putStr (Render.renderTaskList utf8 taskRows displayFilter)
 
 -- | Load per-task categories and edge counts in batch, build TaskRow list.
 buildTaskRows :: Connection -> [Task] -> IO [Render.TaskRow]
@@ -196,14 +189,13 @@ buildTaskRows c ts = do
 -- show
 -- =============================================================
 
-data ShowFormat = SFHuman | SFJson | SFPrompt
+data ShowFormat = SFHuman | SFPrompt
 
 showFormatReader :: ReadM ShowFormat
 showFormatReader = eitherReader $ \s -> case s of
     "human"  -> Right SFHuman
-    "json"   -> Right SFJson
     "prompt" -> Right SFPrompt
-    _        -> Left ("invalid format: " <> s <> "; expected human, json, or prompt")
+    _        -> Left ("invalid format: " <> s <> "; expected human or prompt")
 
 data ShowOpts = ShowOpts
     { sId     :: Text
@@ -217,7 +209,7 @@ showP = ShowOpts . T.pack
             (  long "format"
             <> metavar "FORMAT"
             <> value SFHuman
-            <> help "Output format: human (default), json, or prompt"
+            <> help "Output format: human (default) or prompt"
             )
 
 runShow :: ShowOpts -> IO ()
@@ -227,21 +219,13 @@ runShow o = withDb defaultDbPath $ \c -> do
     refs <- RE.referencedKnowledge c (taskId t)
     deps <- RE.dependencyTasks     c (taskId t)
     cats <- RC.taskCategoriesFor   c (taskId t)
-    case sFormat o of
-        SFJson -> BL.putStr (encode (object
-                [ "task"       .= t
-                , "deps"       .= deps
-                , "refs"       .= refs
-                , "categories" .= cats
-                ])) >> putStrLn ""
-        _ -> do
-            catMatch <- RK.categoryMatchedKnowledge c cats 5
-            let refIds     = map knowledgeId refs
-                dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
-            utf8 <- detectUtf8
-            TIO.putStr $ case sFormat o of
-                SFPrompt -> Render.renderTaskPrompt t refs dedupedCat deps
-                _        -> Render.renderTaskHuman utf8 t refs deps cats
+    catMatch <- RK.categoryMatchedKnowledge c cats 5
+    let refIds     = map knowledgeId refs
+        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+    utf8 <- detectUtf8
+    TIO.putStr $ case sFormat o of
+        SFPrompt -> Render.renderTaskPrompt t refs dedupedCat deps
+        SFHuman  -> Render.renderTaskHuman utf8 t refs deps cats
 
 -- =============================================================
 -- update

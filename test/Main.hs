@@ -200,18 +200,23 @@ taskStateTests =
 
 edgeKindTests :: [TestTree]
 edgeKindTests =
-    -- parseEdgeKind accepts hyphens (CLI form); edgeKindText still produces
-    -- underscores (storage form) — the two are intentionally asymmetric.
+    -- parseEdgeKind accepts hyphens (CLI form)
+    -- edgeKindDbText produces underscores (DB storage form)
+    -- edgeKindDisplay produces hyphens (human/CLI display)
     [ testCase "depends-on parses"    $ parseEdgeKind "depends-on"   @?= Just DependsOn
     , testCase "references parses"    $ parseEdgeKind "references"   @?= Just References
     , testCase "derived-from parses"  $ parseEdgeKind "derived-from" @?= Just DerivedFrom
     , testCase "supersedes parses"    $ parseEdgeKind "supersedes"   @?= Just Supersedes
     , testCase "depends_on rejected"  $ parseEdgeKind "depends_on"   @?= Nothing
     , testCase "derived_from rejected"$ parseEdgeKind "derived_from" @?= Nothing
-    , testCase "edgeKindText DependsOn"   $ edgeKindText DependsOn   @?= "depends_on"
-    , testCase "edgeKindText References"  $ edgeKindText References  @?= "references"
-    , testCase "edgeKindText DerivedFrom" $ edgeKindText DerivedFrom @?= "derived_from"
-    , testCase "edgeKindText Supersedes"  $ edgeKindText Supersedes  @?= "supersedes"
+    , testCase "edgeKindDbText DependsOn"   $ edgeKindDbText DependsOn   @?= "depends_on"
+    , testCase "edgeKindDbText References"  $ edgeKindDbText References  @?= "references"
+    , testCase "edgeKindDbText DerivedFrom" $ edgeKindDbText DerivedFrom @?= "derived_from"
+    , testCase "edgeKindDbText Supersedes"  $ edgeKindDbText Supersedes  @?= "supersedes"
+    , testCase "edgeKindDisplay DependsOn"   $ edgeKindDisplay DependsOn   @?= "depends-on"
+    , testCase "edgeKindDisplay References"  $ edgeKindDisplay References  @?= "references"
+    , testCase "edgeKindDisplay DerivedFrom" $ edgeKindDisplay DerivedFrom @?= "derived-from"
+    , testCase "edgeKindDisplay Supersedes"  $ edgeKindDisplay Supersedes  @?= "supersedes"
     ]
 
 effortTests :: [TestTree]

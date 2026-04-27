@@ -1,8 +1,7 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary, renderDispatch) where
 
 import           Control.Monad          (forM_, unless, void, when)
-import           Data.Aeson             (FromJSON (..), decode, encode, object, withObject, (.:?),
-                                         (.=))
+import           Data.Aeson             (FromJSON (..), decode, withObject, (.:?))
 import qualified Data.ByteString.Lazy   as BL
 import           Data.Either            (fromRight)
 import           Data.Maybe             (fromMaybe, isNothing, listToMaybe, mapMaybe)
@@ -44,11 +43,11 @@ parser = subparser
     ( subcmd "run"
         "Dispatch a task. With TASK_ID: run one. Without: drain the ready queue (priority order) until empty or --max reached."
         (Run  <$> runP)
-   <> subcmd "list" "List dispatches"       (List <$> listP)
-   <> subcmd "show" "Show a single dispatch" (Show <$> showP)
-   <> subcmd "logs" "Print the jsonl event log" (Logs <$> logsP)
+   <> subcmd "show"    "Show a single dispatch"                    (Show    <$> showP)
+   <> subcmd "logs"    "Print the jsonl event log"                 (Logs    <$> logsP)
    <> subcmd "recover" "Reconcile orphaned in-progress dispatches" (Recover <$> recoverP)
     )
+    <|> (List <$> listP)
 
 run :: Command -> IO ()
 run = \case
@@ -263,7 +262,6 @@ summarize r = do
 data ListOpts = ListOpts
     { lTask    :: Maybe Text
     , lOutcome :: Maybe DispatchOutcome
-    , lJson    :: Bool
     }
 
 listP :: Parser ListOpts
@@ -272,7 +270,6 @@ listP = ListOpts
                                         <> help "Only dispatches for this task"))
     <*> optional (option outcomeReader (long "outcome" <> metavar "OUTCOME"
                                         <> help "success | failure | interrupted"))
-    <*> switch (long "json" <> help "Output JSON array instead of human-formatted table")
 
 outcomeReader :: ReadM DispatchOutcome
 outcomeReader = eitherReader $ \s ->
@@ -287,9 +284,7 @@ runList o = withDb defaultDbPath $ \c -> do
     let filtered = case lOutcome o of
             Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
-    if lJson o
-        then BL.putStr (encode filtered) >> putStrLn ""
-        else TIO.putStr (renderDispatchList filtered)
+    TIO.putStr (renderDispatchList filtered)
 
 renderDispatchList :: [Dispatch] -> Text
 renderDispatchList ds =
@@ -319,15 +314,11 @@ padR n t
 -- show
 -- =============================================================
 
-data ShowOpts = ShowOpts
-    { sId   :: Text
-    , sJson :: Bool
-    }
+newtype ShowOpts = ShowOpts { sId :: Text }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "DISPATCH_ID")
-    <*> switch (long "json" <> help "Output JSON instead of human-formatted text")
 
 runShow :: ShowOpts -> IO ()
 runShow o = withDb defaultDbPath $ \c -> do
@@ -341,13 +332,7 @@ runShow o = withDb defaultDbPath $ \c -> do
             mt <- RT.getTask c (dispatchTaskId d)
             ks <- RE.knowledgeDerivedFromDispatch c (dispatchTaskId d)
                     (dispatchStartedAt d) (dispatchEndedAt d)
-            if sJson o
-                then BL.putStr (encode (object
-                        [ "dispatch"            .= d
-                        , "task"                .= mt
-                        , "knowledge_produced"  .= ks
-                        ])) >> putStrLn ""
-                else TIO.putStr (renderDispatch d mt ks)
+            TIO.putStr (renderDispatch d mt ks)
 
 renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
 renderDispatch d mt ks = T.unlines $

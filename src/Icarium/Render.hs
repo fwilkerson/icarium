@@ -325,7 +325,7 @@ renderKnowledgeList utf8 ks = T.unlines $ header : map row ks
 renderEdgeLine :: Edge -> Text
 renderEdgeLine e =
     T.take 10 (edgeId e) <> "  "
-    <> edgeKindText (edgeKind e) <> "  "
+    <> edgeKindDisplay (edgeKind e) <> "  "
     <> nodeKindText (edgeSrcKind e) <> ":" <> T.take 10 (edgeSrcId e)
     <> "  ->  "
     <> nodeKindText (edgeDstKind e) <> ":" <> T.take 10 (edgeDstId e)

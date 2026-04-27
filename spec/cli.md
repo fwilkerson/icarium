@@ -1,10 +1,8 @@
-# icarium CLI surface (draft — review before implementation)
+# icarium CLI surface
 
 All commands take `--db <path>` (default: `./.icarium/icarium.db`) and `--config <path>` (default: `./icarium.toml`).
 
-List commands support `--json` for machine-readable output. Default is human-readable table.
-
-Exit codes: `0` success, `1` not-found / no-op (e.g. `next` with empty queue), `2` validation error, `3` gate failure during dispatch, `4` interrupted / recovery needed.
+Exit codes: `0` success, `1` not-found / no-op (e.g. `next` with empty queue), `2` validation error, `3` gate failure during dispatch.
 
 ## Project lifecycle
 
@@ -16,14 +14,6 @@ icarium init [--force]
 icarium doctor
     Validate config, schema version, git state, claude CLI presence,
     allowed-tools list. Prints a checklist; exit 2 on any failure.
-
-icarium export [FILE]
-    Dump tasks/knowledge/edges/categories/dispatches as JSON. Used for
-    backup and hand-off. Default: stdout. Use - for explicit stdout.
-
-icarium import [FILE]
-    Apply a JSON export. Reads from FILE (or stdin if omitted / -).
-    Refuses if DB is non-empty without --merge.
 ```
 
 ## Tasks
@@ -39,22 +29,25 @@ icarium task add <title>
     Prints the new task id on success.
 
 icarium task
-    [--state <s> ...] [--ready] [--blocked]
-    [--domain <name> ...] [--discipline <name> ...]
-    [--json]
+    [--state <s> ...] [--ready]
+    [--domain <name>] [--discipline <name>]
+    Lists tasks grouped by state.
 
-icarium task show <id> [--format human|json|prompt]
+icarium task show <id> [--format human|prompt]
     Human view of task + linked knowledge + category-matched knowledge
     + deps. With --format prompt, prints the exact prompt the dispatcher
-    would build. With --format json, machine-readable output.
+    would build.
 
 icarium task update <id>
     [--state ...] [--priority ...] [--title ...]
     [--body ... | --body-file ...]     (use --body-file - for stdin)
     [--block-reason <text>]           (required iff --state blocked)
 
-icarium task rm <id> [--force]
-    Refuses if task has dispatches unless --force.
+icarium task rm <id>
+
+icarium task next
+    Print the id of the next ready task (priority DESC, created_at ASC).
+    Exit 1 if queue empty.
 ```
 
 ## Knowledge
@@ -67,18 +60,15 @@ icarium know add <title>
     [--supersedes <knowledge-id>]
 
 icarium know
-    [--domain ...] [--discipline ...] [--stale] [--json]
+    [--domain <name>] [--discipline <name>] [--stale] [--all]
+    Lists knowledge entries (stale hidden by default; --all includes them).
 
-icarium know show <id> [--format human|json]
+icarium know show <id>
 
 icarium know update <id>
-    [--title ...] [--body ...] [--stale BOOL]
+    [--title ...] [--body ...] [--stale | --not-stale]
 
-icarium know rm <id> [--force]
-
-icarium know prune
-    List knowledge flagged stale (transitively via derived-from or
-    supersedes). With --delete, remove them. Default: list only.
+icarium know rm <id>
 ```
 
 ## Links and categories
@@ -88,75 +78,55 @@ icarium link add <src-id> <kind> <dst-id>
     kind ∈ depends-on | references | derived-from | supersedes
     Endpoint types validated against kind rules.
 
-icarium link list [--from <id>] [--to <id>] [--kind ...] [--json]
+icarium link [--from <id>] [--to <id>] [--kind <kind>]
+    Lists edges. Bare `link` is the same as the old `link list`.
 
 icarium link rm <edge-id>
 
 icarium category add <axis> <name>
     axis ∈ domain | discipline
 
-icarium category list [--axis ...] [--json]
+icarium category [--axis <axis>]
+    Lists categories. Bare `category` is the same as the old `category list`.
 
 icarium category rm <axis> <name>
-    Refuses if attached to any task/knowledge unless --force.
 ```
 
 ## Dispatch and run loop
 
 ```
-icarium task next
-    Print the id of the next ready task (priority DESC, created_at ASC).
-    Exit 1 if queue empty.
-
-icarium dispatch run <task-id>
+icarium dispatch run [<task-id>]
     [--model <id>] [--effort low|medium|high]
     [--base-branch <name>]            (default: from config)
     [--dry-run]                       (print prompt + plan, do nothing)
-    Creates dispatch row, cuts branch, invokes claude -p with streaming
-    output. Prints live heartbeat lines to stderr. On success, FF-merges
-    to base branch. Exit code reflects dispatch outcome.
+    [--max <n>]                       (queue mode: cap dispatches)
+    With TASK_ID: dispatch one task. Without: drain the ready queue
+    in priority order until empty or --max reached.
 
-icarium drain
-    [--max <n>]                       (default: from config max_dispatches_per_run)
-    [--until-empty]                   (loop until `task next` returns empty)
-    [--model ...] [--effort ...]      (override defaults for this run)
-    Pulls tasks until queue empty, max dispatches reached, or budget
-    tripped. Prints one-line status per event (dispatch id, task, elapsed,
-    current tool, short arg). Graceful shutdown on SIGINT: finish current
-    dispatch, exit.
-
-icarium status [--watch]
-    Show open dispatches: id, task, branch, elapsed, heartbeat age,
-    current tool. --watch refreshes every 2s.
-
-icarium dispatch list [--task <id>] [--outcome success|failure|interrupted]
+icarium dispatch [--task <task-id>] [--outcome success|failure|interrupted]
     Tabular view of dispatches, newest first.
+    Bare `dispatch` is the same as the old `dispatch list`.
 
 icarium dispatch show <id>
     All columns of the dispatch row plus the linked task title.
 
 icarium dispatch logs <id> [--tail N]
     Cat the event jsonl log for a dispatch. --tail prints last N lines.
-```
 
-## Recovery
-
-```
 icarium dispatch recover [DISPATCH_ID]
     Scan for dispatches with outcome IS NULL and (dead pid OR stale
     heartbeat). For each: mark outcome=interrupted, inspect branch
-    state, move task to blocked with structured reason. Never discards
-    uncommitted work; stashes with `git stash -u -m icarium:dispatch:<id>`
-    if needed. With DISPATCH_ID, reconciles a single dispatch (prefix ok).
-
-    Prints, for each reconciled dispatch:
-      dispatch:<id> task:<id> branch:<b> uncommitted:<y|n>
-      last_commit:<sha> action: blocked
+    state, move task to blocked with structured reason.
+    With DISPATCH_ID, reconciles a single dispatch (prefix ok).
 ```
 
-## Agent-facing subset (called from inside a dispatch)
+## Edge kinds
 
-The headless agent is prompted to use these, and only these, for mutation:
+Edge kind display uses hyphens (`depends-on`, `derived-from`). This is the
+same form `link add` accepts, so output from `link` can be round-tripped
+back into `link add` without transformation.
+
+## Agent-facing subset (called from inside a dispatch)
 
 ```
 icarium task update <id> --state in_progress|done|blocked [--block-reason ...]
@@ -165,19 +135,12 @@ icarium know add <title> --body-file - [--domain ...] [--discipline ...] [--deri
 icarium link add <src> <kind> <dst>
 ```
 
-Reads (`task show`, `know show`, `know`) are always permitted. Everything else is discouraged via the system prompt and hard-blocked by `allowed_tools` in `icarium.toml` (icarium CLI is exposed as `Bash(icarium:*)`; we rely on the CLI itself to refuse destructive verbs when run inside a dispatch by checking an env var `ICARIUM_DISPATCH_ID`).
+Reads (`task show`, `know show`, `know`) are always permitted. Everything
+else is discouraged via the system prompt and hard-blocked by `allowed_tools`
+in `icarium.toml`.
 
 ## Output conventions
 
 - Human output: aligned columns, no colors unless stdout is a TTY.
-- `--json`: stable schemas; fields documented alongside the schema doc.
 - Errors: stderr, prefix `icarium: error:`, exit non-zero.
 - Heartbeat / event lines: stderr, prefix `[dispatch <short-id>]`.
-
-## Open points to confirm
-
-1. DB path default `.icarium/icarium.db` — OK, or prefer `./icarium.db` flat?
-2. Body input: do we want an `$EDITOR` flow on `task add` with no body flags (like `git commit`)? Nice ergonomics for humans, easy to skip in v0.
-3. `--json` on every list or opt-in per command? I'm proposing universal.
-4. Should `icarium drain` default to `--until-empty`, or require the flag? Safer to require, I think.
-5. Agent-visible `task show --format prompt` — do we want this to also be what the dispatcher actually sends, or keep them separate paths? I'd make them literally the same code.

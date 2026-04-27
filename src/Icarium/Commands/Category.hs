@@ -19,9 +19,9 @@ data Command
 parser :: Parser Command
 parser = subparser
     ( subcmd "add"  "Add a category"    (Add  <$> addP)
-   <> subcmd "list" "List categories"   (List <$> listP)
    <> subcmd "rm"   "Delete a category" (Rm   <$> rmP)
     )
+    <|> (List <$> listP)
 
 run :: Command -> IO ()
 run = \case

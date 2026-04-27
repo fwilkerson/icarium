@@ -3,8 +3,6 @@ module Main (main) where
 import qualified Icarium.Commands.Category as Category
 import qualified Icarium.Commands.Dispatch as Dispatch
 import qualified Icarium.Commands.Doctor   as Doctor
-import qualified Icarium.Commands.Export   as Export
-import qualified Icarium.Commands.Import   as Import
 import qualified Icarium.Commands.Init     as Init
 import qualified Icarium.Commands.Know     as Know
 import qualified Icarium.Commands.Link     as Link
@@ -19,8 +17,6 @@ data Command
     | CmdLink     Link.Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
-    | CmdExport   Export.Options
-    | CmdImport   Import.Options
 
 main :: IO ()
 main = run =<< execParser parser
@@ -33,8 +29,6 @@ run (CmdKnow c)     = Know.run c
 run (CmdLink c)     = Link.run c
 run (CmdCategory c) = Category.run c
 run (CmdDispatch c) = Dispatch.run c
-run (CmdExport o)   = Export.run o
-run (CmdImport o)   = Import.run o
 
 parser :: ParserInfo Command
 parser = info (commands <**> helper)
@@ -58,17 +52,11 @@ commands = subparser
               (progDesc "Manage knowledge entries (list is the default)"))
    <> command "link"
         (info (CmdLink <$> Link.parser <**> helper)
-              (progDesc "Manage typed edges between nodes"))
+              (progDesc "Manage typed edges between nodes (list is the default)"))
    <> command "category"
         (info (CmdCategory <$> Category.parser <**> helper)
-              (progDesc "Manage category vocabulary"))
+              (progDesc "Manage category vocabulary (list is the default)"))
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
-              (progDesc "Manage dispatches (run, list, show, logs, recover)"))
-   <> command "export"
-        (info (CmdExport <$> Export.parser <**> helper)
-              (progDesc "Dump all data as a JSON snapshot"))
-   <> command "import"
-        (info (CmdImport <$> Import.parser <**> helper)
-              (progDesc "Load a JSON snapshot into the DB"))
+              (progDesc "Manage dispatches (run, show, logs, recover; bare = list)"))
     )

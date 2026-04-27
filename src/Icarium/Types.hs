@@ -2,7 +2,7 @@ module Icarium.Types
     ( -- * Enums
       TaskState(..), taskStateText, parseTaskState
     , Effort(..), effortText, parseEffort
-    , EdgeKind(..), edgeKindText, parseEdgeKind
+    , EdgeKind(..), edgeKindDbText, edgeKindDisplay, parseEdgeKind
     , NodeKind(..), nodeKindText, parseNodeKind
     , CategoryAxis(..), categoryAxisText, parseCategoryAxis
     , DispatchOutcome(..), dispatchOutcomeText, parseDispatchOutcome
@@ -15,8 +15,6 @@ module Icarium.Types
     , Dispatch(..)
     ) where
 
-import           Data.Aeson                       (FromJSON (..), ToJSON (..), object, withObject,
-                                                   withText, (.:), (.:?), (.=))
 import           Data.Text                        (Text)
 import qualified Data.Text                        as T
 import           Data.Typeable                    (Typeable)
@@ -69,11 +67,18 @@ parseEffort = \case
 data EdgeKind = DependsOn | References | DerivedFrom | Supersedes
     deriving (Show, Eq)
 
-edgeKindText :: EdgeKind -> Text
-edgeKindText = \case
+edgeKindDbText :: EdgeKind -> Text
+edgeKindDbText = \case
     DependsOn   -> "depends_on"
     References  -> "references"
     DerivedFrom -> "derived_from"
+    Supersedes  -> "supersedes"
+
+edgeKindDisplay :: EdgeKind -> Text
+edgeKindDisplay = \case
+    DependsOn   -> "depends-on"
+    References  -> "references"
+    DerivedFrom -> "derived-from"
     Supersedes  -> "supersedes"
 
 -- | CLI-facing parser: accepts hyphen forms only.
@@ -137,7 +142,7 @@ instance FromField CategoryAxis where fromField = enumFromField "category axis" 
 
 instance ToField TaskState    where toField = toField . taskStateText
 instance ToField Effort       where toField = toField . effortText
-instance ToField EdgeKind     where toField = toField . edgeKindText
+instance ToField EdgeKind     where toField = toField . edgeKindDbText
 instance ToField NodeKind     where toField = toField . nodeKindText
 instance ToField CategoryAxis where toField = toField . categoryAxisText
 
@@ -248,152 +253,3 @@ instance FromRow Dispatch where
                        <*> field <*> field <*> field <*> field
                        <*> field <*> field <*> field <*> field
 
--- =============================================================
--- ToJSON instances (column names match DB snake_case names)
--- =============================================================
-
-instance ToJSON Task where
-    toJSON Task{..} = object
-        [ "id"           .= taskId
-        , "title"        .= taskTitle
-        , "body"         .= taskBody
-        , "state"        .= taskStateText taskState
-        , "priority"     .= taskPriority
-        , "block_reason" .= taskBlockReason
-        , "created_at"   .= taskCreatedAt
-        , "updated_at"   .= taskUpdatedAt
-        ]
-
-instance ToJSON Knowledge where
-    toJSON Knowledge{..} = object
-        [ "id"         .= knowledgeId
-        , "title"      .= knowledgeTitle
-        , "body"       .= knowledgeBody
-        , "stale"      .= knowledgeStale
-        , "created_at" .= knowledgeCreatedAt
-        , "updated_at" .= knowledgeUpdatedAt
-        ]
-
-instance ToJSON Edge where
-    toJSON Edge{..} = object
-        [ "id"         .= edgeId
-        , "kind"       .= edgeKindText edgeKind
-        , "src_kind"   .= nodeKindText edgeSrcKind
-        , "src_id"     .= edgeSrcId
-        , "dst_kind"   .= nodeKindText edgeDstKind
-        , "dst_id"     .= edgeDstId
-        , "created_at" .= edgeCreatedAt
-        ]
-
-instance ToJSON Category where
-    toJSON Category{..} = object
-        [ "id"   .= categoryId
-        , "axis" .= categoryAxisText categoryAxis
-        , "name" .= categoryName
-        ]
-
-instance ToJSON Dispatch where
-    toJSON Dispatch{..} = object
-        [ "id"           .= dispatchId
-        , "task_id"      .= dispatchTaskId
-        , "branch"       .= dispatchBranch
-        , "base_branch"  .= dispatchBaseBranch
-        , "base_sha"     .= dispatchBaseSha
-        , "pid"          .= dispatchPid
-        , "model"        .= dispatchModel
-        , "effort"       .= effortText dispatchEffort
-        , "started_at"   .= dispatchStartedAt
-        , "heartbeat_at" .= dispatchHeartbeat
-        , "ended_at"     .= dispatchEndedAt
-        , "outcome"      .= fmap dispatchOutcomeText dispatchOutcome
-        , "merge_sha"    .= dispatchMergeSha
-        , "last_commit"  .= dispatchLastCommit
-        , "notes"        .= dispatchNotes
-        , "log_path"     .= dispatchLogPath
-        ]
-
--- =============================================================
--- FromJSON instances (mirror the ToJSON field names above)
--- =============================================================
-
-parseEnum :: String -> (Text -> Maybe a) -> Text -> Either String a
-parseEnum label p t = maybe (Left $ "invalid " <> label <> ": " <> T.unpack t) Right (p t)
-
-instance FromJSON TaskState where
-    parseJSON = withText "TaskState" $ \t ->
-        either fail pure (parseEnum "task state" parseTaskState t)
-
-instance FromJSON Effort where
-    parseJSON = withText "Effort" $ \t ->
-        either fail pure (parseEnum "effort" parseEffort t)
-
-instance FromJSON EdgeKind where
-    parseJSON = withText "EdgeKind" $ \t ->
-        either fail pure (parseEnum "edge kind" parseEdgeKindDb t)
-
-instance FromJSON NodeKind where
-    parseJSON = withText "NodeKind" $ \t ->
-        either fail pure (parseEnum "node kind" parseNodeKind t)
-
-instance FromJSON CategoryAxis where
-    parseJSON = withText "CategoryAxis" $ \t ->
-        either fail pure (parseEnum "category axis" parseCategoryAxis t)
-
-instance FromJSON DispatchOutcome where
-    parseJSON = withText "DispatchOutcome" $ \t ->
-        either fail pure (parseEnum "dispatch outcome" parseDispatchOutcome t)
-
-instance FromJSON Task where
-    parseJSON = withObject "Task" $ \o -> Task
-        <$> o .:  "id"
-        <*> o .:  "title"
-        <*> o .:  "body"
-        <*> o .:  "state"
-        <*> o .:? "priority"
-        <*> o .:? "block_reason"
-        <*> o .:  "created_at"
-        <*> o .:  "updated_at"
-
-instance FromJSON Knowledge where
-    parseJSON = withObject "Knowledge" $ \o -> Knowledge
-        <$> o .:  "id"
-        <*> o .:  "title"
-        <*> o .:  "body"
-        <*> o .:  "stale"
-        <*> o .:  "created_at"
-        <*> o .:  "updated_at"
-
-instance FromJSON Edge where
-    parseJSON = withObject "Edge" $ \o -> Edge
-        <$> o .:  "id"
-        <*> o .:  "kind"
-        <*> o .:  "src_kind"
-        <*> o .:  "src_id"
-        <*> o .:  "dst_kind"
-        <*> o .:  "dst_id"
-        <*> o .:  "created_at"
-
-instance FromJSON Category where
-    parseJSON = withObject "Category" $ \o -> Category
-        <$> o .: "id"
-        <*> o .: "axis"
-        <*> o .: "name"
-
-instance FromJSON Dispatch where
-    parseJSON = withObject "Dispatch" $ \o -> Dispatch
-        <$> o .:  "id"
-        <*> o .:  "task_id"
-        <*> o .:  "branch"
-        <*> o .:  "base_branch"
-        <*> o .:  "base_sha"
-        <*> o .:? "pid"
-        <*> o .:  "model"
-        <*> o .:  "effort"
-        <*> o .:  "started_at"
-        <*> o .:  "heartbeat_at"
-        <*> o .:? "ended_at"
-        <*> o .:? "outcome"
-        <*> o .:? "merge_sha"
-        <*> o .:? "last_commit"
-        <*> o .:? "notes"
-        <*> o .:? "log_path"
