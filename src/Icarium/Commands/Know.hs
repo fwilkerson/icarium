@@ -1,6 +1,7 @@
 module Icarium.Commands.Know (Command, parser, run, autoDeriveDeps) where
 
 import           Control.Monad          (forM_, void)
+import           Data.Maybe             (catMaybes, isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -49,8 +50,8 @@ run = \case
 data AddOpts = AddOpts
     { aTitle       :: Text
     , aBody        :: BodyInput
-    , aDomains     :: [Text]
-    , aDisciplines :: [Text]
+    , aDomain      :: Maybe Text
+    , aDiscipline  :: Maybe Text
     , aDerivedFrom :: [Text]
     , aSupersedes  :: Maybe Text
     }
@@ -59,9 +60,9 @@ addP :: Parser AddOpts
 addP = AddOpts . T.pack
     <$> strArgument (metavar "TITLE" <> help "Entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`.")
     <*> bodyInputParser
-    <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"
+    <*> optional (T.pack <$> strOption (long "domain" <> metavar "NAME"
            <> help "Tag with this domain category"))
-    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Tag with this discipline category"))
     <*> many (T.pack <$> strOption (long "derived-from" <> metavar "ID"
                 <> help "Task or knowledge id this was derived from"))
@@ -73,8 +74,8 @@ runAdd o = withDb defaultDbPath $ \c -> do
     body <- resolveBody (aBody o)
 
     -- Pre-validate category names and any referenced ids.
-    domains <- mapM (requireCategory c Domain)     (aDomains o)
-    disc    <- mapM (requireCategory c Discipline) (aDisciplines o)
+    mDomain <- mapM (requireCategory c Domain)     (aDomain o)
+    mDisc   <- mapM (requireCategory c Discipline) (aDiscipline o)
     derived <- mapM (resolveNode c) (aDerivedFrom o)
     mSupersedesId <- mapM (requireKnowledge c) (aSupersedes o)
 
@@ -82,14 +83,14 @@ runAdd o = withDb defaultDbPath $ \c -> do
 
     -- Per-axis inheritance: if an axis has no explicit flag and
     -- ICARIUM_TASK_ID is set, copy that axis's categories from the task.
-    inheritedCats <- if null (aDomains o) || null (aDisciplines o)
+    inheritedCats <- if isNothing (aDomain o) || isNothing (aDiscipline o)
         then case mTaskId of
             Nothing  -> pure []
             Just tid -> do
                 allCats <- RC.taskCategoriesFor c (T.pack tid)
                 pure $ filter (\cat ->
-                    (null (aDomains o)     && categoryAxis cat == Domain) ||
-                    (null (aDisciplines o) && categoryAxis cat == Discipline)
+                    (isNothing (aDomain o)     && categoryAxis cat == Domain) ||
+                    (isNothing (aDiscipline o) && categoryAxis cat == Discipline)
                     ) allCats
         else pure []
 
@@ -98,7 +99,7 @@ runAdd o = withDb defaultDbPath $ \c -> do
 
     kid <- RK.insertKnowledge c RK.NewKnowledge
         { RK.nkTitle = aTitle o, RK.nkBody = body }
-    forM_ (domains <> disc <> inheritedCats) $ \cat ->
+    forM_ (catMaybes [mDomain, mDisc] <> inheritedCats) $ \cat ->
         RC.attachKnowledgeCategory c kid (categoryId cat)
     forM_ (derived <> autoDerived) $ \(nkind, nid) ->
         void $ RE.insertEdge c DerivedFrom KnowledgeNode kid nkind nid
@@ -139,14 +140,6 @@ resolveNode c input = do
         ([], [k] ) -> pure (KnowledgeNode, knowledgeId k)
         ([], []  ) -> fatal 2 ("unknown node: " <> T.unpack input)
         _          -> fatal 2 ("ambiguous id: " <> T.unpack input)
-
-requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
-requireCategory c axis name = do
-    mc <- RC.findCategory c axis name
-    case mc of
-        Just cat -> pure cat
-        Nothing  -> fatal 2 ("unknown " <> T.unpack (categoryAxisText axis)
-                                       <> ": " <> T.unpack name)
 
 -- | Resolve a knowledge input (ULID prefix) to a canonical ULID.
 requireKnowledge :: Connection -> Text -> IO Text
@@ -213,12 +206,12 @@ runShow o = withDb defaultDbPath $ \c -> do
 -- =============================================================
 
 data UpdateOpts = UpdateOpts
-    { uId          :: Text
-    , uTitle       :: Maybe Text
-    , uBody        :: BodyInput
-    , uStale       :: Maybe Bool
-    , uDomains     :: [Text]
-    , uDisciplines :: [Text]
+    { uId         :: Text
+    , uTitle      :: Maybe Text
+    , uBody       :: BodyInput
+    , uStale      :: Maybe Bool
+    , uDomain     :: Maybe Text
+    , uDiscipline :: Maybe Text
     }
 
 updateP :: Parser UpdateOpts
@@ -228,10 +221,10 @@ updateP = UpdateOpts . T.pack
            <> help "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`."))
     <*> bodyInputParser
     <*> staleFlag
-    <*> many (T.pack <$> strOption (long "domain"     <> metavar "NAME"
-           <> help "Tag with this domain category"))
-    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
-           <> help "Tag with this discipline category"))
+    <*> optional (T.pack <$> strOption (long "domain" <> metavar "NAME"
+           <> help "Replace domain category; empty string clears"))
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Replace discipline category; empty string clears"))
 
 staleFlag :: Parser (Maybe Bool)
 staleFlag =
@@ -248,8 +241,9 @@ runUpdate o = withDb defaultDbPath $ \c -> do
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
-    domains <- mapM (requireCategory c Domain)     (uDomains o)
-    disc    <- mapM (requireCategory c Discipline) (uDisciplines o)
+    -- Validate categories before any mutation.
+    mDomCat  <- resolveAxisFlag c Domain     (uDomain o)
+    mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
     let upd = RK.emptyUpdate
             { RK.kuTitle = uTitle o
             , RK.kuBody  = body
@@ -257,8 +251,13 @@ runUpdate o = withDb defaultDbPath $ \c -> do
             }
     ok <- RK.updateKnowledge c kid upd
     if ok then do
-        forM_ (domains <> disc) $ \cat ->
-            RC.attachKnowledgeCategory c kid (categoryId cat)
+        -- Apply replacements: detach all of that axis, then attach new one if given.
+        forM_ mDomCat $ \mCat -> do
+            RC.detachKnowledgeCategoriesByAxis c kid Domain
+            forM_ mCat $ \cat -> RC.attachKnowledgeCategory c kid (categoryId cat)
+        forM_ mDiscCat $ \mCat -> do
+            RC.detachKnowledgeCategoriesByAxis c kid Discipline
+            forM_ mCat $ \cat -> RC.attachKnowledgeCategory c kid (categoryId cat)
         TIO.putStrLn ("updated " <> kid)
     else fatal 1 ("knowledge not found: " <> T.unpack (uId o))
 

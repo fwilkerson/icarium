@@ -7,6 +7,9 @@ module Icarium.Commands.Util
     , edgeKindReader
     , axisReader
     , effortReader
+      -- * Category validation
+    , requireCategory
+    , resolveAxisFlag
       -- * Body input handling
     , BodyInput(..)
     , bodyInputParser
@@ -16,17 +19,19 @@ module Icarium.Commands.Util
     , detectUtf8
     ) where
 
-import           Data.Char           (toUpper)
-import           Data.List           (isInfixOf)
-import           Data.Maybe          (fromMaybe)
-import           Data.Text           (Text)
-import qualified Data.Text           as T
-import qualified Data.Text.IO        as TIO
+import           Data.Char              (toUpper)
+import           Data.List              (isInfixOf)
+import           Data.Maybe             (fromMaybe)
+import           Data.Text              (Text)
+import qualified Data.Text              as T
+import qualified Data.Text.IO           as TIO
+import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
-import           System.Environment  (lookupEnv)
-import           System.Exit         (ExitCode (..), exitWith)
-import           System.IO           (hPutStrLn, stderr)
+import           System.Environment     (lookupEnv)
+import           System.Exit            (ExitCode (..), exitWith)
+import           System.IO              (hPutStrLn, stderr)
 
+import qualified Icarium.Repo.Category  as RC
 import           Icarium.Types
 
 fatal :: Int -> String -> IO a
@@ -98,3 +103,21 @@ detectUtf8 = do
     lang    <- lookupEnv "LANG"
     let envVal = map toUpper $ fromMaybe "" (lcAll <|> lcCtype <|> lang)
     return ("UTF" `isInfixOf` envVal)
+
+requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
+requireCategory c axis name = do
+    mc <- RC.findCategory c axis name
+    case mc of
+        Just cat -> pure cat
+        Nothing  -> fatal 2 $ "unknown " <> T.unpack (categoryAxisText axis)
+                    <> ": " <> T.unpack name
+                    <> "; add it to icarium.toml and run 'icarium category sync'"
+
+-- | Validate a @--domain@/@--discipline@ flag value for update commands.
+-- @Nothing@   = flag not given → no-op.
+-- @Just ""@   = flag given with empty string → clear the axis.
+-- @Just name@ = flag given with a name → validate and return the category.
+resolveAxisFlag :: Connection -> CategoryAxis -> Maybe Text -> IO (Maybe (Maybe Category))
+resolveAxisFlag _ _  Nothing   = pure Nothing
+resolveAxisFlag _ _  (Just "") = pure (Just Nothing)
+resolveAxisFlag c ax (Just n)  = Just . Just <$> requireCategory c ax n

@@ -50,14 +50,14 @@ run = \case
 -- =============================================================
 
 data AddOpts = AddOpts
-    { aTitle       :: Text
-    , aBody        :: BodyInput
-    , aState       :: TaskState
-    , aPriority    :: Maybe Int
-    , aDomains     :: [Text]
-    , aDisciplines :: [Text]
-    , aDependsOn   :: [Text]
-    , aReferences  :: [Text]
+    { aTitle      :: Text
+    , aBody       :: BodyInput
+    , aState      :: TaskState
+    , aPriority   :: Maybe Int
+    , aDomain     :: Maybe Text
+    , aDiscipline :: Maybe Text
+    , aDependsOn  :: [Text]
+    , aReferences :: [Text]
     }
 
 addP :: Parser AddOpts
@@ -69,9 +69,9 @@ addP = AddOpts . T.pack
            <> help "idea | planned | ready (default: planned)" )
     <*> optional (option auto (long "priority" <> metavar "N"
            <> help "0-10. Higher number = higher priority (sorts first); also more bubbles in the priority bar."))
-    <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"
+    <*> optional (T.pack <$> strOption (long "domain" <> metavar "NAME"
            <> help "Tag with this domain category"))
-    <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Tag with this discipline category"))
     <*> many (T.pack <$> strOption (long "depends-on" <> metavar "TASK_ID"
            <> help "Add a depends_on edge to TASK_ID"))
@@ -85,8 +85,8 @@ runAdd o = withDb defaultDbPath $ \c -> do
         fatal 2 "on add: state must be idea | planned | ready"
 
     -- Pre-validate referenced categories and nodes so we fail before insert.
-    domains <- mapM (requireCategory c Domain)     (aDomains o)
-    disc    <- mapM (requireCategory c Discipline) (aDisciplines o)
+    mDomain <- mapM (requireCategory c Domain)     (aDomain o)
+    mDisc   <- mapM (requireCategory c Discipline) (aDiscipline o)
     depIds  <- mapM (requireTask c)      (aDependsOn o)
     refIds  <- mapM (requireKnowledge c) (aReferences o)
 
@@ -96,21 +96,13 @@ runAdd o = withDb defaultDbPath $ \c -> do
         , RT.ntState    = aState o
         , RT.ntPriority = aPriority o
         }
-    forM_ (domains <> disc) $ \cat ->
-        RC.attachTaskCategory c tid (categoryId cat)
+    forM_ mDomain $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
+    forM_ mDisc   $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
     forM_ depIds $ \depId ->
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
         void $ RE.insertEdge c References TaskNode tid KnowledgeNode refId
     TIO.putStrLn tid
-
-requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
-requireCategory c axis name = do
-    mc <- RC.findCategory c axis name
-    case mc of
-        Just cat -> pure cat
-        Nothing  -> fatal 2 ("unknown " <> T.unpack (categoryAxisText axis)
-                                       <> ": " <> T.unpack name)
 
 -- | Resolve a task input (ULID prefix) to a canonical ULID.
 requireTask :: Connection -> Text -> IO Text
@@ -239,6 +231,8 @@ data UpdateOpts = UpdateOpts
     , uTitle       :: Maybe Text
     , uBody        :: BodyInput
     , uBlockReason :: Maybe Text
+    , uDomain      :: Maybe Text
+    , uDiscipline  :: Maybe Text
     }
 
 updateP :: Parser UpdateOpts
@@ -254,6 +248,10 @@ updateP = UpdateOpts . T.pack
     <*> bodyInputParser
     <*> optional (T.pack <$> strOption (long "block-reason" <> metavar "TEXT"
            <> help "Reason for blocked state (required with --state blocked)"))
+    <*> optional (T.pack <$> strOption (long "domain" <> metavar "NAME"
+           <> help "Replace domain category; empty string clears"))
+    <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
+           <> help "Replace discipline category; empty string clears"))
 
 runUpdate :: UpdateOpts -> IO ()
 runUpdate o = withDb defaultDbPath $ \c -> do
@@ -263,6 +261,16 @@ runUpdate o = withDb defaultDbPath $ \c -> do
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
+    -- Validate categories before any mutation.
+    mDomCat  <- resolveAxisFlag c Domain     (uDomain o)
+    mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
+    -- Apply replacements: detach all of that axis, then attach new one if given.
+    forM_ mDomCat $ \mCat -> do
+        RC.detachTaskCategoriesByAxis c tid Domain
+        forM_ mCat $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
+    forM_ mDiscCat $ \mCat -> do
+        RC.detachTaskCategoriesByAxis c tid Discipline
+        forM_ mCat $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
     let upd = RT.emptyUpdate
             { RT.tuTitle       = uTitle o
             , RT.tuBody        = body

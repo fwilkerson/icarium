@@ -6,6 +6,8 @@ module Icarium.Repo.Category
     , categoryNodeUsages
     , attachTaskCategory
     , attachKnowledgeCategory
+    , detachTaskCategoriesByAxis
+    , detachKnowledgeCategoriesByAxis
     , taskCategoriesFor
     , taskCategoriesBatch
     , knowledgeCategoriesFor
@@ -75,6 +77,18 @@ attachKnowledgeCategory :: Connection -> Text -> Text -> IO ()
 attachKnowledgeCategory conn kid cid = execute conn
     (Query "INSERT OR IGNORE INTO knowledge_categories (knowledge_id, category_id) VALUES (?, ?)")
     (kid, cid)
+
+detachTaskCategoriesByAxis :: Connection -> Text -> CategoryAxis -> IO ()
+detachTaskCategoriesByAxis conn tid axis = execute conn
+    (Query "DELETE FROM task_categories WHERE task_id = ? \
+           \AND category_id IN (SELECT id FROM categories WHERE axis = ?)")
+    (tid, axis)
+
+detachKnowledgeCategoriesByAxis :: Connection -> Text -> CategoryAxis -> IO ()
+detachKnowledgeCategoriesByAxis conn kid axis = execute conn
+    (Query "DELETE FROM knowledge_categories WHERE knowledge_id = ? \
+           \AND category_id IN (SELECT id FROM categories WHERE axis = ?)")
+    (kid, axis)
 
 taskCategoriesFor :: Connection -> Text -> IO [Category]
 taskCategoriesFor conn tid = query conn

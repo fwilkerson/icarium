@@ -1,7 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Main (main) where
 
-import           Control.Exception         (bracket)
+import           Control.Exception         (bracket, try)
 import           Control.Monad             (forM, forM_, void)
 import qualified Data.ByteString.Char8     as BC
 import           Data.FileEmbed            (embedFile, makeRelativeToProject)
@@ -12,6 +12,7 @@ import qualified Data.Text.Encoding        as TE
 import qualified Data.Text.IO              as TIO
 import           Database.SQLite.Simple    (Connection, Only (..), Query (..), close, execute,
                                             execute_, open, query_)
+import           System.Exit               (ExitCode (..))
 import           System.IO                 (hClose)
 import           System.IO.Temp            (withSystemTempFile)
 import           Test.Tasty                (TestTree, defaultMain, testGroup)
@@ -20,6 +21,7 @@ import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
 import           Icarium.Commands.Category (SyncReport (..), syncCategories)
 import           Icarium.Commands.Dispatch (renderDispatch)
 import           Icarium.Commands.Know     (autoDeriveDeps)
+import           Icarium.Commands.Util     (requireCategory)
 import           Icarium.Config            (CategoriesConfig (..), defaultConfigText, loadConfig)
 import           Icarium.Db                (dbSchemaVersion, migrateDb)
 import           Icarium.Dispatch          (postClaudeGuard)
@@ -146,6 +148,12 @@ main = defaultMain $ testGroup "icarium"
         [ testCase "transition Blocked → Done clears block_reason"         testUpdateClearsBlockReasonOnDone
         , testCase "transition Blocked → Ready clears block_reason"        testUpdateClearsBlockReasonOnReady
         , testCase "Blocked → Blocked preserves block_reason"              testUpdateBlockedPreservesReason
+        ]
+    , testGroup "category replace semantics"
+        [ testCase "task update --domain replaces existing domain"         testTaskUpdateDomainReplaces
+        , testCase "task update --domain empty string clears domain"       testTaskUpdateDomainClears
+        , testCase "know update --domain replaces not appends"             testKnowUpdateDomainReplaces
+        , testCase "requireCategory exits ExitFailure 2 for unknown name"  testRequireCategoryUnknown
         ]
     , testGroup "task show links section"
         [ testCase "no edges renders (none)"                               testLinksNoEdges
@@ -1316,3 +1324,53 @@ testLinksAscii = do
     assertBool "ASCII last glyph \\- present"   ("\\-" `T.isInfixOf` out)
     assertBool "no UTF-8 branch glyph"          (not ("├─" `T.isInfixOf` out))
     assertBool "no UTF-8 last glyph"            (not ("└─" `T.isInfixOf` out))
+
+-- =============================================================
+-- category replace semantics tests
+-- =============================================================
+
+testTaskUpdateDomainReplaces :: IO ()
+testTaskUpdateDomainReplaces = withTestDb $ \c -> do
+    domA <- mkCat c Domain "domA"
+    domB <- mkCat c Domain "domB"
+    tid  <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    RC.attachTaskCategory c tid (categoryId domA)
+    -- Simulate: task update tid --domain domB (replace semantics)
+    RC.detachTaskCategoriesByAxis c tid Domain
+    RC.attachTaskCategory c tid (categoryId domB)
+    cats <- RC.taskCategoriesFor c tid
+    map categoryName (filter (\x -> categoryAxis x == Domain) cats) @?= ["domB"]
+
+testTaskUpdateDomainClears :: IO ()
+testTaskUpdateDomainClears = withTestDb $ \c -> do
+    dom <- mkCat c Domain "mydom"
+    tid <- RT.insertTask c RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    RC.attachTaskCategory c tid (categoryId dom)
+    -- Simulate: task update tid --domain '' (clear)
+    RC.detachTaskCategoriesByAxis c tid Domain
+    cats <- RC.taskCategoriesFor c tid
+    null cats @?= True
+
+testKnowUpdateDomainReplaces :: IO ()
+testKnowUpdateDomainReplaces = withTestDb $ \c -> do
+    domA <- mkCat c Domain "domA"
+    domB <- mkCat c Domain "domB"
+    kid  <- mkKnowledge c "K" "body"
+    RC.attachKnowledgeCategory c kid (categoryId domA)
+    -- Old additive behaviour would leave both domA and domB; replace leaves only domB.
+    RC.detachKnowledgeCategoriesByAxis c kid Domain
+    RC.attachKnowledgeCategory c kid (categoryId domB)
+    cats <- RC.knowledgeCategoriesFor c kid
+    let doms = filter (\x -> categoryAxis x == Domain) cats
+    length doms @?= 1
+    map categoryName doms @?= ["domB"]
+
+testRequireCategoryUnknown :: IO ()
+testRequireCategoryUnknown = withTestDb $ \c -> do
+    result <- try (requireCategory c Domain "no-such-cat") :: IO (Either ExitCode Category)
+    case result of
+        Left (ExitFailure 2) -> pure ()
+        Left e               -> fail ("unexpected exit code: " <> show e)
+        Right _              -> fail "expected failure for unknown category"
