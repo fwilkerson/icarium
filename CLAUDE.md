@@ -24,5 +24,3 @@ If a function is hard to test, that's usually a design signal — extract the pu
 ## Lint and format
 
 Lint hints are design feedback, not mechanical fixes. When `hlint` flags something, the first response is to consider whether the code shape itself is wrong — refactor to make the smell go away naturally. Mechanical auto-fix and adding `ignore:` entries both bypass that step. An ignore is correct only when the rule fundamentally conflicts with a deliberate house style.
-
-`make format` and `make lint` are enforced by a pre-commit hook (run `make init` after fresh clone to install).
