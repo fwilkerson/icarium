@@ -52,16 +52,23 @@ parseTaskState = \case
     "abandoned"   -> Just Abandoned
     _             -> Nothing
 
-data Effort = Low | Medium | High deriving (Show, Eq)
+data Effort = Low | Medium | High | XHigh | Max deriving (Show, Eq)
 
 effortText :: Effort -> Text
-effortText = \case Low -> "low"; Medium -> "medium"; High -> "high"
+effortText = \case
+    Low    -> "low"
+    Medium -> "medium"
+    High   -> "high"
+    XHigh  -> "xhigh"
+    Max    -> "max"
 
 parseEffort :: Text -> Maybe Effort
 parseEffort = \case
     "low"    -> Just Low
     "medium" -> Just Medium
     "high"   -> Just High
+    "xhigh"  -> Just XHigh
+    "max"    -> Just Max
     _        -> Nothing
 
 data EdgeKind = DependsOn | References | DerivedFrom | Supersedes

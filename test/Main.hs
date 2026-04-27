@@ -224,6 +224,8 @@ effortTests =
     [ roundTrip effortText parseEffort "low"    Low
     , roundTrip effortText parseEffort "medium" Medium
     , roundTrip effortText parseEffort "high"   High
+    , roundTrip effortText parseEffort "xhigh"  XHigh
+    , roundTrip effortText parseEffort "max"    Max
     ]
 
 categoryAxisTests :: [TestTree]

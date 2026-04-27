@@ -108,7 +108,7 @@ doDryRun conn req = do
     TIO.putStrLn $ "scratch_dir:             " <> scratchDir
     TIO.putStrLn ""
     TIO.putStrLn "--- claude invocation ---"
-    TIO.putStrLn (renderCmdPreview model tools allowed)
+    TIO.putStrLn (renderCmdPreview model effort tools allowed)
     TIO.putStrLn ""
     TIO.putStrLn "--- prompt (via stdin) ---"
     TIO.putStr prompt
@@ -122,10 +122,11 @@ doDryRun conn req = do
         , dresBaseSha    = Nothing
         }
 
-renderCmdPreview :: Text -> [Text] -> [Text] -> Text
-renderCmdPreview model tools allowed = T.unwords
+renderCmdPreview :: Text -> Effort -> [Text] -> [Text] -> Text
+renderCmdPreview model effort tools allowed = T.unwords
     [ "claude -p"
     , "--model", model
+    , "--effort", effortText effort
     , "--output-format stream-json"
     , "--verbose"
     , "--tools \"" <> T.intercalate "," tools <> "\""
@@ -184,7 +185,7 @@ doReal conn req = do
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
-            exit <- runClaudeStreaming did task prompt model tools allowed scratchDir logPath
+            exit <- runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
             handlePostClaude conn did branch base cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
@@ -204,14 +205,15 @@ checkPreconditions base = do
 -- =============================================================
 
 runClaudeStreaming
-    :: Text -> Task -> Text -> Text -> [Text] -> [Text] -> Text -> FilePath
+    :: Text -> Task -> Text -> Text -> Effort -> [Text] -> [Text] -> Text -> FilePath
     -> IO ExitCode
-runClaudeStreaming did task prompt model tools allowed scratchDir logPath = do
+runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath = do
     parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args =
             [ "-p"
             , "--model", T.unpack model
+            , "--effort", T.unpack (effortText effort)
             , "--output-format", "stream-json"
             , "--verbose"
             , "--tools", T.unpack (T.intercalate "," tools)

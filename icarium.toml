@@ -7,7 +7,7 @@ test  = "cabal test all"
 
 [dispatch]
 model  = "claude-sonnet-4-6"
-effort = "medium"
+effort = "high"
 tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",

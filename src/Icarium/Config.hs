@@ -126,7 +126,7 @@ defaultConfigText =
     \\n\
     \[dispatch]\n\
     \model  = \"claude-sonnet-4-6\"\n\
-    \effort = \"medium\"\n\
+    \effort = \"high\"\n\
     \tools = [\"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\", \"Bash\"]\n\
     \allowed_tools = [\n\
     \  \"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\",\n\
