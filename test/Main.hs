@@ -894,18 +894,18 @@ mkCatPure ax nm = Category { categoryId = "cat-" <> nm, categoryAxis = ax, categ
 
 testMkBar :: [TestTree]
 testMkBar =
-    [ testCase "Nothing" $ Icarium.Render.mkBar Nothing   @?= "·····"
-    , testCase "0"       $ Icarium.Render.mkBar (Just 0)  @?= "·····"
-    , testCase "1"       $ Icarium.Render.mkBar (Just 1)  @?= "◐····"
-    , testCase "2"       $ Icarium.Render.mkBar (Just 2)  @?= "●····"
-    , testCase "3"       $ Icarium.Render.mkBar (Just 3)  @?= "●◐···"
-    , testCase "4"       $ Icarium.Render.mkBar (Just 4)  @?= "●●···"
-    , testCase "5"       $ Icarium.Render.mkBar (Just 5)  @?= "●●◐··"
-    , testCase "6"       $ Icarium.Render.mkBar (Just 6)  @?= "●●●··"
-    , testCase "7"       $ Icarium.Render.mkBar (Just 7)  @?= "●●●◐·"
-    , testCase "8"       $ Icarium.Render.mkBar (Just 8)  @?= "●●●●·"
-    , testCase "9"       $ Icarium.Render.mkBar (Just 9)  @?= "●●●●◐"
-    , testCase "10"      $ Icarium.Render.mkBar (Just 10) @?= "●●●●●"
+    [ testCase "Nothing" $ Icarium.Render.mkBar Nothing   @?= "□ □ □ □ □"
+    , testCase "0"       $ Icarium.Render.mkBar (Just 0)  @?= "□ □ □ □ □"
+    , testCase "1"       $ Icarium.Render.mkBar (Just 1)  @?= "◧ □ □ □ □"
+    , testCase "2"       $ Icarium.Render.mkBar (Just 2)  @?= "■ □ □ □ □"
+    , testCase "3"       $ Icarium.Render.mkBar (Just 3)  @?= "■ ◧ □ □ □"
+    , testCase "4"       $ Icarium.Render.mkBar (Just 4)  @?= "■ ■ □ □ □"
+    , testCase "5"       $ Icarium.Render.mkBar (Just 5)  @?= "■ ■ ◧ □ □"
+    , testCase "6"       $ Icarium.Render.mkBar (Just 6)  @?= "■ ■ ■ □ □"
+    , testCase "7"       $ Icarium.Render.mkBar (Just 7)  @?= "■ ■ ■ ◧ □"
+    , testCase "8"       $ Icarium.Render.mkBar (Just 8)  @?= "■ ■ ■ ■ □"
+    , testCase "9"       $ Icarium.Render.mkBar (Just 9)  @?= "■ ■ ■ ■ ◧"
+    , testCase "10"      $ Icarium.Render.mkBar (Just 10) @?= "■ ■ ■ ■ ■"
     ]
 
 testGroupedHeaders :: IO ()
@@ -947,7 +947,7 @@ testBlockedReason = do
                ]
         out = renderTaskList True rows [Blocked]
     assertBool "shows short reason" ("nope" `T.isInfixOf` out)
-    assertBool "no priority bar in blocked" (not ("●●◐··" `T.isInfixOf` out))
+    assertBool "no priority bar in blocked" (not ("■ ■ ◧ □ □" `T.isInfixOf` out))
     assertBool "long reason truncated with ellipsis" ((T.replicate 57 "x" <> "...") `T.isInfixOf` out)
 
 testEdgeCountFormat :: IO ()

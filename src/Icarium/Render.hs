@@ -257,15 +257,16 @@ renderTaskList useUnicode rows filterStates
         | T.length r <= 60 = r
         | otherwise        = T.take 57 r <> "..."
 
--- | 5-cell Unicode priority bar. ● filled, ◐ half-filled, · empty.
--- Represents the 0–10 priority range in half-bubble steps.
+-- | 5-cell Unicode priority bar. ■ filled, ◧ half-filled, □ empty,
+-- space-separated. Represents the 0–10 priority range in half-square steps.
 mkBar :: Maybe Int -> Text
 mkBar mp =
     let p     = max 0 (min 10 (fromMaybe 0 mp))
         full  = p `div` 2
         half  = p `mod` 2
         empty = 5 - full - half
-    in T.replicate full "●" <> T.replicate half "◐" <> T.replicate empty "·"
+        cells = replicate full "■" ++ replicate half "◧" ++ replicate empty "□"
+    in T.intercalate " " cells
 
 -- | Truncate a title to fit within @width@ characters, appending an ellipsis
 -- when truncation occurs. UTF-8 mode uses the single-char @…@; ASCII uses @...@.
