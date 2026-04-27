@@ -1,14 +1,18 @@
 module Icarium.Commands.Init (Options, parser, run) where
 
-import           Control.Monad       (when)
-import qualified Data.Text.IO        as TIO
+import           Control.Monad             (when)
+import qualified Data.Text.IO              as TIO
 import           Options.Applicative
-import           System.Directory    (doesFileExist)
-import           System.Exit         (ExitCode (..), exitWith)
-import           System.IO           (hPutStrLn, stderr)
+import           System.Directory          (doesFileExist)
+import           System.Exit               (ExitCode (..), exitWith)
+import           System.IO                 (hPutStrLn, stderr)
 
-import           Icarium.Config      (defaultConfigPath, defaultConfigText)
-import           Icarium.Db          (defaultDbPath, initDb)
+import qualified Data.Text                 as T
+import           Icarium.Commands.Category (SyncReport (..), syncCategories)
+import           Icarium.Config            (Config (..), defaultConfigPath, defaultConfigText,
+                                            loadConfig)
+import           Icarium.Db                (defaultDbPath, initDb, withDb)
+import           Icarium.Types             (categoryAxisText)
 
 newtype Options = Options
     { optForce :: Bool
@@ -40,6 +44,13 @@ run o = do
         else do
             TIO.writeFile defaultConfigPath defaultConfigText
             putStrLn $ "created  " <> defaultConfigPath
+
+    -- Seed categories from toml into the fresh DB.
+    config <- loadConfig defaultConfigPath >>= either (fatal 2) pure
+    withDb defaultDbPath $ \conn -> do
+        rpt <- syncCategories conn (cfgCategories config) False
+        mapM_ (\(ax, n) -> putStrLn $
+            "seeded   " <> T.unpack (categoryAxisText ax) <> ":" <> T.unpack n) (srInserted rpt)
 
     putStrLn "initialized."
 

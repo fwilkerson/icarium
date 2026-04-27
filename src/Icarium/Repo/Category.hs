@@ -3,6 +3,7 @@ module Icarium.Repo.Category
     , findCategory
     , listCategories
     , deleteCategory
+    , categoryNodeUsages
     , attachTaskCategory
     , attachKnowledgeCategory
     , taskCategoriesFor
@@ -14,8 +15,8 @@ import           Data.List              (groupBy, sortBy)
 import           Data.Ord               (comparing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
-import           Database.SQLite.Simple (Connection, Query (..), SQLData (..), execute, query,
-                                         query_)
+import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
+                                         query, query_)
 
 import           Icarium.Id             (newId)
 import           Icarium.Types          (Category (..), CategoryAxis (..), categoryAxisText)
@@ -55,6 +56,15 @@ deleteCategory conn axis name = do
                 (Query "DELETE FROM categories WHERE axis = ? AND name = ?")
                 (axis, name)
             pure True
+
+-- | Returns all node ids (task ids and knowledge ids) attached to this category.
+categoryNodeUsages :: Connection -> Text -> IO [Text]
+categoryNodeUsages conn cid = do
+    taskIds <- query conn
+        (Query "SELECT task_id FROM task_categories WHERE category_id = ?") [cid]
+    knowIds <- query conn
+        (Query "SELECT knowledge_id FROM knowledge_categories WHERE category_id = ?") [cid]
+    pure $ map (\(Only t) -> t) taskIds ++ map (\(Only k) -> k) knowIds
 
 attachTaskCategory :: Connection -> Text -> Text -> IO ()
 attachTaskCategory conn tid cid = execute conn

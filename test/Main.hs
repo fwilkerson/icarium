@@ -17,9 +17,10 @@ import           System.IO.Temp            (withSystemTempFile)
 import           Test.Tasty                (TestTree, defaultMain, testGroup)
 import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
 
+import           Icarium.Commands.Category (SyncReport (..), syncCategories)
 import           Icarium.Commands.Dispatch (renderDispatch)
 import           Icarium.Commands.Know     (autoDeriveDeps)
-import           Icarium.Config            (defaultConfigText, loadConfig)
+import           Icarium.Config            (CategoriesConfig (..), defaultConfigText, loadConfig)
 import           Icarium.Db                (dbSchemaVersion, migrateDb)
 import           Icarium.Dispatch          (postClaudeGuard)
 import           Icarium.Dispatch.Tick     (TickState, emptyTickState, summariseTick)
@@ -128,6 +129,12 @@ main = defaultMain $ testGroup "icarium"
         , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis" testTitleTruncatedUtf8
         , testCase "90-char title truncated with ASCII ... in ASCII mode"  testTitleTruncatedAscii
         , testCase "title at exactly 72 chars renders without truncation"  testTitleExactlyAtLimit
+        ]
+    , testGroup "category sync"
+        [ testCase "inserts toml-only categories"                       testSyncInserts
+        , testCase "reports orphans and exits non-zero (no prune)"      testSyncOrphanNoPrune
+        , testCase "prunes unused orphans when no blockers"             testSyncPrunesUnused
+        , testCase "blocks on in-use category; no deletions"            testSyncBlocksInUse
         ]
     , testGroup "autoDeriveDeps"
         [ testCase "ICARIUM_TASK_ID set, no explicit → edge inserted"     testAutoDeriveDepsEdgeInserted
@@ -1085,6 +1092,65 @@ testDispatchShowIdFull = do
         taskIdVal  = fieldVal "task_id:"
     T.length idVal     @?= 26
     T.length taskIdVal @?= 26
+
+-- =============================================================
+-- category sync tests
+-- =============================================================
+
+testSyncInserts :: IO ()
+testSyncInserts = withTestDb $ \conn -> do
+    let cfg = CategoriesConfig { catDomains = ["cli"], catDisciplines = ["haskell"] }
+    rpt <- syncCategories conn cfg False
+    srInserted rpt @?= [(Domain, "cli"), (Discipline, "haskell")]
+    null (srOrphans rpt)  @?= True
+    null (srPruned rpt)   @?= True
+    null (srBlocking rpt) @?= True
+    cats <- RC.listCategories conn Nothing
+    length cats @?= 2
+
+testSyncOrphanNoPrune :: IO ()
+testSyncOrphanNoPrune = withTestDb $ \conn -> do
+    _ <- RC.insertCategory conn Domain "stale-domain"
+    let cfg = CategoriesConfig { catDomains = [], catDisciplines = [] }
+    rpt <- syncCategories conn cfg False
+    null (srInserted rpt) @?= True
+    length (srOrphans rpt) @?= 1
+    null (srPruned rpt)   @?= True
+    null (srBlocking rpt) @?= True
+    -- category still present: sync without --prune must not delete
+    cats <- RC.listCategories conn Nothing
+    length cats @?= 1
+
+testSyncPrunesUnused :: IO ()
+testSyncPrunesUnused = withTestDb $ \conn -> do
+    _ <- RC.insertCategory conn Domain "stale-domain"
+    let cfg = CategoriesConfig { catDomains = [], catDisciplines = [] }
+    rpt <- syncCategories conn cfg True
+    null (srInserted rpt)  @?= True
+    null (srOrphans rpt)   @?= True
+    length (srPruned rpt)  @?= 1
+    null (srBlocking rpt)  @?= True
+    cats <- RC.listCategories conn Nothing
+    length cats @?= 0
+
+testSyncBlocksInUse :: IO ()
+testSyncBlocksInUse = withTestDb $ \conn -> do
+    cid <- RC.insertCategory conn Domain "stale-domain"
+    tid <- RT.insertTask conn RT.NewTask
+        { RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    RC.attachTaskCategory conn tid cid
+    let cfg = CategoriesConfig { catDomains = [], catDisciplines = [] }
+    rpt <- syncCategories conn cfg True
+    null (srInserted rpt)  @?= True
+    null (srOrphans rpt)   @?= True
+    null (srPruned rpt)    @?= True
+    length (srBlocking rpt) @?= 1
+    -- blocking report contains the task id
+    let (_, nodeIds) = head (srBlocking rpt)
+    nodeIds @?= [tid]
+    -- category still present: in-use category must not be deleted
+    cats <- RC.listCategories conn Nothing
+    length cats @?= 1
 
 -- =============================================================
 -- autoDeriveDeps tests

@@ -83,13 +83,14 @@ icarium link [--from <id>] [--to <id>] [--kind <kind>]
 
 icarium link rm <edge-id>
 
-icarium category add <axis> <name>
-    axis ∈ domain | discipline
-
 icarium category [--axis <axis>]
     Lists categories. Bare `category` is the same as the old `category list`.
 
-icarium category rm <axis> <name>
+icarium category sync [--prune]
+    Reconcile icarium.toml [categories] → DB. Inserts categories present in
+    toml but absent from DB. Without --prune: lists DB-only categories on
+    stderr and exits non-zero. With --prune: deletes unused DB-only categories;
+    exits non-zero (no deletions) if any are still attached to tasks or knowledge.
 ```
 
 ## Dispatch and run loop

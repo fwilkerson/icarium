@@ -139,5 +139,8 @@ defaultConfigText =
     \log_retention_runs       = 25\n\
     \\n\
     \[categories]\n\
-    \domains     = []\n\
-    \disciplines = []\n"
+    \# Source of truth for the category vocabulary. Edit here, then run\n\
+    \# `icarium category sync` to apply changes to the DB. Use --prune to\n\
+    \# delete categories that have been removed from this list.\n\
+    \domains     = [\"core\"]\n\
+    \disciplines = [\"development\"]\n"
