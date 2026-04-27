@@ -43,6 +43,8 @@ parser = subparser
     ( subcmd "run"
         "Run one dispatch (with TASK_ID) or drain the ready queue in priority order (no TASK_ID, optionally --max N)."
         (Run  <$> runP)
+   <> subcmd "list"    "List dispatches (alias: ls)"               (List    <$> listP)
+   <> subcmd "ls"      "List dispatches (alias: list)"             (List    <$> listP)
    <> subcmd "show"    "Show a single dispatch"                    (Show    <$> showP)
    <> subcmd "logs"    "Print the jsonl event log"                 (Logs    <$> logsP)
    <> subcmd "recover"

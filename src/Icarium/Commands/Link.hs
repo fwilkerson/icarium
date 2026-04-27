@@ -22,8 +22,10 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"  "Add an edge"    (Add  <$> addP)
-   <> subcmd "rm"   "Delete an edge" (Rm   <$> rmP)
+    ( subcmd "add"   "Add an edge"              (Add  <$> addP)
+   <> subcmd "list"  "List edges (alias: ls)"   (List <$> listP)
+   <> subcmd "ls"    "List edges (alias: list)" (List <$> listP)
+   <> subcmd "rm"    "Delete an edge"           (Rm   <$> rmP)
     )
     <|> (List <$> listP)
 
