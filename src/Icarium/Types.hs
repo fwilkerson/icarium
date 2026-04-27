@@ -46,7 +46,8 @@ parseTaskState = \case
     "idea"        -> Just Idea
     "planned"     -> Just Planned
     "ready"       -> Just Ready
-    "in_progress" -> Just InProgress
+    "in-progress" -> Just InProgress
+    "in_progress" -> Just InProgress  -- legacy underscore form; both accepted
     "done"        -> Just Done
     "blocked"     -> Just Blocked
     "abandoned"   -> Just Abandoned

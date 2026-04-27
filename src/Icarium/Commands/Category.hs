@@ -18,8 +18,8 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"  "Add a category"    (Add  <$> addP)
-   <> subcmd "rm"   "Delete a category" (Rm   <$> rmP)
+    ( subcmd "add"  "Add a category. AXIS is domain or discipline."  (Add  <$> addP)
+   <> subcmd "rm"   "Delete a category"                              (Rm   <$> rmP)
     )
     <|> (List <$> listP)
 
@@ -52,7 +52,8 @@ newtype ListOpts = ListOpts { lAxis :: Maybe CategoryAxis }
 
 listP :: Parser ListOpts
 listP = ListOpts
-    <$> optional (option axisReader (long "axis" <> metavar "AXIS"))
+    <$> optional (option axisReader (long "axis" <> metavar "AXIS"
+           <> help "Filter by axis (domain | discipline)."))
 
 runList :: ListOpts -> IO ()
 runList o = withDb defaultDbPath $ \c -> do

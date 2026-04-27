@@ -68,7 +68,7 @@ addP = AddOpts . T.pack
             ( long "state" <> metavar "STATE" <> value Planned
            <> help "idea | planned | ready (default: planned)" )
     <*> optional (option auto (long "priority" <> metavar "N"
-           <> help "Set priority (lower number = higher priority)"))
+           <> help "0-10. Higher number = higher priority (sorts first); also more bubbles in the priority bar."))
     <*> many (T.pack <$> strOption (long "domain" <> metavar "NAME"
            <> help "Tag with this domain category"))
     <*> many (T.pack <$> strOption (long "discipline" <> metavar "NAME"
@@ -141,8 +141,9 @@ data ListOpts = ListOpts
 
 listP :: Parser ListOpts
 listP = ListOpts
+    -- Canonical state values: src/Icarium/Types.hs parseTaskState
     <$> many (option taskStateReader (long "state" <> metavar "STATE"
-           <> help "Filter by task state (repeatable)"))
+           <> help "Filter by task state (idea | planned | ready | in-progress | blocked | done | abandoned). Repeatable."))
     <*> switch (long "ready" <> help "Only state=ready tasks with all depends-on satisfied (matches what `dispatch run` and `task next` pick)")
     <*> optional (T.pack <$> strOption (long "domain"     <> metavar "NAME"
            <> help "Filter by domain category"))
@@ -243,10 +244,11 @@ data UpdateOpts = UpdateOpts
 updateP :: Parser UpdateOpts
 updateP = UpdateOpts . T.pack
     <$> strArgument (metavar "TASK_ID")
+    -- Canonical state values: src/Icarium/Types.hs parseTaskState
     <*> optional (option taskStateReader (long "state" <> metavar "STATE"
-           <> help "Set new task state"))
+           <> help "Set new task state (idea | planned | ready | in-progress | blocked | done | abandoned)."))
     <*> optional (option auto (long "priority" <> metavar "N"
-           <> help "Set priority (lower = higher priority)"))
+           <> help "0-10. Higher number = higher priority (sorts first); also more bubbles in the priority bar."))
     <*> optional (T.pack <$> strOption (long "title" <> metavar "TEXT"
            <> help "Replace task title. Keep ≤ 72 chars; longer titles are truncated in `task list`."))
     <*> bodyInputParser

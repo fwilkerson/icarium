@@ -43,20 +43,20 @@ commands = subparser
               (progDesc "Initialize a project: create DB, apply schema, write config"))
    <> command "doctor"
         (info (CmdDoctor <$> Doctor.parser <**> helper)
-              (progDesc "Check project health"))
+              (progDesc "Verify DB schema version, foreign-key integrity, missing categories, and orphan rows."))
    <> command "task"
         (info (CmdTask <$> Task.parser <**> helper)
-              (progDesc "Manage tasks (list is the default)"))
+              (progDesc "Manage tasks (list is the default). Example: icarium task add \"Refactor X\" --domain cli --discipline haskell"))
    <> command "know"
         (info (CmdKnow <$> Know.parser <**> helper)
-              (progDesc "Manage knowledge entries (list is the default)"))
+              (progDesc "Manage knowledge entries (list is the default). Example: icarium know --discipline planning"))
    <> command "link"
         (info (CmdLink <$> Link.parser <**> helper)
-              (progDesc "Manage typed edges between nodes (list is the default)"))
+              (progDesc "Manage typed edges between nodes (list is the default). Example: icarium link add depends-on TASK_A TASK_B"))
    <> command "category"
         (info (CmdCategory <$> Category.parser <**> helper)
-              (progDesc "Manage category vocabulary (list is the default)"))
+              (progDesc "Manage category vocabulary (list is the default). Example: icarium category --axis domain"))
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
-              (progDesc "Manage dispatches (run, show, logs, recover; bare = list)"))
+              (progDesc "Manage dispatches (run, show, logs, recover; bare = list). Example: icarium dispatch run --max 5"))
     )

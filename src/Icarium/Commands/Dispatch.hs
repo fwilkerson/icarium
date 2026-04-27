@@ -41,11 +41,13 @@ data Command
 parser :: Parser Command
 parser = subparser
     ( subcmd "run"
-        "Dispatch a task. With TASK_ID: run one. Without: drain the ready queue (priority order) until empty or --max reached."
+        "Run one dispatch (with TASK_ID) or drain the ready queue in priority order (no TASK_ID, optionally --max N)."
         (Run  <$> runP)
    <> subcmd "show"    "Show a single dispatch"                    (Show    <$> showP)
    <> subcmd "logs"    "Print the jsonl event log"                 (Logs    <$> logsP)
-   <> subcmd "recover" "Reconcile orphaned in-progress dispatches" (Recover <$> recoverP)
+   <> subcmd "recover"
+        "Reconcile dispatches whose orchestrator died mid-run: check the branch, mark outcome, restore the task to ready if no commits were made."
+        (Recover <$> recoverP)
     )
     <|> (List <$> listP)
 
