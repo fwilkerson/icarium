@@ -30,6 +30,7 @@ library
                       Icarium.Render
                       Icarium.Git
                       Icarium.Dispatch
+                      Icarium.Dispatch.Tick
                       Icarium.Repo.Task
                       Icarium.Repo.Knowledge
                       Icarium.Repo.Edge
@@ -72,6 +73,7 @@ test-suite icarium-test
     hs-source-dirs:   test
     main-is:          Main.hs
     build-depends:    base,
+                      bytestring,
                       text,
                       sqlite-simple,
                       file-embed,
