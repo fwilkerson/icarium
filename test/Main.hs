@@ -117,10 +117,10 @@ main = defaultMain $ testGroup "icarium"
         , testCase "knowledge show id is 26 chars" testKnowledgeShowIdFull
         , testCase "dispatch show id is 26 chars"  testDispatchShowIdFull
         ]
+    , testGroup "mkBar 5-cell Unicode bar" testMkBar
     , testGroup "renderTaskList grouped view"
         [ testCase "groups in READY/PLANNED/BLOCKED/IDEA order with counts" testGroupedHeaders
         , testCase "single-state filter suppresses group header"            testSingleStateNoHeader
-        , testCase "ASCII fallback uses # and ."                            testAsciiBars
         , testCase "blocked row replaces bar with truncated reason"         testBlockedReason
         , testCase "edge counts omitted when both zero, shown otherwise"    testEdgeCountFormat
         , testCase "category formatting handles missing slots"              testCategoryFormatting
@@ -888,6 +888,26 @@ mkRow tid title st pri cats deps refs blockReason = Icarium.Render.TaskRow
 mkCatPure :: CategoryAxis -> Text -> Category
 mkCatPure ax nm = Category { categoryId = "cat-" <> nm, categoryAxis = ax, categoryName = nm }
 
+-- =============================================================
+-- mkBar tests
+-- =============================================================
+
+testMkBar :: [TestTree]
+testMkBar =
+    [ testCase "Nothing" $ Icarium.Render.mkBar Nothing   @?= "·····"
+    , testCase "0"       $ Icarium.Render.mkBar (Just 0)  @?= "·····"
+    , testCase "1"       $ Icarium.Render.mkBar (Just 1)  @?= "◐····"
+    , testCase "2"       $ Icarium.Render.mkBar (Just 2)  @?= "●····"
+    , testCase "3"       $ Icarium.Render.mkBar (Just 3)  @?= "●◐···"
+    , testCase "4"       $ Icarium.Render.mkBar (Just 4)  @?= "●●···"
+    , testCase "5"       $ Icarium.Render.mkBar (Just 5)  @?= "●●◐··"
+    , testCase "6"       $ Icarium.Render.mkBar (Just 6)  @?= "●●●··"
+    , testCase "7"       $ Icarium.Render.mkBar (Just 7)  @?= "●●●◐·"
+    , testCase "8"       $ Icarium.Render.mkBar (Just 8)  @?= "●●●●·"
+    , testCase "9"       $ Icarium.Render.mkBar (Just 9)  @?= "●●●●◐"
+    , testCase "10"      $ Icarium.Render.mkBar (Just 10) @?= "●●●●●"
+    ]
+
 testGroupedHeaders :: IO ()
 testGroupedHeaders = do
     let rows = [ mkRow "01ABCDEFGH01" "ready task"   Ready   (Just 5) [] 0 0 Nothing
@@ -919,13 +939,6 @@ testSingleStateNoHeader = do
     assertBool "no READY header" (not ("READY" `T.isInfixOf` out))
     assertBool "still has the row" ("only ready" `T.isInfixOf` out)
 
-testAsciiBars :: IO ()
-testAsciiBars = do
-    let rows = [mkRow "01ABCDEFGH01" "task" Ready (Just 5) [] 0 0 Nothing]
-        out  = renderTaskList False rows [Ready]
-    assertBool "uses # for filled" ("#####....." `T.isInfixOf` out)
-    assertBool "no unicode bullet" (not ("●" `T.isInfixOf` out))
-
 testBlockedReason :: IO ()
 testBlockedReason = do
     let longReason = T.replicate 80 "x"
@@ -934,7 +947,7 @@ testBlockedReason = do
                ]
         out = renderTaskList True rows [Blocked]
     assertBool "shows short reason" ("nope" `T.isInfixOf` out)
-    assertBool "no priority bar in blocked" (not ("●●●●●·····" `T.isInfixOf` out))
+    assertBool "no priority bar in blocked" (not ("●●◐··" `T.isInfixOf` out))
     assertBool "long reason truncated with ellipsis" ((T.replicate 57 "x" <> "...") `T.isInfixOf` out)
 
 testEdgeCountFormat :: IO ()

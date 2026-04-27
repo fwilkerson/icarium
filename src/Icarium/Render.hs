@@ -3,6 +3,7 @@ module Icarium.Render
     , renderTaskPrompt
     , TaskRow (..)
     , renderTaskList
+    , mkBar
     , renderKnowledge
     , renderKnowledgeList
     , renderEdgeLine
@@ -179,7 +180,8 @@ recommendedTitleMax = 72
 
 -- | Render tasks grouped by state.
 --
--- @useUnicode@: True → ● / · bars; False → # / . bars (ASCII fallback).
+-- @useUnicode@: True → Unicode tree glyphs and ellipsis; False → ASCII fallback.
+-- The priority bar is always Unicode.
 -- @filterStates@: the states explicitly requested by the caller.
 --   * Empty → default view: show all four primary group headers (even if
 --     empty) plus any secondary groups that have tasks.
@@ -242,7 +244,7 @@ renderTaskList useUnicode rows filterStates
             titPart = padr titleWidth (truncateTitle useUnicode titleWidth (taskTitle t))
             barPart = case s of
                 Blocked -> truncateReason (fromMaybe "" (taskBlockReason t))
-                _       -> mkBar useUnicode (taskPriority t)
+                _       -> mkBar (taskPriority t)
             catStr  = formatCats (trCats row)
             catPart = padr catWidth catStr
             edgePart = case s of
@@ -255,16 +257,15 @@ renderTaskList useUnicode rows filterStates
         | T.length r <= 60 = r
         | otherwise        = T.take 57 r <> "..."
 
--- | 10-cell priority bar. UTF-8 mode: ● filled, · empty. ASCII mode: # / .
-mkBar :: Bool -> Maybe Int -> Text
-mkBar utf8 Nothing  = T.replicate 10 dot
-  where dot = if utf8 then "·" else "."
-mkBar utf8 (Just p) = T.replicate filled bullet <> T.replicate empty dot
-  where
-    filled = max 0 (min 10 p)
-    empty  = 10 - filled
-    bullet = if utf8 then "●" else "#"
-    dot    = if utf8 then "·" else "."
+-- | 5-cell Unicode priority bar. ● filled, ◐ half-filled, · empty.
+-- Represents the 0–10 priority range in half-bubble steps.
+mkBar :: Maybe Int -> Text
+mkBar mp =
+    let p     = max 0 (min 10 (fromMaybe 0 mp))
+        full  = p `div` 2
+        half  = p `mod` 2
+        empty = 5 - full - half
+    in T.replicate full "●" <> T.replicate half "◐" <> T.replicate empty "·"
 
 -- | Truncate a title to fit within @width@ characters, appending an ellipsis
 -- when truncation occurs. UTF-8 mode uses the single-char @…@; ASCII uses @...@.
