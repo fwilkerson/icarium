@@ -51,7 +51,7 @@ parser = subparser
    <> subcmd "show"    "Show a single dispatch"                    (Show    <$> showP)
    <> subcmd "logs"    "Print the jsonl event log"                 (Logs    <$> logsP)
    <> subcmd "recover"
-        "Reconcile dispatches whose orchestrator died mid-run: check the branch, mark outcome, restore the task to ready if no commits were made."
+        "Reconcile dispatches whose orchestrator died mid-run: mark outcome interrupted, move task to blocked with structured notes."
         (Recover <$> recoverP)
     )
     <|> (List <$> listP)

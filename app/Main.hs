@@ -59,7 +59,7 @@ cmdP = subparser
               (progDesc "Initialize a project: create DB, apply schema, write config"))
    <> command "doctor"
         (info (CmdDoctor <$> Doctor.parser <**> helper)
-              (progDesc "Verify DB schema version, foreign-key integrity, missing categories, and orphan rows."))
+              (progDesc "Verify config, DB file, schema version, claude and git binaries, and orphaned dispatches."))
    <> command "task"
         (info (CmdTask <$> Task.parser <**> helper)
               (progDesc "Manage tasks (list is the default). Example: icarium task add \"Refactor X\" --domain cli --discipline haskell"))

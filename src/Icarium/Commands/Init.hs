@@ -20,7 +20,7 @@ newtype Options = Options
 
 parser :: Parser Options
 parser = Options
-    <$> switch (long "force" <> help "Overwrite existing config / reapply schema")
+    <$> switch (long "force" <> help "Overwrite existing icarium.toml if present (errors if DB already exists)")
 
 run :: FilePath -> Options -> IO ()
 run dbPath o = do
