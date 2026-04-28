@@ -6,9 +6,6 @@ author:             frank
 maintainer:         frank.w1lk3rs0n@gmail.com
 build-type:         Simple
 extra-source-files: spec/schema.sql
-                    test/fixtures/v1_schema.sql
-                    test/fixtures/v2_schema.sql
-                    test/fixtures/v3_schema.sql
 
 common lang
     default-language:   GHC2021
@@ -77,7 +74,6 @@ test-suite icarium-test
                       bytestring,
                       text,
                       sqlite-simple,
-                      file-embed,
                       icarium,
                       tasty,
                       tasty-hunit,

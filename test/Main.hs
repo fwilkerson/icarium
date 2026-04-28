@@ -1,17 +1,14 @@
-{-# LANGUAGE TemplateHaskell #-}
 module Main (main) where
 
 import           Control.Exception         (bracket, try)
 import           Control.Monad             (forM, forM_, void)
 import qualified Data.ByteString.Char8     as BC
-import           Data.FileEmbed            (embedFile, makeRelativeToProject)
 import           Data.Int                  (Int64)
 import           Data.Text                 (Text)
 import qualified Data.Text                 as T
-import qualified Data.Text.Encoding        as TE
 import qualified Data.Text.IO              as TIO
-import           Database.SQLite.Simple    (Connection, Only (..), Query (..), close, execute,
-                                            execute_, open, query_)
+import           Database.SQLite.Simple    (Connection, Only (..), Query (..), close, execute, open,
+                                            query_)
 import           System.Exit               (ExitCode (..))
 import           System.IO                 (hClose)
 import           System.IO.Temp            (withSystemTempFile)
@@ -23,7 +20,7 @@ import           Icarium.Commands.Dispatch (renderDispatch)
 import           Icarium.Commands.Know     (autoDeriveDeps)
 import           Icarium.Commands.Util     (requireCategory)
 import           Icarium.Config            (CategoriesConfig (..), defaultConfigText, loadConfig)
-import           Icarium.Db                (dbSchemaVersion, migrateDb)
+import           Icarium.Db                (dbSchemaVersion)
 import           Icarium.Dispatch          (postClaudeGuard)
 import           Icarium.Dispatch.Tick     (TickState, emptyTickState, summariseTick)
 import           Icarium.Id                (newId)
@@ -35,7 +32,7 @@ import qualified Icarium.Repo.Dispatch     as RD
 import qualified Icarium.Repo.Edge         as RE
 import qualified Icarium.Repo.Knowledge    as RK
 import qualified Icarium.Repo.Task         as RT
-import           Icarium.Schema            (applySchema, execSql)
+import           Icarium.Schema            (applySchema)
 import           Icarium.Types
 
 main :: IO ()
@@ -72,16 +69,9 @@ main = defaultMain $ testGroup "icarium"
         , testCase "one-axis match excluded when task has both axes" testOneAxisMismatch
         , testCase "stale explicit ref still renders under refs"     testStaleRef
         ]
-    , testGroup "migrations"
-        [ testCase "v1 DB migrates to v4: user_version stamped"         testMigrateV1ToV2Version
-        , testCase "v1 DB migrates to v4: in_progress accepted"         testMigrateV1ToV2Check
-        , testCase "v1 DB migrates to v4: existing rows preserved"      testMigrateV1ToV2Data
-        , testCase "v2 DB migrates to v4: user_version stamped"         testMigrateV2ToV3Version
-        , testCase "v2 DB migrates to v4: existing rows preserved"      testMigrateV2ToV3Data
-        , testCase "v3 DB migrates to v4: user_version stamped"         testMigrateV3ToV4Version
-        , testCase "v3 DB migrates to v4: slug column dropped"          testMigrateV3ToV4SlugGone
-        , testCase "v3 DB migrates to v4: rows with slug survive"       testMigrateV3ToV4Data
-        , testCase "migrateDb is idempotent on v4 DB"                   testMigrateIdempotent
+    , testGroup "schema"
+        [ testCase "applying embedded schema produces user_version = 1 with expected tables" testInitialSchema
+        , testCase "deleting a knowledge entry cascades to knowledge_categories rows"        testKnowledgeCategoriesCascade
         ]
     , testGroup "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
         [ testCase "right on full id"      testResolveDispatchFullId
@@ -495,149 +485,35 @@ testStaleRef = withTestDb $ \c -> do
             assertBool "Referenced knowledge header"    ("## Referenced knowledge" `T.isInfixOf` prompt)
 
 -- =============================================================
--- Migration tests
+-- Schema tests
 -- =============================================================
 
--- v1 schema fixture, embedded at compile time.
-v1SchemaSql :: Text
-v1SchemaSql =
-    TE.decodeUtf8 $(makeRelativeToProject "test/fixtures/v1_schema.sql" >>= embedFile)
-
--- v2 schema fixture, embedded at compile time.
-v2SchemaSql :: Text
-v2SchemaSql =
-    TE.decodeUtf8 $(makeRelativeToProject "test/fixtures/v2_schema.sql" >>= embedFile)
-
--- v3 schema fixture, embedded at compile time.
-v3SchemaSql :: Text
-v3SchemaSql =
-    TE.decodeUtf8 $(makeRelativeToProject "test/fixtures/v3_schema.sql" >>= embedFile)
-
--- Open an in-memory DB with the v1 schema applied and user_version = 1.
-withTestDbV1 :: (Connection -> IO a) -> IO a
-withTestDbV1 act = bracket (open ":memory:") close $ \conn -> do
-    execSql conn v1SchemaSql
-    execute_ conn "PRAGMA user_version = 1"
-    act conn
-
--- Open an in-memory DB with the v2 schema applied and user_version = 2.
-withTestDbV2 :: (Connection -> IO a) -> IO a
-withTestDbV2 act = bracket (open ":memory:") close $ \conn -> do
-    execSql conn v2SchemaSql
-    execute_ conn "PRAGMA user_version = 2"
-    act conn
-
--- Open an in-memory DB with the v3 schema applied and user_version = 3.
-withTestDbV3 :: (Connection -> IO a) -> IO a
-withTestDbV3 act = bracket (open ":memory:") close $ \conn -> do
-    execSql conn v3SchemaSql
-    execute_ conn "PRAGMA user_version = 3"
-    act conn
-
-testMigrateV1ToV2Version :: IO ()
-testMigrateV1ToV2Version = withTestDbV1 $ \conn -> do
-    -- migrateDb applies all pending migrations: v1 → v2 → v3 → v4.
-    migrateDb conn
+testInitialSchema :: IO ()
+testInitialSchema = withTestDb $ \conn -> do
     v <- dbSchemaVersion conn
-    v @?= 4
+    v @?= (1 :: Int64)
+    tableRows <- query_ conn
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        :: IO [Only Text]
+    let tables = map (\(Only n) -> n) tableRows
+    assertBool "tasks table exists"               ("tasks"               `elem` tables)
+    assertBool "knowledge table exists"           ("knowledge"           `elem` tables)
+    assertBool "categories table exists"          ("categories"          `elem` tables)
+    assertBool "edges table exists"               ("edges"               `elem` tables)
+    assertBool "dispatches table exists"          ("dispatches"          `elem` tables)
+    assertBool "task_categories table exists"     ("task_categories"     `elem` tables)
+    assertBool "knowledge_categories table exists" ("knowledge_categories" `elem` tables)
 
-testMigrateV1ToV2Check :: IO ()
-testMigrateV1ToV2Check = withTestDbV1 $ \conn -> do
-    migrateDb conn
-    -- 'in_progress' must be accepted by the new CHECK constraint.
-    execute conn
-        (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
-        ( "01MTEST0000000000000000001" :: Text
-        , "In-progress task" :: Text
-        , "" :: Text
-        , "in_progress" :: Text
-        )
-    rows <- query_ conn "SELECT state FROM tasks WHERE state = 'in_progress'"
-                :: IO [Only Text]
-    length rows @?= 1
-
-testMigrateV1ToV2Data :: IO ()
-testMigrateV1ToV2Data = withTestDbV1 $ \conn -> do
-    -- Insert a task before migrating; verify it survives.
-    execute conn
-        (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
-        ( "01MTEST0000000000000000002" :: Text
-        , "Preserved" :: Text
-        , "body" :: Text
-        , "ready" :: Text
-        )
-    migrateDb conn
-    rows <- query_ conn "SELECT title FROM tasks" :: IO [Only Text]
-    map (\(Only t) -> t) rows @?= ["Preserved"]
-
-testMigrateIdempotent :: IO ()
-testMigrateIdempotent = withTestDb $ \conn -> do
-    -- withTestDb applies current schema (v4); migrateDb should be a no-op.
-    v0 <- dbSchemaVersion conn
-    migrateDb conn
-    v1 <- dbSchemaVersion conn
-    (v0, v1) @?= (4 :: Int64, 4 :: Int64)
-
-testMigrateV2ToV3Version :: IO ()
-testMigrateV2ToV3Version = withTestDbV2 $ \conn -> do
-    migrateDb conn
-    v <- dbSchemaVersion conn
-    v @?= 4
-
-testMigrateV2ToV3Data :: IO ()
-testMigrateV2ToV3Data = withTestDbV2 $ \conn -> do
-    -- Insert rows before migrating; verify they survive.
-    execute conn
-        (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
-        ( "01MTEST0000000000000000011" :: Text
-        , "Legacy task" :: Text
-        , "body" :: Text
-        , "ready" :: Text
-        )
-    migrateDb conn
-    rows <- query_ conn "SELECT title FROM tasks" :: IO [Only Text]
-    map (\(Only t) -> t) rows @?= ["Legacy task"]
-
-testMigrateV3ToV4Version :: IO ()
-testMigrateV3ToV4Version = withTestDbV3 $ \conn -> do
-    migrateDb conn
-    v <- dbSchemaVersion conn
-    v @?= 4
-
-testMigrateV3ToV4SlugGone :: IO ()
-testMigrateV3ToV4SlugGone = withTestDbV3 $ \conn -> do
-    migrateDb conn
-    -- After migration, inserting with slug column should fail (column gone).
-    rows <- query_ conn "SELECT name FROM pragma_table_info('tasks')" :: IO [Only Text]
-    let cols = map (\(Only c) -> c) rows
-    assertBool "slug column absent from tasks" ("slug" `notElem` cols)
-    rows2 <- query_ conn "SELECT name FROM pragma_table_info('knowledge')" :: IO [Only Text]
-    let cols2 = map (\(Only c) -> c) rows2
-    assertBool "slug column absent from knowledge" ("slug" `notElem` cols2)
-
-testMigrateV3ToV4Data :: IO ()
-testMigrateV3ToV4Data = withTestDbV3 $ \conn -> do
-    -- Insert rows with non-NULL slugs before migrating; verify non-slug data survives.
-    execute conn
-        (Query "INSERT INTO tasks (id, title, body, state, slug) VALUES (?,?,?,?,?)")
-        ( "01MTEST0000000000000000020" :: Text
-        , "Slug task" :: Text
-        , "body" :: Text
-        , "ready" :: Text
-        , "slug-task" :: Text
-        )
-    execute conn
-        (Query "INSERT INTO knowledge (id, title, body, slug) VALUES (?,?,?,?)")
-        ( "01MTEST0000000000000000021" :: Text
-        , "Slug knowledge" :: Text
-        , "know body" :: Text
-        , "slug-knowledge" :: Text
-        )
-    migrateDb conn
-    taskRows <- query_ conn "SELECT title FROM tasks" :: IO [Only Text]
-    map (\(Only t) -> t) taskRows @?= ["Slug task"]
-    knowRows <- query_ conn "SELECT title FROM knowledge" :: IO [Only Text]
-    map (\(Only t) -> t) knowRows @?= ["Slug knowledge"]
+testKnowledgeCategoriesCascade :: IO ()
+testKnowledgeCategoriesCascade = withTestDb $ \conn -> do
+    domCat <- mkCat conn Domain "cli"
+    kid    <- mkKnowledge conn "K" "body"
+    RC.attachKnowledgeCategory conn kid (categoryId domCat)
+    pre <- query_ conn "SELECT knowledge_id FROM knowledge_categories" :: IO [Only Text]
+    length pre @?= 1
+    execute conn (Query "DELETE FROM knowledge WHERE id = ?") (Only kid)
+    post <- query_ conn "SELECT knowledge_id FROM knowledge_categories" :: IO [Only Text]
+    length post @?= 0
 
 -- =============================================================
 -- resolveDispatchId tests
