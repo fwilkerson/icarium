@@ -8,24 +8,52 @@ icarium gives you three things in one local CLI:
 
 Storage is a local SQLite DB. It's a tool for one developer, or a small team.
 
-## For agents helping the user
+## Configuration
 
-### Config levers (`icarium.toml`)
+`icarium init` writes an `icarium.toml` at the project root. The fields:
 
-- `[project] integration_branch` — branch dispatches FF-merge into.
-- `[commands] build` / `test` — gate commands run after the agent commits. A failing gate marks the dispatch failed and moves the task to blocked.
-- `[dispatch] model` / `effort` — defaults for the headless agent; override per-run with `dispatch run --model / --effort`.
-- `[dispatch] tools` / `allowed_tools` — `tools` is what claude is told about; `allowed_tools` is the permission allowlist. Keep `allowed_tools` to read-only Bash plus the safe `icarium` mutation subset.
-- `[dispatch] max_minutes_per_dispatch` / `max_dispatches_per_run` — guardrails for `dispatch run` draining the queue.
-- `[categories] domains / disciplines` — controlled vocabulary for tagging. After editing, run `icarium category sync` (add `--prune` to remove deleted ones) to reconcile with the DB.
+```toml
+[project]
+# Branch dispatches FF-merge into.
+integration_branch = "main"
 
-### CLI orientation
+[commands]
+# Gate commands run after the agent commits. A failing gate marks the
+# dispatch failed and moves the task to blocked.
+build = "cabal build all"
+test  = "cabal test all"
 
-`icarium --help` and `<subcommand> --help` cover the surface. Non-obvious bits:
+[dispatch]
+# Defaults for the headless agent; override per-run with
+# `dispatch run --model / --effort`.
+model  = "claude-sonnet-4-6"
+effort = "high"
 
-- The DB path defaults to `.icarium/icarium.db`; override with the top-level `--db`.
-- `task add`, `know add`, and `task update` all accept `--body-file -` to read from stdin — use this for any non-trivial body to avoid shell quoting.
-- `task show <id> --format prompt` renders the exact prompt the dispatcher will send. Use it to sanity-check a task before dispatching.
+# `tools` is what claude is told about; `allowed_tools` is the permission
+# allowlist. Keep `allowed_tools` to read-only Bash plus the safe icarium
+# mutation subset.
+tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
+allowed_tools = [
+  "Read", "Edit", "Write", "Grep", "Glob",
+  "Bash(./bin/icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
+]
+
+scratch_dir = ".icarium/scratch"
+
+# Guardrails for `dispatch run` draining the queue.
+max_minutes_per_dispatch = 30
+max_dispatches_per_run   = 20
+
+heartbeat_stale_seconds  = 300
+log_retention_runs       = 25
+
+[categories]
+# Controlled vocabulary for tagging tasks and knowledge. After editing,
+# run `icarium category sync` (add `--prune` to remove deleted ones) to
+# reconcile with the DB.
+domains     = ["cli", "dispatch", "storage", "workflow"]
+disciplines = ["haskell", "ops", "refinement"]
+```
 
 ## Development
 
