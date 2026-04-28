@@ -23,8 +23,8 @@ import           System.Directory       (createDirectoryIfMissing, doesFileExist
 import           System.Environment     (getEnvironment)
 import           System.Exit            (ExitCode (..))
 import           System.FilePath        ((</>))
-import           System.IO              (BufferMode (..), Handle, IOMode (..), hClose, hIsEOF,
-                                         hPutStrLn, hSetBuffering, openFile, stderr)
+import           System.IO              (BufferMode (..), Handle, IOMode (..), hIsEOF, hPutStrLn,
+                                         hSetBuffering, stderr, withFile)
 import           System.Process.Typed   (byteStringInput, createPipe, getPid, getStdout, proc,
                                          runProcess, setCreateGroup, setEnv, setStdin, setStdout,
                                          shell, waitExitCode, withProcessWait)
@@ -269,12 +269,10 @@ teeAndHeartbeat src logH did title = do
             loop h lh d st' c
 
 withLogHandle :: FilePath -> (Handle -> IO a) -> IO a
-withLogHandle path act = do
-    h <- openFile path WriteMode
-    hSetBuffering h LineBuffering
-    r <- act h
-    hClose h
-    pure r
+withLogHandle path act =
+    withFile path WriteMode $ \h -> do
+        hSetBuffering h LineBuffering
+        act h
 
 -- =============================================================
 -- Post-claude gates: build, test, FF-merge
