@@ -1,7 +1,3 @@
-# icarium
-
-A task / knowledge / dispatch tool for headless-agent workflows. Haskell, sqlite-backed, CLI-first.
-
 ## Testing philosophy
 
 Tests should cover the **interface and larger functional units**. Get nuanced only for code that is critical or genuinely tricky. The codebase is small; an over-tested codebase is a maintenance tax that slows real work.
@@ -20,6 +16,10 @@ Tests should cover the **interface and larger functional units**. Get nuanced on
 - Treating `Commands/*` as separate units. They're a thin gluing layer; CLI integration tests cover them.
 
 If a function is hard to test, that's usually a design signal — extract the pure core, then the test is easy. Don't reach for mocks first.
+
+## Error handling
+
+For multi-step `IO` where any step can fail: use `ExceptT Text IO` rather than nested `case`-of-`Either`. More than two levels of nesting is the signal. `throwE` to exit early; `runExceptT` at the boundary to handle the outcome once.
 
 ## Lint and format
 
