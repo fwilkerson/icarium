@@ -72,6 +72,11 @@ test-suite icarium-test
     hs-source-dirs:   test
     main-is:          Main.hs
     other-modules:    CliSpec
+                      GuardSpec
+                      RenderSpec
+                      RepoSpec
+                      TestHelpers
+                      TickSpec
     build-depends:    base,
                       bytestring,
                       text,
