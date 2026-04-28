@@ -1,6 +1,6 @@
 module Icarium.Types
     ( -- * Enums
-      TaskState(..), taskStateText, parseTaskState
+      TaskState(..), taskStateText, parseTaskState, parseTaskStateDb
     , Effort(..), effortText, parseEffort
     , EdgeKind(..), edgeKindDbText, edgeKindDisplay, parseEdgeKind
     , NodeKind(..), nodeKindText, parseNodeKind
@@ -41,13 +41,25 @@ taskStateText = \case
     Blocked    -> "blocked"
     Abandoned  -> "abandoned"
 
+-- | CLI-facing parser: accepts hyphen form for InProgress.
 parseTaskState :: Text -> Maybe TaskState
 parseTaskState = \case
     "idea"        -> Just Idea
     "planned"     -> Just Planned
     "ready"       -> Just Ready
     "in-progress" -> Just InProgress
-    "in_progress" -> Just InProgress  -- legacy underscore form; both accepted
+    "done"        -> Just Done
+    "blocked"     -> Just Blocked
+    "abandoned"   -> Just Abandoned
+    _             -> Nothing
+
+-- | Storage parser: accepts underscore form stored in the DB.
+parseTaskStateDb :: Text -> Maybe TaskState
+parseTaskStateDb = \case
+    "idea"        -> Just Idea
+    "planned"     -> Just Planned
+    "ready"       -> Just Ready
+    "in_progress" -> Just InProgress
     "done"        -> Just Done
     "blocked"     -> Just Blocked
     "abandoned"   -> Just Abandoned
@@ -142,7 +154,7 @@ enumFromField label p f = do
         Just x  -> pure x
         Nothing -> returnError ConversionFailed f ("invalid " <> label <> ": " <> T.unpack t)
 
-instance FromField TaskState    where fromField = enumFromField "task state"    parseTaskState
+instance FromField TaskState    where fromField = enumFromField "task state"    parseTaskStateDb
 instance FromField Effort       where fromField = enumFromField "effort"        parseEffort
 instance FromField EdgeKind     where fromField = enumFromField "edge kind"     parseEdgeKindDb
 instance FromField NodeKind     where fromField = enumFromField "node kind"     parseNodeKind

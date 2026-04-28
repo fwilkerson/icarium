@@ -291,7 +291,8 @@ taskStateTests =
     [ roundTrip taskStateText parseTaskState "idea"        Idea
     , roundTrip taskStateText parseTaskState "planned"     Planned
     , roundTrip taskStateText parseTaskState "ready"       Ready
-    , roundTrip taskStateText parseTaskState "in_progress" InProgress
+    , roundTrip taskStateText parseTaskStateDb "in_progress" InProgress
+    , testCase "in-progress parses (CLI form)" $ parseTaskState "in-progress" @?= Just InProgress
     , roundTrip taskStateText parseTaskState "done"        Done
     , roundTrip taskStateText parseTaskState "blocked"     Blocked
     , roundTrip taskStateText parseTaskState "abandoned"   Abandoned
