@@ -21,4 +21,4 @@ log_retention_runs       = 25
 
 [categories]
 domains     = ["cli", "dispatch", "storage", "workflow"]
-disciplines = ["haskell", "ops", "planning"]
+disciplines = ["haskell", "ops", "refinement"]
