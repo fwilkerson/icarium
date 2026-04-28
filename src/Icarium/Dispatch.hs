@@ -26,8 +26,8 @@ import           System.FilePath        ((</>))
 import           System.IO              (BufferMode (..), Handle, IOMode (..), hClose, hIsEOF,
                                          hPutStrLn, hSetBuffering, openFile, stderr)
 import           System.Process.Typed   (byteStringInput, createPipe, getPid, getStdout, proc,
-                                         runProcess, setEnv, setStdin, setStdout, shell,
-                                         waitExitCode, withProcessWait)
+                                         runProcess, setCreateGroup, setEnv, setStdin, setStdout,
+                                         shell, waitExitCode, withProcessWait)
 
 import           Icarium.Config         (CommandsConfig (..), Config (..), DispatchConfig (..),
                                          ProjectConfig (..))
@@ -225,9 +225,10 @@ runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
             , ("ICARIUM_TASK_ID",      T.unpack (taskId task))
             , ("ICARIUM_SCRATCH_DIR",  T.unpack scratchDir)
             ]
-        pcfg = setStdin  (byteStringInput promptBytes)
-             $ setStdout createPipe
-             $ setEnv    env
+        pcfg = setStdin       (byteStringInput promptBytes)
+             $ setStdout      createPipe
+             $ setEnv         env
+             $ setCreateGroup True
              $ proc "claude" args
 
     withLogHandle logPath $ \logH ->

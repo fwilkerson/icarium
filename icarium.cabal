@@ -57,7 +57,8 @@ library
                       optparse-applicative,
                       tomland,
                       typed-process,
-                      time
+                      time,
+                      unix
 
 executable icarium
     import:           lang

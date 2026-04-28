@@ -4,6 +4,7 @@ import           Control.Monad          (forM_, unless, void, when)
 import           Data.Aeson             (FromJSON (..), decode, withObject, (.:?))
 import qualified Data.ByteString.Lazy   as BL
 import           Data.Either            (fromRight)
+import           Data.IORef             (IORef, modifyIORef, newIORef, readIORef)
 import           Data.Maybe             (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
@@ -16,6 +17,7 @@ import           Options.Applicative
 import           System.Directory       (doesFileExist)
 import           System.Exit            (ExitCode (..))
 import           System.IO              (hPutStrLn, stderr)
+import           System.Posix.Signals   (Handler (..), installHandler, raiseSignal, sigINT)
 import           System.Process.Typed   (nullStream, proc, runProcess, setStderr, setStdout)
 import           Text.Printf            (printf)
 
@@ -113,10 +115,18 @@ runRun o = do
         Nothing -> do
             let cap = fromMaybe (dcMaxDispatchesPerRun (cfgDispatch cfg)) (rMax o)
             when (cap <= 0) $ fatal 2 "max must be > 0"
-            withDb defaultDbPath (drainLoop o cfg cap 0)
+            sigCount <- newIORef (0 :: Int)
+            let sigHandler = do
+                    modifyIORef sigCount (+1)
+                    n <- readIORef sigCount
+                    when (n >= 2) $ do
+                        void $ installHandler sigINT Default Nothing
+                        raiseSignal sigINT
+            void $ installHandler sigINT (Catch sigHandler) Nothing
+            withDb defaultDbPath (drainLoop o cfg cap 0 sigCount)
 
-drainLoop :: RunOpts -> Config -> Int -> Int -> Connection -> IO ()
-drainLoop opts cfg cap !i conn
+drainLoop :: RunOpts -> Config -> Int -> Int -> IORef Int -> Connection -> IO ()
+drainLoop opts cfg cap !i sigCount conn
     | i >= cap = hPutStrLn stderr
         ("icarium: reached max dispatches (" <> show cap <> "); stopping")
     | otherwise = do
@@ -138,7 +148,11 @@ drainLoop opts cfg cap !i conn
                     "icarium: " <> dispatchOutcomeText (D.dresOutcome res)
                     <> " \x2014 " <> D.dresNotes res
                 printSummary res
-                drainLoop opts cfg cap (i + 1) conn
+                n <- readIORef sigCount
+                if n >= 1
+                    then hPutStrLn stderr
+                        "icarium: SIGINT received; stopping after current dispatch"
+                    else drainLoop opts cfg cap (i + 1) sigCount conn
 
 -- =============================================================
 -- Log parsing
@@ -292,7 +306,7 @@ runList o = withDb defaultDbPath $ \c -> do
 
 renderDispatchList :: [Dispatch] -> Text
 renderDispatchList ds =
-    let header = T.intercalate "  "
+    let headerRow = T.intercalate "  "
             [ padR 12 "id"
             , padR 12 "task_id"
             , padR 11 "outcome"
@@ -307,7 +321,7 @@ renderDispatchList ds =
             , padR 34 (dispatchBranch d)
             , dispatchStartedAt d
             ]
-    in T.unlines (header : rows)
+    in T.unlines (headerRow : rows)
 
 padR :: Int -> Text -> Text
 padR n t
