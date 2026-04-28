@@ -154,7 +154,7 @@ CREATE TABLE dispatches (
     base_sha       TEXT NOT NULL,                    -- HEAD sha of base at cut
     pid            INTEGER,
     model          TEXT NOT NULL,
-    effort         TEXT NOT NULL CHECK (effort IN ('low','medium','high')),
+    effort         TEXT NOT NULL CHECK (effort IN ('low','medium','high','xhigh','max')),
     started_at     TEXT NOT NULL DEFAULT (datetime('now')),
     heartbeat_at   TEXT NOT NULL DEFAULT (datetime('now')),
     ended_at       TEXT,
