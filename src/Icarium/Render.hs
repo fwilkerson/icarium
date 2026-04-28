@@ -9,6 +9,8 @@ module Icarium.Render
     , renderEdgeLine
     , renderCategory
     , recommendedTitleMax
+    , renderDispatch
+    , renderDispatchList
     ) where
 
 import           Data.List     (sortBy)
@@ -347,6 +349,57 @@ categoriesBlock cats =
         let names = [categoryName c | c <- cats, categoryAxis c == axis]
         in [ "  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names
            | not (null names) ]
+
+-- =============================================================
+-- Dispatch rendering
+-- =============================================================
+
+renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
+renderDispatch d mt ks = T.unlines $
+    [ field "id"            (dispatchId d)
+    , field "task_id"       (dispatchTaskId d)
+    , field "task_title"    (maybe "(task missing)" taskTitle mt)
+    , field "branch"        (dispatchBranch d)
+    , field "base_branch"   (dispatchBaseBranch d)
+    , field "base_sha"      (dispatchBaseSha d)
+    , field "pid"           (maybe "" (T.pack . show) (dispatchPid d))
+    , field "model"         (dispatchModel d)
+    , field "effort"        (effortText (dispatchEffort d))
+    , field "started_at"    (dispatchStartedAt d)
+    , field "heartbeat_at"  (dispatchHeartbeat d)
+    , field "ended_at"      (fromMaybe "" (dispatchEndedAt d))
+    , field "outcome"       (maybe "open" dispatchOutcomeText (dispatchOutcome d))
+    , field "merge_sha"     (fromMaybe "" (dispatchMergeSha d))
+    , field "last_commit"   (fromMaybe "" (dispatchLastCommit d))
+    , field "log_path"      (fromMaybe "" (dispatchLogPath d))
+    , field "notes"         (fromMaybe "" (dispatchNotes d))
+    , ""
+    , "Knowledge added:"
+    ] ++ knowledgeLines
+  where
+    field k v = padr 14 (k <> ":") <> " " <> v
+    knowledgeLines = case ks of
+        [] -> ["  (none)"]
+        _  -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
+
+renderDispatchList :: [Dispatch] -> Text
+renderDispatchList ds =
+    let headerRow = T.intercalate "  "
+            [ padr 12 "id"
+            , padr 12 "task_id"
+            , padr 11 "outcome"
+            , padr 34 "branch"
+            , "started_at"
+            ]
+        rows = map row ds
+        row d = T.intercalate "  "
+            [ padr 12 (T.take 10 (dispatchId d))
+            , padr 12 (T.take 10 (dispatchTaskId d))
+            , padr 11 (maybe "open" dispatchOutcomeText (dispatchOutcome d))
+            , padr 34 (dispatchBranch d)
+            , dispatchStartedAt d
+            ]
+    in T.unlines (headerRow : rows)
 
 -- =============================================================
 -- Utilities

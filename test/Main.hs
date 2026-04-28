@@ -17,7 +17,6 @@ import           Test.Tasty                (TestTree, defaultMain, testGroup)
 import           Test.Tasty.HUnit          (assertBool, assertFailure, testCase, (@?=))
 
 import           Icarium.Commands.Category (SyncReport (..), syncCategories)
-import           Icarium.Commands.Dispatch (renderDispatch)
 import           Icarium.Commands.Know     (autoDeriveDeps)
 import           Icarium.Commands.Util     (requireCategory)
 import           Icarium.Config            (CategoriesConfig (..), defaultConfigText, loadConfig)
@@ -25,8 +24,8 @@ import           Icarium.Db                (dbSchemaVersion)
 import           Icarium.Dispatch          (postClaudeGuard)
 import           Icarium.Dispatch.Tick     (TickState, emptyTickState, summariseTick)
 import           Icarium.Id                (newId)
-import           Icarium.Render            (renderKnowledge, renderKnowledgeList, renderTaskHuman,
-                                            renderTaskList, renderTaskPrompt)
+import           Icarium.Render            (renderDispatch, renderKnowledge, renderKnowledgeList,
+                                            renderTaskHuman, renderTaskList, renderTaskPrompt)
 import qualified Icarium.Render
 import qualified Icarium.Repo.Category     as RC
 import qualified Icarium.Repo.Dispatch     as RD

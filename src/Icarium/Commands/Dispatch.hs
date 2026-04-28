@@ -1,4 +1,4 @@
-module Icarium.Commands.Dispatch (Command, parser, run, printSummary, renderDispatch) where
+module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
 import           Control.Monad          (forM_, unless, void, when)
 import           Data.Aeson             (FromJSON (..), decode, withObject, (.:?))
@@ -28,6 +28,7 @@ import           Icarium.Config         (Config, DispatchConfig (..), cfgDispatc
                                          defaultConfigPath, loadConfig)
 import           Icarium.Db             (withDb)
 import qualified Icarium.Dispatch       as D
+import qualified Icarium.Render         as Render
 import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Task      as RT
@@ -302,31 +303,7 @@ runList db o = withDb db $ \c -> do
     let filtered = case lOutcome o of
             Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
-    TIO.putStr (renderDispatchList filtered)
-
-renderDispatchList :: [Dispatch] -> Text
-renderDispatchList ds =
-    let headerRow = T.intercalate "  "
-            [ padR 12 "id"
-            , padR 12 "task_id"
-            , padR 11 "outcome"
-            , padR 34 "branch"
-            , "started_at"
-            ]
-        rows = map row ds
-        row d = T.intercalate "  "
-            [ padR 12 (T.take 10 (dispatchId d))
-            , padR 12 (T.take 10 (dispatchTaskId d))
-            , padR 11 (maybe "open" dispatchOutcomeText (dispatchOutcome d))
-            , padR 34 (dispatchBranch d)
-            , dispatchStartedAt d
-            ]
-    in T.unlines (headerRow : rows)
-
-padR :: Int -> Text -> Text
-padR n t
-    | T.length t >= n = t
-    | otherwise       = t <> T.replicate (n - T.length t) " "
+    TIO.putStr (Render.renderDispatchList filtered)
 
 -- =============================================================
 -- show
@@ -350,35 +327,7 @@ runShow db o = withDb db $ \c -> do
             mt <- RT.getTask c (dispatchTaskId d)
             ks <- RE.knowledgeDerivedFromDispatch c (dispatchTaskId d)
                     (dispatchStartedAt d) (dispatchEndedAt d)
-            TIO.putStr (renderDispatch d mt ks)
-
-renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
-renderDispatch d mt ks = T.unlines $
-    [ field "id"            (dispatchId d)
-    , field "task_id"       (dispatchTaskId d)
-    , field "task_title"    (maybe "(task missing)" taskTitle mt)
-    , field "branch"        (dispatchBranch d)
-    , field "base_branch"   (dispatchBaseBranch d)
-    , field "base_sha"      (dispatchBaseSha d)
-    , field "pid"           (maybe "" (T.pack . show) (dispatchPid d))
-    , field "model"         (dispatchModel d)
-    , field "effort"        (effortText (dispatchEffort d))
-    , field "started_at"    (dispatchStartedAt d)
-    , field "heartbeat_at"  (dispatchHeartbeat d)
-    , field "ended_at"      (fromMaybe "" (dispatchEndedAt d))
-    , field "outcome"       (maybe "open" dispatchOutcomeText (dispatchOutcome d))
-    , field "merge_sha"     (fromMaybe "" (dispatchMergeSha d))
-    , field "last_commit"   (fromMaybe "" (dispatchLastCommit d))
-    , field "log_path"      (fromMaybe "" (dispatchLogPath d))
-    , field "notes"         (fromMaybe "" (dispatchNotes d))
-    , ""
-    , "Knowledge added:"
-    ] ++ knowledgeLines
-  where
-    field k v = padR 14 (k <> ":") <> " " <> v
-    knowledgeLines = case ks of
-        [] -> ["  (none)"]
-        _  -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
+            TIO.putStr (Render.renderDispatch d mt ks)
 
 -- =============================================================
 -- logs
