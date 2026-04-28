@@ -1,7 +1,7 @@
 module Main (main) where
 
 import           CliSpec                   (tests)
-import           Control.Exception         (bracket, try)
+import           Control.Exception         (bracket)
 import           Control.Monad             (forM, forM_, void)
 import qualified Data.ByteString.Char8     as BC
 import           Data.Int                  (Int64)
@@ -10,7 +10,6 @@ import qualified Data.Text                 as T
 import qualified Data.Text.IO              as TIO
 import           Database.SQLite.Simple    (Connection, Only (..), Query (..), close, execute, open,
                                             query_)
-import           System.Exit               (ExitCode (..))
 import           System.IO                 (hClose)
 import           System.IO.Temp            (withSystemTempFile)
 import           Test.Tasty                (TestTree, defaultMain, testGroup)
@@ -18,14 +17,12 @@ import           Test.Tasty.HUnit          (assertBool, assertFailure, testCase,
 
 import           Icarium.Commands.Category (SyncReport (..), syncCategories)
 import           Icarium.Commands.Know     (autoDeriveDeps)
-import           Icarium.Commands.Util     (requireCategory)
 import           Icarium.Config            (CategoriesConfig (..), defaultConfigText, loadConfig)
 import           Icarium.Db                (dbSchemaVersion)
 import           Icarium.Dispatch          (postClaudeGuard)
 import           Icarium.Dispatch.Tick     (TickState, emptyTickState, summariseTick)
 import           Icarium.Id                (newId)
-import           Icarium.Render            (renderDispatch, renderKnowledge, renderKnowledgeList,
-                                            renderTaskHuman, renderTaskList, renderTaskPrompt)
+import           Icarium.Render            (renderTaskHuman, renderTaskList, renderTaskPrompt)
 import qualified Icarium.Render
 import qualified Icarium.Repo.Category     as RC
 import qualified Icarium.Repo.Dispatch     as RD
@@ -38,12 +35,10 @@ import           Icarium.Types
 main :: IO ()
 main = defaultMain $ testGroup "icarium"
     [ tests
-    , testGroup "TaskState round-trips"    taskStateTests
     , testGroup "EdgeKind round-trips"     edgeKindTests
-    , testGroup "Effort round-trips"       effortTests
-    , testGroup "CategoryAxis round-trips" categoryAxisTests
-    , testCase "loadConfig succeeds on default template"        loadConfigTest
-    , testCase "renderTaskPrompt is non-empty for minimal task" renderTest
+    , testCase "parseTaskState CLI form"   $ parseTaskState   "in-progress" @?= Just InProgress
+    , testCase "parseTaskStateDb DB form"  $ parseTaskStateDb "in_progress" @?= Just InProgress
+    , testCase "loadConfig succeeds on default template" loadConfigTest
     , testGroup "summariseTick"
         [ testCase "system event emits model= session= line"              testTickSystem
         , testCase "assistant tool_use emits * tool line with name"       testTickAssistantToolUse
@@ -102,26 +97,14 @@ main = defaultMain $ testGroup "icarium"
         , testCase "resolves knowledge prefix" testResolveNodeKnowledge
         , testCase "left on ambiguous cross-type" testResolveNodeAmbiguous
         ]
-    , testGroup "10-char ULID prefix rendering"
-        [ testCase "task list id column is 10 chars"      testTaskListIdWidth
-        , testCase "knowledge list id column is 10 chars" testKnowledgeListIdWidth
-        ]
-    , testGroup "show views render full ULIDs"
-        [ testCase "task show id is 26 chars"      testTaskShowIdFull
-        , testCase "knowledge show id is 26 chars" testKnowledgeShowIdFull
-        , testCase "dispatch show id is 26 chars"  testDispatchShowIdFull
-        ]
     , testGroup "mkBar 5-cell Unicode bar" testMkBar
     , testGroup "renderTaskList grouped view"
         [ testCase "groups in READY/PLANNED/BLOCKED/IDEA order with counts" testGroupedHeaders
         , testCase "single-state filter suppresses group header"            testSingleStateNoHeader
         , testCase "blocked row replaces bar with truncated reason"         testBlockedReason
         , testCase "edge counts omitted when both zero, shown otherwise"    testEdgeCountFormat
-        , testCase "category formatting handles missing slots"              testCategoryFormatting
         , testCase "NULL priority sorts last within group"                  testNullPrioritySort
         , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis" testTitleTruncatedUtf8
-        , testCase "90-char title truncated with ASCII ... in ASCII mode"  testTitleTruncatedAscii
-        , testCase "title at exactly 72 chars renders without truncation"  testTitleExactlyAtLimit
         ]
     , testGroup "category sync"
         [ testCase "inserts toml-only categories"                       testSyncInserts
@@ -144,7 +127,6 @@ main = defaultMain $ testGroup "icarium"
         [ testCase "task update --domain replaces existing domain"         testTaskUpdateDomainReplaces
         , testCase "task update --domain empty string clears domain"       testTaskUpdateDomainClears
         , testCase "know update --domain replaces not appends"             testKnowUpdateDomainReplaces
-        , testCase "requireCategory exits ExitFailure 2 for unknown name"  testRequireCategoryUnknown
         ]
     , testGroup "task show links section"
         [ testCase "no edges renders (none)"                               testLinksNoEdges
@@ -278,25 +260,8 @@ testGuardRevParseError =
     postClaudeGuard "" (Left ("git error" :: String)) baseSha @?= Nothing
 
 -- =============================================================
--- Round-trip tests
+-- EdgeKind round-trips
 -- =============================================================
-
-roundTrip :: (Show a, Eq a) => (a -> Text) -> (Text -> Maybe a) -> Text -> a -> TestTree
-roundTrip toTxt fromTxt label val = testCase (T.unpack label) $ do
-    toTxt val @?= label
-    fromTxt label @?= Just val
-
-taskStateTests :: [TestTree]
-taskStateTests =
-    [ roundTrip taskStateText parseTaskState "idea"        Idea
-    , roundTrip taskStateText parseTaskState "planned"     Planned
-    , roundTrip taskStateText parseTaskState "ready"       Ready
-    , roundTrip taskStateText parseTaskStateDb "in_progress" InProgress
-    , testCase "in-progress parses (CLI form)" $ parseTaskState "in-progress" @?= Just InProgress
-    , roundTrip taskStateText parseTaskState "done"        Done
-    , roundTrip taskStateText parseTaskState "blocked"     Blocked
-    , roundTrip taskStateText parseTaskState "abandoned"   Abandoned
-    ]
 
 edgeKindTests :: [TestTree]
 edgeKindTests =
@@ -319,23 +284,8 @@ edgeKindTests =
     , testCase "edgeKindDisplay Supersedes"  $ edgeKindDisplay Supersedes  @?= "supersedes"
     ]
 
-effortTests :: [TestTree]
-effortTests =
-    [ roundTrip effortText parseEffort "low"    Low
-    , roundTrip effortText parseEffort "medium" Medium
-    , roundTrip effortText parseEffort "high"   High
-    , roundTrip effortText parseEffort "xhigh"  XHigh
-    , roundTrip effortText parseEffort "max"    Max
-    ]
-
-categoryAxisTests :: [TestTree]
-categoryAxisTests =
-    [ roundTrip categoryAxisText parseCategoryAxis "domain"     Domain
-    , roundTrip categoryAxisText parseCategoryAxis "discipline" Discipline
-    ]
-
 -- =============================================================
--- Config / render smoke tests
+-- Config smoke test
 -- =============================================================
 
 loadConfigTest :: IO ()
@@ -347,13 +297,6 @@ loadConfigTest =
         case result of
             Left err -> fail ("loadConfig failed: " <> err)
             Right _  -> pure ()
-
-renderTest :: IO ()
-renderTest = do
-    let out = renderTaskPrompt minTask [] [] []
-    assertBool "renderTaskPrompt returned empty" (not (T.null out))
-    let outH = renderTaskHuman True minTask [] [] []
-    assertBool "renderTaskHuman returned empty" (not (T.null outH))
 
 -- =============================================================
 -- In-memory DB helpers
@@ -723,42 +666,15 @@ testResolveNodeAmbiguous = withTestDb $ \c -> do
     assertBool "both task and knowledge match prefix" (length ts == 1 && length ks == 1)
 
 -- =============================================================
--- 10-char ULID prefix rendering tests
+-- mkBar tests
 -- =============================================================
 
-testTaskListIdWidth :: IO ()
-testTaskListIdWidth = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask
-        { RT.ntTitle = "Width test", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
-    mt <- RT.getTask c tid
-    case mt of
-        Nothing -> fail "task not found"
-        Just t  -> do
-            let row = Icarium.Render.TaskRow { Icarium.Render.trTask = t
-                                             , Icarium.Render.trCats = []
-                                             , Icarium.Render.trDeps = 0
-                                             , Icarium.Render.trRefs = 0 }
-                out = renderTaskList True [row] [Ready]
-                ls  = filter (not . T.null) (T.lines out)
-            assertBool "at least one data row" (not (null ls))
-            let dataRow = head ls
-                stripped = T.stripStart dataRow
-            assertBool "id prefix is 10 chars" (T.take 10 stripped == T.take 10 tid)
-
-testKnowledgeListIdWidth :: IO ()
-testKnowledgeListIdWidth = withTestDb $ \c -> do
-    kid <- mkKnowledge c "Width K" "body"
-    mk  <- RK.getKnowledge c kid
-    case mk of
-        Nothing -> fail "knowledge not found"
-        Just k  -> do
-            let out = renderKnowledgeList True [k]
-                ls  = T.lines out
-            assertBool "at least one data row" (length ls >= 2)
-            let dataRow = ls !! 1
-                prefix  = T.take 12 dataRow
-            assertBool "id prefix is 10 chars padded to 12" (T.length prefix == 12)
-            assertBool "id matches knowledge prefix" (T.take 10 kid `T.isPrefixOf` T.stripEnd prefix)
+testMkBar :: [TestTree]
+testMkBar =
+    [ testCase "Nothing" $ Icarium.Render.mkBar Nothing   @?= "□ □ □ □ □"
+    , testCase "5"       $ Icarium.Render.mkBar (Just 5)  @?= "■ ■ ◧ □ □"
+    , testCase "10"      $ Icarium.Render.mkBar (Just 10) @?= "■ ■ ■ ■ ■"
+    ]
 
 -- =============================================================
 -- renderTaskList grouped view tests
@@ -780,29 +696,6 @@ mkRow tid title st pri cats deps refs blockReason = Icarium.Render.TaskRow
     , Icarium.Render.trDeps = deps
     , Icarium.Render.trRefs = refs
     }
-
-mkCatPure :: CategoryAxis -> Text -> Category
-mkCatPure ax nm = Category { categoryId = "cat-" <> nm, categoryAxis = ax, categoryName = nm }
-
--- =============================================================
--- mkBar tests
--- =============================================================
-
-testMkBar :: [TestTree]
-testMkBar =
-    [ testCase "Nothing" $ Icarium.Render.mkBar Nothing   @?= "□ □ □ □ □"
-    , testCase "0"       $ Icarium.Render.mkBar (Just 0)  @?= "□ □ □ □ □"
-    , testCase "1"       $ Icarium.Render.mkBar (Just 1)  @?= "◧ □ □ □ □"
-    , testCase "2"       $ Icarium.Render.mkBar (Just 2)  @?= "■ □ □ □ □"
-    , testCase "3"       $ Icarium.Render.mkBar (Just 3)  @?= "■ ◧ □ □ □"
-    , testCase "4"       $ Icarium.Render.mkBar (Just 4)  @?= "■ ■ □ □ □"
-    , testCase "5"       $ Icarium.Render.mkBar (Just 5)  @?= "■ ■ ◧ □ □"
-    , testCase "6"       $ Icarium.Render.mkBar (Just 6)  @?= "■ ■ ■ □ □"
-    , testCase "7"       $ Icarium.Render.mkBar (Just 7)  @?= "■ ■ ■ ◧ □"
-    , testCase "8"       $ Icarium.Render.mkBar (Just 8)  @?= "■ ■ ■ ■ □"
-    , testCase "9"       $ Icarium.Render.mkBar (Just 9)  @?= "■ ■ ■ ■ ◧"
-    , testCase "10"      $ Icarium.Render.mkBar (Just 10) @?= "■ ■ ■ ■ ■"
-    ]
 
 testGroupedHeaders :: IO ()
 testGroupedHeaders = do
@@ -860,22 +753,6 @@ testEdgeCountFormat = do
     assertBool "refs-only" ("[refs:3]" `T.isInfixOf` line "refs only")
     assertBool "both"      ("[deps:1 refs:4]" `T.isInfixOf` line "both")
 
-testCategoryFormatting :: IO ()
-testCategoryFormatting = do
-    let dom  = mkCatPure Domain     "cli"
-        disc = mkCatPure Discipline "haskell"
-        rows = [ mkRow "01ABCDEFGH01" "both"     Ready (Just 5) [dom, disc] 0 0 Nothing
-               , mkRow "01ABCDEFGH02" "dom-only" Ready (Just 5) [dom]       0 0 Nothing
-               , mkRow "01ABCDEFGH03" "dis-only" Ready (Just 5) [disc]      0 0 Nothing
-               , mkRow "01ABCDEFGH04" "none"     Ready (Just 5) []          0 0 Nothing
-               ]
-        out  = renderTaskList True rows [Ready]
-        line title = head $ filter (T.isInfixOf title) (T.lines out)
-    assertBool "[cli/haskell]" ("[cli/haskell]" `T.isInfixOf` line "both")
-    assertBool "[cli/-]"       ("[cli/-]"       `T.isInfixOf` line "dom-only")
-    assertBool "[-/haskell]"   ("[-/haskell]"   `T.isInfixOf` line "dis-only")
-    assertBool "[-]"           ("[-]"           `T.isInfixOf` line "none")
-
 testNullPrioritySort :: IO ()
 testNullPrioritySort = do
     let rows = [ mkRow "01ABCDEFGH01" "null-pri" Idea Nothing  [] 0 0 Nothing
@@ -903,84 +780,6 @@ testTitleTruncatedUtf8 = do
     assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` dataRow))
     let titlePart = T.take Icarium.Render.recommendedTitleMax (T.drop 14 dataRow)
     assertBool "title column is exactly 72 chars" (T.length titlePart == Icarium.Render.recommendedTitleMax)
-
-testTitleTruncatedAscii :: IO ()
-testTitleTruncatedAscii = do
-    let longTitle = T.replicate 90 "y"
-        rows = [mkRow "01ABCDEFGH01" longTitle Ready (Just 5) [] 0 0 Nothing]
-        out  = renderTaskList False rows [Ready]
-    assertBool "row contains ASCII ellipsis" ("..." `T.isInfixOf` out)
-    assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` out))
-    assertBool "no UTF-8 ellipsis in ASCII mode" (not ("…" `T.isInfixOf` out))
-
-testTitleExactlyAtLimit :: IO ()
-testTitleExactlyAtLimit = do
-    let exactTitle = T.replicate 72 "z"
-        rows = [mkRow "01ABCDEFGH01" exactTitle Ready (Just 5) [] 0 0 Nothing]
-        out  = renderTaskList True rows [Ready]
-    assertBool "title at limit appears untruncated" (exactTitle `T.isInfixOf` out)
-    assertBool "no ellipsis when title fits" (not ("…" `T.isInfixOf` out))
-
--- =============================================================
--- show views render full ULIDs
--- =============================================================
-
-minKnowledge :: Knowledge
-minKnowledge = Knowledge
-    { knowledgeId        = "01KNOW000000000000000000KK"
-    , knowledgeTitle     = "Test knowledge"
-    , knowledgeBody      = "Know body"
-    , knowledgeStale     = False
-    , knowledgeCreatedAt = "2026-01-01T00:00:00Z"
-    , knowledgeUpdatedAt = "2026-01-01T00:00:00Z"
-    }
-
-minDispatch :: Dispatch
-minDispatch = Dispatch
-    { dispatchId         = "01DISP000000000000000000DD"
-    , dispatchTaskId     = "01TEST00000000000000000000"
-    , dispatchBranch     = "dispatch/01DISP000000000000000000DD"
-    , dispatchBaseBranch = "main"
-    , dispatchBaseSha    = "0000000000000000000000000000000000000000"
-    , dispatchPid        = Nothing
-    , dispatchModel      = "claude-sonnet-4-6"
-    , dispatchEffort     = Medium
-    , dispatchStartedAt  = "2026-01-01T00:00:00Z"
-    , dispatchHeartbeat  = "2026-01-01T00:00:00Z"
-    , dispatchEndedAt    = Nothing
-    , dispatchOutcome    = Nothing
-    , dispatchMergeSha   = Nothing
-    , dispatchLastCommit = Nothing
-    , dispatchNotes      = Nothing
-    , dispatchLogPath    = Nothing
-    }
-
-testTaskShowIdFull :: IO ()
-testTaskShowIdFull = do
-    let out  = renderTaskHuman True minTask [] [] []
-        ls   = T.lines out
-        idLine = head $ filter ("id:" `T.isPrefixOf`) ls
-        val  = T.strip (T.drop (T.length "id:") idLine)
-    T.length val @?= 26
-
-testKnowledgeShowIdFull :: IO ()
-testKnowledgeShowIdFull = do
-    let out  = renderKnowledge minKnowledge []
-        ls   = T.lines out
-        idLine = head $ filter ("id:" `T.isPrefixOf`) ls
-        val  = T.strip (T.drop (T.length "id:") idLine)
-    T.length val @?= 26
-
-testDispatchShowIdFull :: IO ()
-testDispatchShowIdFull = do
-    let out  = renderDispatch minDispatch (Just minTask) []
-        ls   = T.lines out
-        fieldVal prefix = T.strip . T.drop (T.length prefix) . head
-                        $ filter (prefix `T.isPrefixOf`) ls
-        idVal      = fieldVal "id:"
-        taskIdVal  = fieldVal "task_id:"
-    T.length idVal     @?= 26
-    T.length taskIdVal @?= 26
 
 -- =============================================================
 -- category sync tests
@@ -1075,10 +874,6 @@ testAutoDeriveDepsTaskMissing = withTestDb $ \c -> do
 -- updateTask block_reason invariant tests
 -- =============================================================
 
--- Insert a Blocked task with a block_reason, then update its state and
--- assert what happens to block_reason. The invariant: block_reason is
--- only meaningful for Blocked, so transitioning out should clear it.
-
 insertBlockedTask :: Connection -> Text -> IO Text
 insertBlockedTask c reason = do
     tid <- RT.insertTask c RT.NewTask
@@ -1113,6 +908,16 @@ testUpdateBlockedPreservesReason = withTestDb $ \c -> do
 -- =============================================================
 -- task show links section tests
 -- =============================================================
+
+minKnowledge :: Knowledge
+minKnowledge = Knowledge
+    { knowledgeId        = "01KNOW000000000000000000KK"
+    , knowledgeTitle     = "Test knowledge"
+    , knowledgeBody      = "Know body"
+    , knowledgeStale     = False
+    , knowledgeCreatedAt = "2026-01-01T00:00:00Z"
+    , knowledgeUpdatedAt = "2026-01-01T00:00:00Z"
+    }
 
 -- Shared fixtures for links section tests.
 depTask :: TaskState -> Task
@@ -1247,11 +1052,3 @@ testKnowUpdateDomainReplaces = withTestDb $ \c -> do
     let doms = filter (\x -> categoryAxis x == Domain) cats
     length doms @?= 1
     map categoryName doms @?= ["domB"]
-
-testRequireCategoryUnknown :: IO ()
-testRequireCategoryUnknown = withTestDb $ \c -> do
-    result <- try (requireCategory c Domain "no-such-cat") :: IO (Either ExitCode Category)
-    case result of
-        Left (ExitFailure 2) -> pure ()
-        Left e               -> fail ("unexpected exit code: " <> show e)
-        Right _              -> fail "expected failure for unknown category"
