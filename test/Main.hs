@@ -13,7 +13,7 @@ import           System.Exit               (ExitCode (..))
 import           System.IO                 (hClose)
 import           System.IO.Temp            (withSystemTempFile)
 import           Test.Tasty                (TestTree, defaultMain, testGroup)
-import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
+import           Test.Tasty.HUnit          (assertBool, assertFailure, testCase, (@?=))
 
 import           Icarium.Commands.Category (SyncReport (..), syncCategories)
 import           Icarium.Commands.Dispatch (renderDispatch)
@@ -172,6 +172,9 @@ tickWith = summariseTick tickTs
 
 strIn :: String -> String -> Bool
 strIn needle = T.isInfixOf (T.pack needle) . T.pack
+
+mustJust :: String -> Maybe a -> IO a
+mustJust msg = maybe (assertFailure msg) pure
 
 testTickSystem :: IO ()
 testTickSystem = do
@@ -811,10 +814,10 @@ testGroupedHeaders = do
     assertBool "BLOCKED (0) header" ("BLOCKED  (0)" `T.isInfixOf` out)
     assertBool "IDEA (1) header"    ("IDEA  (1)"    `T.isInfixOf` out)
     -- Order: READY before PLANNED before BLOCKED before IDEA.
-    let Just iReady   = lengthBefore "READY"   out
-        Just iPlanned = lengthBefore "PLANNED" out
-        Just iBlocked = lengthBefore "BLOCKED" out
-        Just iIdea    = lengthBefore "IDEA"    out
+    iReady   <- mustJust "READY position"   (lengthBefore "READY"   out)
+    iPlanned <- mustJust "PLANNED position" (lengthBefore "PLANNED" out)
+    iBlocked <- mustJust "BLOCKED position" (lengthBefore "BLOCKED" out)
+    iIdea    <- mustJust "IDEA position"    (lengthBefore "IDEA"    out)
     assertBool "READY before PLANNED" (iReady < iPlanned)
     assertBool "PLANNED before BLOCKED" (iPlanned < iBlocked)
     assertBool "BLOCKED before IDEA" (iBlocked < iIdea)
@@ -1163,8 +1166,8 @@ testLinksBothKinds = do
     assertBool "depends-on edge"        ("depends-on" `T.isInfixOf` out)
     assertBool "references edge"        ("references" `T.isInfixOf` out)
     -- depends-on appears before references in the output
-    let Just iDep = posOf "depends-on" out
-        Just iRef = posOf "references" out
+    iDep <- mustJust "depends-on position" (posOf "depends-on" out)
+    iRef <- mustJust "references position" (posOf "references" out)
     assertBool "depends-on before references" (iDep < iRef)
     -- branch glyph on dep (not last), last glyph on ref
     assertBool "branch glyph ├─"       ("├─" `T.isInfixOf` out)
