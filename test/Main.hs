@@ -1,5 +1,6 @@
 module Main (main) where
 
+import           CliSpec                   (tests)
 import           Control.Exception         (bracket, try)
 import           Control.Monad             (forM, forM_, void)
 import qualified Data.ByteString.Char8     as BC
@@ -37,7 +38,8 @@ import           Icarium.Types
 
 main :: IO ()
 main = defaultMain $ testGroup "icarium"
-    [ testGroup "TaskState round-trips"    taskStateTests
+    [ tests
+    , testGroup "TaskState round-trips"    taskStateTests
     , testGroup "EdgeKind round-trips"     edgeKindTests
     , testGroup "Effort round-trips"       effortTests
     , testGroup "CategoryAxis round-trips" categoryAxisTests

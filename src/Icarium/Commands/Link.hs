@@ -8,7 +8,7 @@ import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
 
 import           Icarium.Commands.Util
-import           Icarium.Db             (defaultDbPath, withDb)
+import           Icarium.Db             (withDb)
 import qualified Icarium.Render         as Render
 import qualified Icarium.Repo.Edge      as RE
 import qualified Icarium.Repo.Knowledge as RK
@@ -29,11 +29,11 @@ parser = subparser
     )
     <|> (List <$> listP)
 
-run :: Command -> IO ()
-run = \case
-    Add o  -> runAdd o
-    List o -> runList o
-    Rm o   -> runRm o
+run :: FilePath -> Command -> IO ()
+run db = \case
+    Add o  -> runAdd db o
+    List o -> runList db o
+    Rm o   -> runRm db o
 
 -- =============================================================
 -- add
@@ -84,8 +84,8 @@ expectedShape References  = "task -> knowledge"
 expectedShape DerivedFrom = "knowledge -> (task|knowledge)"
 expectedShape Supersedes  = "knowledge -> knowledge"
 
-runAdd :: AddOpts -> IO ()
-runAdd o = withDb defaultDbPath $ \c -> do
+runAdd :: FilePath -> AddOpts -> IO ()
+runAdd db o = withDb db $ \c -> do
     (srcKind, srcId) <- resolveNode c (aSrc o)
     (dstKind, dstId) <- resolveNode c (aDst o)
     case checkTyping (aKind o) srcKind dstKind of
@@ -115,8 +115,8 @@ listP = ListOpts
     <*> optional (option edgeKindReader (long "kind" <> metavar "KIND"
            <> help "Filter by edge kind"))
 
-runList :: ListOpts -> IO ()
-runList o = withDb defaultDbPath $ \c -> do
+runList :: FilePath -> ListOpts -> IO ()
+runList db o = withDb db $ \c -> do
     mFrom <- traverse (fmap snd . resolveNode c) (lFrom o)
     mTo   <- traverse (fmap snd . resolveNode c) (lTo o)
     es <- RE.listEdges c mFrom mTo (lKind o)
@@ -133,8 +133,8 @@ newtype RmOpts = RmOpts { rId :: Text }
 rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "EDGE_ID")
 
-runRm :: RmOpts -> IO ()
-runRm o = withDb defaultDbPath $ \c -> do
+runRm :: FilePath -> RmOpts -> IO ()
+runRm db o = withDb db $ \c -> do
     eid <- RE.resolveEdgeId c (rId o) >>= \case
         Left err -> fatal 1 err
         Right x  -> pure x

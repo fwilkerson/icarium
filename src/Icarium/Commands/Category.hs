@@ -19,7 +19,7 @@ import           System.IO              (hPutStrLn, stderr)
 import           Icarium.Commands.Util
 import           Icarium.Config         (CategoriesConfig (..), Config (..), defaultConfigPath,
                                          loadConfig)
-import           Icarium.Db             (defaultDbPath, withDb)
+import           Icarium.Db             (withDb)
 import qualified Icarium.Render         as Render
 import qualified Icarium.Repo.Category  as RC
 import           Icarium.Types
@@ -38,10 +38,10 @@ parser = subparser
     )
     <|> (List <$> listP)
 
-run :: Command -> IO ()
-run = \case
-    List o -> runList o
-    Sync o -> runSync o
+run :: FilePath -> Command -> IO ()
+run db = \case
+    List o -> runList db o
+    Sync o -> runSync db o
 
 -- ------------------------------------------------------------------ list
 
@@ -52,8 +52,8 @@ listP = ListOpts
     <$> optional (option axisReader (long "axis" <> metavar "AXIS"
            <> help "Filter by axis (domain | discipline)."))
 
-runList :: ListOpts -> IO ()
-runList o = withDb defaultDbPath $ \c -> do
+runList :: FilePath -> ListOpts -> IO ()
+runList db o = withDb db $ \c -> do
     cats <- RC.listCategories c (lAxis o)
     case cats of
         [] -> TIO.putStrLn "(no categories)"
@@ -109,10 +109,10 @@ syncCategories conn cfg prune = do
         , srBlocking = blocking
         }
 
-runSync :: SyncOpts -> IO ()
-runSync o = do
+runSync :: FilePath -> SyncOpts -> IO ()
+runSync db o = do
     config <- loadConfig defaultConfigPath >>= either (fatal 2) pure
-    withDb defaultDbPath $ \conn -> do
+    withDb db $ \conn -> do
         rpt <- syncCategories conn (cfgCategories config) (sPrune o)
         forM_ (srInserted rpt) $ \(ax, n) ->
             TIO.putStrLn $ "inserted  " <> categoryAxisText ax <> ":" <> n

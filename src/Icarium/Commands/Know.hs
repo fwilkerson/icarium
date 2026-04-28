@@ -11,7 +11,7 @@ import           System.Environment     (lookupEnv)
 import           System.IO              (hPutStrLn, stderr)
 
 import           Icarium.Commands.Util
-import           Icarium.Db             (defaultDbPath, withDb)
+import           Icarium.Db             (withDb)
 import qualified Icarium.Render         as Render
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Edge      as RE
@@ -37,13 +37,13 @@ parser = subparser
     )
     <|> (List <$> listP)
 
-run :: Command -> IO ()
-run = \case
-    Add o     -> runAdd o
-    List o    -> runList o
-    Show o    -> runShow o
-    Update o  -> runUpdate o
-    Rm o      -> runRm o
+run :: FilePath -> Command -> IO ()
+run db = \case
+    Add o     -> runAdd db o
+    List o    -> runList db o
+    Show o    -> runShow db o
+    Update o  -> runUpdate db o
+    Rm o      -> runRm db o
 
 -- =============================================================
 -- add
@@ -71,8 +71,8 @@ addP = AddOpts . T.pack
     <*> optional (T.pack <$> strOption (long "supersedes" <> metavar "KNOWLEDGE_ID"
            <> help "Mark this entry as superseding KNOWLEDGE_ID"))
 
-runAdd :: AddOpts -> IO ()
-runAdd o = withDb defaultDbPath $ \c -> do
+runAdd :: FilePath -> AddOpts -> IO ()
+runAdd db o = withDb db $ \c -> do
     body <- resolveBody (aBody o)
 
     -- Pre-validate category names and any referenced ids.
@@ -171,8 +171,8 @@ listP = ListOpts
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Filter by discipline category"))
 
-runList :: ListOpts -> IO ()
-runList o = withDb defaultDbPath $ \c -> do
+runList :: FilePath -> ListOpts -> IO ()
+runList db o = withDb db $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let staleFilter
@@ -193,8 +193,8 @@ showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "KNOWLEDGE_ID")
 
-runShow :: ShowOpts -> IO ()
-runShow o = withDb defaultDbPath $ \c -> do
+runShow :: FilePath -> ShowOpts -> IO ()
+runShow db o = withDb db $ \c -> do
     eId <- RK.resolveKnowledgeId c (sId o)
     kid <- case eId of
         Left err -> fatal 1 err
@@ -234,8 +234,8 @@ staleFlag =
     <|> (Just False <$ switch (long "not-stale" <> help "Mark entry as not stale"))
     <|> pure Nothing
 
-runUpdate :: UpdateOpts -> IO ()
-runUpdate o = withDb defaultDbPath $ \c -> do
+runUpdate :: FilePath -> UpdateOpts -> IO ()
+runUpdate db o = withDb db $ \c -> do
     eId <- RK.resolveKnowledgeId c (uId o)
     kid <- case eId of
         Left err -> fatal 1 err
@@ -272,8 +272,8 @@ newtype RmOpts = RmOpts { rId :: Text }
 rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
 
-runRm :: RmOpts -> IO ()
-runRm o = withDb defaultDbPath $ \c -> do
+runRm :: FilePath -> RmOpts -> IO ()
+runRm db o = withDb db $ \c -> do
     eId <- RK.resolveKnowledgeId c (rId o)
     kid <- case eId of
         Left err -> fatal 1 err

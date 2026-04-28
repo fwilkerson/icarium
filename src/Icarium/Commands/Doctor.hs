@@ -14,7 +14,7 @@ import           System.Process.Typed   (nullStream, proc, runProcess, setStderr
 
 import           Icarium.Config         (DispatchConfig (..), cfgDispatch, defaultConfigPath,
                                          loadConfig)
-import           Icarium.Db             (dbSchemaVersion, defaultDbPath, openDb)
+import           Icarium.Db             (dbSchemaVersion, openDb)
 import qualified Icarium.Repo.Dispatch  as RD
 import           Icarium.Schema         (schemaVersion)
 import           Icarium.Types          (Dispatch (..))
@@ -31,16 +31,16 @@ data Check = Check
     , checkResult :: CheckResult
     }
 
-run :: Options -> IO ()
-run _ = do
+run :: FilePath -> Options -> IO ()
+run dbPath _ = do
     basic <- sequence
         [ checkConfig
-        , checkFile   "database" defaultDbPath
-        , checkSchema
+        , checkFile   "database" dbPath
+        , checkSchema dbPath
         , checkBinary "claude"
         , checkBinary "git"
         ]
-    orphans <- checkOrphanedDispatches
+    orphans <- checkOrphanedDispatches dbPath
     let checks = basic ++ orphans
     mapM_ printCheck checks
     if any isFail checks
@@ -75,13 +75,13 @@ checkBinary name = do
     pure $ Check ("bin:" <> name) $
         maybe (FAIL "not on PATH") OK r
 
-checkSchema :: IO Check
-checkSchema = do
-    e <- doesFileExist defaultDbPath
+checkSchema :: FilePath -> IO Check
+checkSchema dbPath = do
+    e <- doesFileExist dbPath
     if not e
         then pure $ Check "schema" (FAIL "no database")
         else do
-            v <- bracket (openDb defaultDbPath) close dbSchemaVersion
+            v <- bracket (openDb dbPath) close dbSchemaVersion
             let expected = fromIntegral schemaVersion :: Integer
                 actual   = fromIntegral v             :: Integer
             pure $ Check "schema" $
@@ -90,9 +90,9 @@ checkSchema = do
                     else FAIL ("expected v" <> show expected
                                <> ", got v" <> show actual)
 
-checkOrphanedDispatches :: IO [Check]
-checkOrphanedDispatches = do
-    dbOk  <- doesFileExist defaultDbPath
+checkOrphanedDispatches :: FilePath -> IO [Check]
+checkOrphanedDispatches dbPath = do
+    dbOk  <- doesFileExist dbPath
     cfgOk <- doesFileExist defaultConfigPath
     if not dbOk || not cfgOk
         then pure []
@@ -103,7 +103,7 @@ checkOrphanedDispatches = do
                 Just cfg -> do
                     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
                     now <- getCurrentTime
-                    bracket (openDb defaultDbPath) close $ \conn -> do
+                    bracket (openDb dbPath) close $ \conn -> do
                         open    <- RD.listOpenDispatches conn
                         orphans <- filterM (isOrphanedDispatch now staleSec) open
                         pure $ if null orphans

@@ -10,7 +10,7 @@ import           Options.Applicative
 import           System.Exit            (ExitCode (..), exitWith)
 
 import           Icarium.Commands.Util
-import           Icarium.Db             (defaultDbPath, withDb)
+import           Icarium.Db             (withDb)
 import qualified Icarium.Render         as Render
 import qualified Icarium.Repo.Category  as RC
 import qualified Icarium.Repo.Edge      as RE
@@ -38,14 +38,14 @@ parser = subparser
     )
     <|> (List <$> listP)
 
-run :: Command -> IO ()
-run = \case
-    Add o     -> runAdd o
-    List o    -> runList o
-    Show o    -> runShow o
-    Update o  -> runUpdate o
-    Rm o      -> runRm o
-    Next o    -> runNext o
+run :: FilePath -> Command -> IO ()
+run db = \case
+    Add o     -> runAdd db o
+    List o    -> runList db o
+    Show o    -> runShow db o
+    Update o  -> runUpdate db o
+    Rm o      -> runRm db o
+    Next o    -> runNext db o
 
 -- =============================================================
 -- add
@@ -80,8 +80,8 @@ addP = AddOpts . T.pack
     <*> many (T.pack <$> strOption (long "references" <> metavar "KNOWLEDGE_ID"
            <> help "Add a references edge to KNOWLEDGE_ID"))
 
-runAdd :: AddOpts -> IO ()
-runAdd o = withDb defaultDbPath $ \c -> do
+runAdd :: FilePath -> AddOpts -> IO ()
+runAdd db o = withDb db $ \c -> do
     body <- resolveBody (aBody o)
     unless (aState o `elem` [Idea, Planned, Ready]) $
         fatal 2 "on add: state must be idea | planned | ready"
@@ -147,8 +147,8 @@ listP = ListOpts
 defaultActiveStates :: [TaskState]
 defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked, Abandoned]
 
-runList :: ListOpts -> IO ()
-runList o = withDb defaultDbPath $ \c -> do
+runList :: FilePath -> ListOpts -> IO ()
+runList db o = withDb db $ \c -> do
     forM_ (lDomain o)     $ \n -> void $ requireCategory c Domain     n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let effectiveStates
@@ -207,8 +207,8 @@ showP = ShowOpts . T.pack
             <> help "Output format: human (default) or prompt"
             )
 
-runShow :: ShowOpts -> IO ()
-runShow o = withDb defaultDbPath $ \c -> do
+runShow :: FilePath -> ShowOpts -> IO ()
+runShow db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
     Just t <- RT.getTask c tid
     refs <- RE.referencedKnowledge c (taskId t)
@@ -255,8 +255,8 @@ updateP = UpdateOpts . T.pack
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Replace discipline category; empty string clears"))
 
-runUpdate :: UpdateOpts -> IO ()
-runUpdate o = withDb defaultDbPath $ \c -> do
+runUpdate :: FilePath -> UpdateOpts -> IO ()
+runUpdate db o = withDb db $ \c -> do
     when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
     tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
@@ -293,8 +293,8 @@ newtype RmOpts = RmOpts { rId :: Text }
 rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
-runRm :: RmOpts -> IO ()
-runRm o = withDb defaultDbPath $ \c -> do
+runRm :: FilePath -> RmOpts -> IO ()
+runRm db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (rId o))
     ok <- RT.deleteTask c tid
     if ok then TIO.putStrLn ("deleted " <> tid)
@@ -309,8 +309,8 @@ data NextOpts = NextOpts
 nextP :: Parser NextOpts
 nextP = pure NextOpts
 
-runNext :: NextOpts -> IO ()
-runNext _ = withDb defaultDbPath $ \c -> do
+runNext :: FilePath -> NextOpts -> IO ()
+runNext db _ = withDb db $ \c -> do
     ts <- RT.listTasks c [] True Nothing Nothing
     case ts of
         []      -> exitWith (ExitFailure 1)

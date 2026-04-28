@@ -70,6 +70,7 @@ test-suite icarium-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Main.hs
+    other-modules:    CliSpec
     build-depends:    base,
                       bytestring,
                       text,
@@ -77,4 +78,5 @@ test-suite icarium-test
                       icarium,
                       tasty,
                       tasty-hunit,
-                      temporary
+                      temporary,
+                      typed-process

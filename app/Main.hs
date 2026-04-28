@@ -7,6 +7,7 @@ import qualified Icarium.Commands.Init     as Init
 import qualified Icarium.Commands.Know     as Know
 import qualified Icarium.Commands.Link     as Link
 import qualified Icarium.Commands.Task     as Task
+import           Icarium.Db                (defaultDbPath)
 import           Options.Applicative
 
 data Command
@@ -18,26 +19,41 @@ data Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
 
+data Args = Args
+    { argsDb  :: FilePath
+    , argsCmd :: Command
+    }
+
 main :: IO ()
-main = run =<< execParser parser
+main = do
+    args <- execParser parser
+    runCmd (argsDb args) (argsCmd args)
 
-run :: Command -> IO ()
-run (CmdInit o)     = Init.run o
-run (CmdDoctor o)   = Doctor.run o
-run (CmdTask c)     = Task.run c
-run (CmdKnow c)     = Know.run c
-run (CmdLink c)     = Link.run c
-run (CmdCategory c) = Category.run c
-run (CmdDispatch c) = Dispatch.run c
+runCmd :: FilePath -> Command -> IO ()
+runCmd db (CmdInit o)     = Init.run db o
+runCmd db (CmdDoctor o)   = Doctor.run db o
+runCmd db (CmdTask c)     = Task.run db c
+runCmd db (CmdKnow c)     = Know.run db c
+runCmd db (CmdLink c)     = Link.run db c
+runCmd db (CmdCategory c) = Category.run db c
+runCmd db (CmdDispatch c) = Dispatch.run db c
 
-parser :: ParserInfo Command
-parser = info (commands <**> helper)
+parser :: ParserInfo Args
+parser = info (argsP <**> helper)
     ( fullDesc
    <> progDesc "Task/knowledge/dispatch tool for headless-agent workflows"
    <> header   "icarium" )
 
-commands :: Parser Command
-commands = subparser
+argsP :: Parser Args
+argsP = Args
+    <$> strOption
+            ( long "db" <> metavar "PATH"
+           <> value defaultDbPath <> showDefault
+           <> help "SQLite database file" )
+    <*> cmdP
+
+cmdP :: Parser Command
+cmdP = subparser
     ( command "init"
         (info (CmdInit <$> Init.parser <**> helper)
               (progDesc "Initialize a project: create DB, apply schema, write config"))

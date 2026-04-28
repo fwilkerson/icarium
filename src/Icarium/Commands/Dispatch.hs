@@ -26,7 +26,7 @@ import qualified Icarium.Git            as Git
 import           Icarium.Commands.Util
 import           Icarium.Config         (Config, DispatchConfig (..), cfgDispatch,
                                          defaultConfigPath, loadConfig)
-import           Icarium.Db             (defaultDbPath, withDb)
+import           Icarium.Db             (withDb)
 import qualified Icarium.Dispatch       as D
 import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Edge      as RE
@@ -55,13 +55,13 @@ parser = subparser
     )
     <|> (List <$> listP)
 
-run :: Command -> IO ()
-run = \case
-    Run     o -> runRun     o
-    List    o -> runList    o
-    Show    o -> runShow    o
-    Logs    o -> runLogs    o
-    Recover o -> runRecover o
+run :: FilePath -> Command -> IO ()
+run db = \case
+    Run     o -> runRun     db o
+    List    o -> runList    db o
+    Show    o -> runShow    db o
+    Logs    o -> runLogs    db o
+    Recover o -> runRecover db o
 
 -- =============================================================
 -- run  (single-task dispatch or queue drain)
@@ -89,14 +89,14 @@ runP = RunOpts
            <> help "Override the base branch for git operations"))
     <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
-runRun :: RunOpts -> IO ()
-runRun o = do
+runRun :: FilePath -> RunOpts -> IO ()
+runRun db o = do
     cfg <- loadConfig defaultConfigPath >>= \case
         Left  e  -> fatal 2 ("config parse error:\n" <> e)
         Right c  -> pure c
     case rTaskId o of
         Just rawId ->
-            withDb defaultDbPath $ \c -> do
+            withDb db $ \c -> do
                 tid <- resolveOrFatal (RT.resolveTaskId c rawId)
                 mt <- RT.getTask c tid
                 case mt of
@@ -123,7 +123,7 @@ runRun o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
-            withDb defaultDbPath (drainLoop o cfg cap 0 sigCount)
+            withDb db (drainLoop o cfg cap 0 sigCount)
 
 drainLoop :: RunOpts -> Config -> Int -> Int -> IORef Int -> Connection -> IO ()
 drainLoop opts cfg cap !i sigCount conn
@@ -295,8 +295,8 @@ outcomeReader = eitherReader $ \s ->
         Just o  -> Right o
         Nothing -> Left ("invalid outcome: " <> s)
 
-runList :: ListOpts -> IO ()
-runList o = withDb defaultDbPath $ \c -> do
+runList :: FilePath -> ListOpts -> IO ()
+runList db o = withDb db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <- RD.listDispatches c mTaskId
     let filtered = case lOutcome o of
@@ -338,8 +338,8 @@ showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "DISPATCH_ID")
 
-runShow :: ShowOpts -> IO ()
-runShow o = withDb defaultDbPath $ \c -> do
+runShow :: FilePath -> ShowOpts -> IO ()
+runShow db o = withDb db $ \c -> do
     did <- RD.resolveDispatchId c (sId o) >>= \case
         Left err -> fatal 1 err
         Right x  -> pure x
@@ -395,8 +395,8 @@ logsP = LogsOpts . T.pack
     <*> optional (option auto (long "tail" <> metavar "N"
                               <> help "Print only the last N lines"))
 
-runLogs :: LogsOpts -> IO ()
-runLogs o = withDb defaultDbPath $ \c -> do
+runLogs :: FilePath -> LogsOpts -> IO ()
+runLogs db o = withDb db $ \c -> do
     did <- RD.resolveDispatchId c (gId o) >>= \case
         Left err -> fatal 1 err
         Right x  -> pure x
@@ -429,13 +429,13 @@ recoverP :: Parser RecoverOpts
 recoverP = RecoverOpts
     <$> optional (T.pack <$> strArgument (metavar "DISPATCH_ID"))
 
-runRecover :: RecoverOpts -> IO ()
-runRecover o = do
+runRecover :: FilePath -> RecoverOpts -> IO ()
+runRecover db o = do
     cfg <- loadConfig defaultConfigPath >>= \case
         Left  e -> fatal 2 ("config parse error:\n" <> e)
         Right c -> pure c
     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
-    withDb defaultDbPath $ \c -> do
+    withDb db $ \c -> do
         open <- case recDispatchId o of
             Just raw -> do
                 did <- RD.resolveDispatchId c raw >>= \case

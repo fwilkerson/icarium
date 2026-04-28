@@ -11,7 +11,7 @@ import qualified Data.Text                 as T
 import           Icarium.Commands.Category (SyncReport (..), syncCategories)
 import           Icarium.Config            (Config (..), defaultConfigPath, defaultConfigText,
                                             loadConfig)
-import           Icarium.Db                (defaultDbPath, initDb, withDb)
+import           Icarium.Db                (initDb, withDb)
 import           Icarium.Types             (categoryAxisText)
 
 newtype Options = Options
@@ -22,20 +22,20 @@ parser :: Parser Options
 parser = Options
     <$> switch (long "force" <> help "Overwrite existing config / reapply schema")
 
-run :: Options -> IO ()
-run o = do
-    dbExists     <- doesFileExist defaultDbPath
+run :: FilePath -> Options -> IO ()
+run dbPath o = do
+    dbExists     <- doesFileExist dbPath
     configExists <- doesFileExist defaultConfigPath
 
     -- DB is protected: we refuse to clobber existing task/knowledge state.
     when (dbExists && not (optForce o)) $
-        fatal 2 ("database already exists: " <> defaultDbPath
+        fatal 2 ("database already exists: " <> dbPath
                  <> " (use --force to reinitialize; this will NOT delete the file)")
     when (dbExists && optForce o) $
         ioError (userError "refusing to clobber existing DB; remove it manually")
 
-    initDb defaultDbPath
-    putStrLn $ "created  " <> defaultDbPath
+    initDb dbPath
+    putStrLn $ "created  " <> dbPath
 
     -- Config is forgiving: on a fresh clone the repo may already ship a
     -- tuned icarium.toml; don't error in that case, just keep it.
@@ -47,7 +47,7 @@ run o = do
 
     -- Seed categories from toml into the fresh DB.
     config <- loadConfig defaultConfigPath >>= either (fatal 2) pure
-    withDb defaultDbPath $ \conn -> do
+    withDb dbPath $ \conn -> do
         rpt <- syncCategories conn (cfgCategories config) False
         mapM_ (\(ax, n) -> putStrLn $
             "seeded   " <> T.unpack (categoryAxisText ax) <> ":" <> T.unpack n) (srInserted rpt)
