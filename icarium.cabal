@@ -53,6 +53,7 @@ library
                       ulid,
                       optparse-applicative,
                       tomland,
+                      transformers,
                       typed-process,
                       time,
                       unix

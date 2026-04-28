@@ -7,40 +7,42 @@ module Icarium.Dispatch
     , postClaudeGuard
     ) where
 
-import           Control.Concurrent     (forkIO)
-import           Control.Exception      (SomeException, bracket, try)
-import           Control.Monad          (unless, void, when)
-import qualified Data.ByteString.Char8  as BC
-import qualified Data.ByteString.Lazy   as BL
-import           Data.Maybe             (fromMaybe)
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-import qualified Data.Text.Encoding     as TE
-import qualified Data.Text.IO           as TIO
-import           Data.Time              (defaultTimeLocale, formatTime, getCurrentTime)
-import           Database.SQLite.Simple (Connection, close)
-import           System.Directory       (createDirectoryIfMissing, doesFileExist, removeFile)
-import           System.Environment     (getEnvironment)
-import           System.Exit            (ExitCode (..))
-import           System.FilePath        ((</>))
-import           System.IO              (BufferMode (..), Handle, IOMode (..), hIsEOF, hPutStrLn,
-                                         hSetBuffering, stderr, withFile)
-import           System.Process.Typed   (byteStringInput, createPipe, getPid, getStdout, proc,
-                                         runProcess, setCreateGroup, setEnv, setStdin, setStdout,
-                                         shell, waitExitCode, withProcessWait)
+import           Control.Concurrent         (forkIO)
+import           Control.Exception          (SomeException, bracket, try)
+import           Control.Monad              (unless, void, when)
+import           Control.Monad.IO.Class     (liftIO)
+import           Control.Monad.Trans.Except (runExceptT, throwE)
+import qualified Data.ByteString.Char8      as BC
+import qualified Data.ByteString.Lazy       as BL
+import           Data.Maybe                 (fromMaybe)
+import           Data.Text                  (Text)
+import qualified Data.Text                  as T
+import qualified Data.Text.Encoding         as TE
+import qualified Data.Text.IO               as TIO
+import           Data.Time                  (defaultTimeLocale, formatTime, getCurrentTime)
+import           Database.SQLite.Simple     (Connection, close)
+import           System.Directory           (createDirectoryIfMissing, doesFileExist, removeFile)
+import           System.Environment         (getEnvironment)
+import           System.Exit                (ExitCode (..))
+import           System.FilePath            ((</>))
+import           System.IO                  (BufferMode (..), Handle, IOMode (..), hIsEOF,
+                                             hPutStrLn, hSetBuffering, stderr, withFile)
+import           System.Process.Typed       (byteStringInput, createPipe, getPid, getStdout, proc,
+                                             runProcess, setCreateGroup, setEnv, setStdin,
+                                             setStdout, shell, waitExitCode, withProcessWait)
 
-import           Icarium.Config         (CommandsConfig (..), Config (..), DispatchConfig (..),
-                                         ProjectConfig (..))
-import           Icarium.Db             (defaultDbPath, openDb)
-import           Icarium.Dispatch.Tick  (emptyTickState, summariseTick)
-import qualified Icarium.Git            as Git
-import           Icarium.Id             (newId)
-import           Icarium.Render         (renderTaskPrompt)
-import qualified Icarium.Repo.Category  as RC
-import qualified Icarium.Repo.Dispatch  as RD
-import qualified Icarium.Repo.Edge      as RE
-import qualified Icarium.Repo.Knowledge as RK
-import qualified Icarium.Repo.Task      as RT
+import           Icarium.Config             (CommandsConfig (..), Config (..), DispatchConfig (..),
+                                             ProjectConfig (..))
+import           Icarium.Db                 (defaultDbPath, openDb)
+import           Icarium.Dispatch.Tick      (emptyTickState, summariseTick)
+import qualified Icarium.Git                as Git
+import           Icarium.Id                 (newId)
+import           Icarium.Render             (renderTaskPrompt)
+import qualified Icarium.Repo.Category      as RC
+import qualified Icarium.Repo.Dispatch      as RD
+import qualified Icarium.Repo.Edge          as RE
+import qualified Icarium.Repo.Knowledge     as RK
+import qualified Icarium.Repo.Task          as RT
 import           Icarium.Types
 
 -- =============================================================
@@ -282,50 +284,34 @@ handlePostClaude
     :: Connection -> Text -> Text -> Text -> Config -> ExitCode
     -> Text -> FilePath
     -> IO DispatchResult
-handlePostClaude conn did branch base cfg exit baseSha logPath = case exit of
-    ExitFailure c ->
-        finishWith conn did branch base OFailure Nothing
-            ("claude exited " <> T.pack (show c)) ret
-            (Just logPath) (Just baseSha)
-    ExitSuccess -> do
-        porcelain  <- Git.statusPorcelain
-        mBranchSha <- Git.revParse branch
-        case postClaudeGuard porcelain mBranchSha baseSha of
-            Just msg ->
-                finishWith conn did branch base OFailure Nothing msg ret
-                    (Just logPath) (Just baseSha)
-            Nothing -> do
-                case mBranchSha of
-                    Right sha -> RD.setLastCommit conn did sha
-                    Left  _   -> pure ()
-                let cc = cfgCommands cfg
-                gated <- runGate (ccBuild cc) >>= \case
-                    Left n  -> pure (Left n)
-                    Right _ -> runGate (ccTest cc)
-                case gated of
-                    Left notes ->
-                        finishWith conn did branch base OFailure Nothing notes ret
-                            (Just logPath) (Just baseSha)
-                    Right () -> do
-                        e1 <- Git.checkout base
-                        case e1 of
-                            Left err -> finishWith conn did branch base OFailure Nothing
-                                ("checkout base: " <> T.pack (show err)) ret
-                                (Just logPath) (Just baseSha)
-                            Right () -> do
-                                e2 <- Git.ffMerge branch
-                                case e2 of
-                                    Left err -> finishWith conn did branch base OFailure Nothing
-                                        ("ff-merge: " <> T.pack (show err)) ret
-                                        (Just logPath) (Just baseSha)
-                                    Right () -> do
-                                        _ <- Git.deleteBranch branch
-                                        mShaBase <- Git.revParse base
-                                        let mergeSha = either (const Nothing) Just mShaBase
-                                        finishWith conn did branch base OSuccess mergeSha "merged" ret
-                                            (Just logPath) (Just baseSha)
-  where
-    ret = dcLogRetentionRuns (cfgDispatch cfg)
+handlePostClaude conn did branch base cfg exit baseSha logPath = do
+    let ret    = dcLogRetentionRuns (cfgDispatch cfg)
+        cc     = cfgCommands cfg
+        finish o mSha notes =
+            finishWith conn did branch base o mSha notes ret (Just logPath) (Just baseSha)
+        step = do
+            case exit of
+                ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
+                ExitSuccess   -> pure ()
+            porcelain  <- liftIO Git.statusPorcelain
+            mBranchSha <- liftIO (Git.revParse branch)
+            mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)
+            liftIO $ case mBranchSha of
+                Right sha -> RD.setLastCommit conn did sha
+                Left  _   -> pure ()
+            liftIO (runGate (ccBuild cc)) >>= either throwE pure
+            liftIO (runGate (ccTest  cc)) >>= either throwE pure
+            liftIO (Git.checkout base) >>= \case
+                Left err -> throwE ("checkout base: " <> T.pack (show err))
+                Right () -> pure ()
+            liftIO (Git.ffMerge branch) >>= \case
+                Left err -> throwE ("ff-merge: " <> T.pack (show err))
+                Right () -> pure ()
+            liftIO (void (Git.deleteBranch branch))
+            either (const Nothing) Just <$> liftIO (Git.revParse base)
+    runExceptT step >>= \case
+        Left notes -> finish OFailure Nothing notes
+        Right mSha -> finish OSuccess mSha "merged"
 
 -- | Pure guard logic for the post-claude checks. Returns Just an error
 -- message if a guard fires, Nothing if both pass.
