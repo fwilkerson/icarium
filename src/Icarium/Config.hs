@@ -10,6 +10,7 @@ module Icarium.Config
     , CategoriesConfig(..)
       -- * IO
     , loadConfig
+    , validateConfig
     ) where
 
 import           Data.Text     (Text)
@@ -107,12 +108,20 @@ configCodec = Config
 defaultConfigPath :: FilePath
 defaultConfigPath = "icarium.toml"
 
+-- | Validate a decoded config. Returns Left with a human-readable error
+-- when a field value is semantically invalid.
+validateConfig :: Config -> Either String Config
+validateConfig c
+    | dcMaxMinutesPerDispatch (cfgDispatch c) <= 0 =
+        Left "dispatch.max_minutes_per_dispatch must be a positive integer"
+    | otherwise = Right c
+
 loadConfig :: FilePath -> IO (Either String Config)
 loadConfig fp = do
     src <- TIO.readFile fp
     pure $ case Toml.decode configCodec src of
-        Right c   -> Right c
         Left errs -> Left (T.unpack (Toml.prettyTomlDecodeErrors errs))
+        Right c   -> validateConfig c
 
 -- | Template written by @icarium init@. Values must match the codec above.
 defaultConfigText :: Text
@@ -133,6 +142,7 @@ defaultConfigText =
     \  \"Bash(icarium:*)\", \"Bash(git:*)\", \"Bash(cabal:*)\",\n\
     \]\n\
     \scratch_dir = \".icarium/scratch\"\n\
+    \# Wall-clock timeout per dispatch (minutes, must be a positive integer).\n\
     \max_minutes_per_dispatch = 30\n\
     \max_dispatches_per_run   = 20\n\
     \heartbeat_stale_seconds  = 300\n\

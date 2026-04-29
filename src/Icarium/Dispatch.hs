@@ -5,9 +5,12 @@ module Icarium.Dispatch
     , dispatchBranchName
     , applyOutcomeToTask
     , postClaudeGuard
+    , raceTimeout
+    , timeoutSentinel
+    , handlePostClaude
     ) where
 
-import           Control.Concurrent         (forkIO)
+import           Control.Concurrent         (forkIO, threadDelay)
 import           Control.Exception          (SomeException, bracket, try)
 import           Control.Monad              (unless, void, when)
 import           Control.Monad.IO.Class     (liftIO)
@@ -27,9 +30,12 @@ import           System.Exit                (ExitCode (..))
 import           System.FilePath            ((</>))
 import           System.IO                  (BufferMode (..), Handle, IOMode (..), hIsEOF,
                                              hPutStrLn, hSetBuffering, stderr, withFile)
+import           System.Posix.Signals       (sigINT, sigKILL, signalProcessGroup)
+import           System.Posix.Types         (CPid (..))
 import           System.Process.Typed       (byteStringInput, createPipe, getPid, getStdout, proc,
                                              runProcess, setCreateGroup, setEnv, setStdin,
                                              setStdout, shell, waitExitCode, withProcessWait)
+import           System.Timeout             (timeout)
 
 import           Icarium.Config             (CommandsConfig (..), Config (..), DispatchConfig (..),
                                              ProjectConfig (..))
@@ -146,9 +152,10 @@ doReal conn req = do
         base       = effectiveBase   req
         model      = effectiveModel  req
         effort     = effectiveEffort req
-        tools      = dcTools         dcfg
-        allowed    = dcAllowedTools  dcfg
-        scratchDir = dcScratchDir    dcfg
+        tools      = dcTools                 dcfg
+        allowed    = dcAllowedTools          dcfg
+        scratchDir = dcScratchDir            dcfg
+        maxMinutes = dcMaxMinutesPerDispatch dcfg
 
     checkPreconditions base
     baseSha <- either (ioFail . show) pure =<< Git.revParse base
@@ -185,7 +192,7 @@ doReal conn req = do
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
-            exit <- runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
+            exit <- runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath maxMinutes
             handlePostClaude conn did branch base cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
@@ -204,10 +211,29 @@ checkPreconditions base = do
 -- Claude invocation with live event streaming
 -- =============================================================
 
+-- | ExitCode returned when the wall-clock limit fires. @handlePostClaude@
+-- translates this sentinel into an OFailure with a timeout note.
+timeoutSentinel :: ExitCode
+timeoutSentinel = ExitFailure 124
+
+-- | Race an IO action against a deadline (microseconds).
+-- Returns 'Left ()' if the deadline fires first, 'Right a' otherwise.
+raceTimeout :: Int -> IO a -> IO (Either () a)
+raceTimeout usecs act = maybe (Left ()) Right <$> timeout usecs act
+
+-- | Send SIGINT to a process group, wait 10 s for a clean exit, then
+-- SIGKILL. Errors from signalProcessGroup (e.g. ESRCH if already dead)
+-- are silently ignored.
+killGroupGracefully :: CPid -> IO ()
+killGroupGracefully pgid = do
+    void $ (try :: IO () -> IO (Either SomeException ())) (signalProcessGroup sigINT pgid)
+    threadDelay (10 * 1_000_000)
+    void $ (try :: IO () -> IO (Either SomeException ())) (signalProcessGroup sigKILL pgid)
+
 runClaudeStreaming
-    :: Text -> Task -> Text -> Text -> Effort -> [Text] -> [Text] -> Text -> FilePath
+    :: Text -> Task -> Text -> Text -> Effort -> [Text] -> [Text] -> Text -> FilePath -> Int
     -> IO ExitCode
-runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath = do
+runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath maxMinutes = do
     parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args =
@@ -232,6 +258,7 @@ runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
              $ setEnv         env
              $ setCreateGroup True
              $ proc "claude" args
+        maxUsecs = maxMinutes * 60 * 1_000_000
 
     withLogHandle logPath $ \logH ->
         withProcessWait pcfg $ \p -> do
@@ -242,7 +269,12 @@ runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
                     RD.setPid c did (fromIntegral pid)
                 Nothing  -> pure ()
             _ <- forkIO (teeAndHeartbeat (getStdout p) logH did (taskTitle task))
-            waitExitCode p
+            result <- raceTimeout maxUsecs (waitExitCode p)
+            case result of
+                Right exit -> pure exit
+                Left () -> do
+                    mapM_ (killGroupGracefully . CPid . fromIntegral) mPid
+                    pure timeoutSentinel
 
 -- | Tail the child's stdout, copy each line to the log file, and bump
 -- the heartbeat row per event. Runs in its own thread with its own DB
@@ -285,14 +317,16 @@ handlePostClaude
     -> Text -> FilePath
     -> IO DispatchResult
 handlePostClaude conn did branch base cfg exit baseSha logPath = do
-    let ret    = dcLogRetentionRuns (cfgDispatch cfg)
-        cc     = cfgCommands cfg
+    let ret     = dcLogRetentionRuns        (cfgDispatch cfg)
+        maxMins = dcMaxMinutesPerDispatch   (cfgDispatch cfg)
+        cc      = cfgCommands cfg
         finish o mSha notes =
             finishWith conn did branch base o mSha notes ret (Just logPath) (Just baseSha)
         step = do
             case exit of
-                ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
-                ExitSuccess   -> pure ()
+                ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
+                ExitFailure c   -> throwE ("claude exited " <> T.pack (show c))
+                ExitSuccess     -> pure ()
             porcelain  <- liftIO Git.statusPorcelain
             mBranchSha <- liftIO (Git.revParse branch)
             mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)

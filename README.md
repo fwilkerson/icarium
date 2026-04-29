@@ -40,8 +40,9 @@ allowed_tools = [
 
 scratch_dir = ".icarium/scratch"
 
-# Guardrails for `dispatch run` draining the queue.
+# Wall-clock timeout per dispatch (minutes, must be a positive integer).
 max_minutes_per_dispatch = 30
+# Cap on dispatches when draining the queue in one run.
 max_dispatches_per_run   = 20
 
 heartbeat_stale_seconds  = 300
