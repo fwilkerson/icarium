@@ -48,7 +48,6 @@ data DispatchConfig = DispatchConfig
     , dcAllowedTools          :: [Text]
     , dcScratchDir            :: Text
     , dcMaxMinutesPerDispatch :: Int
-    , dcMaxDispatchesPerRun   :: Int
     , dcHeartbeatStaleSeconds :: Int
     , dcLogRetentionRuns      :: Int
     } deriving (Show)
@@ -85,7 +84,6 @@ dispatchCodec = DispatchConfig
     <*> Toml.arrayOf Toml._Text       "allowed_tools"            .= dcAllowedTools
     <*> Toml.text                     "scratch_dir"              .= dcScratchDir
     <*> Toml.int                      "max_minutes_per_dispatch" .= dcMaxMinutesPerDispatch
-    <*> Toml.int                      "max_dispatches_per_run"   .= dcMaxDispatchesPerRun
     <*> Toml.int                      "heartbeat_stale_seconds"  .= dcHeartbeatStaleSeconds
     <*> Toml.int                      "log_retention_runs"       .= dcLogRetentionRuns
 
@@ -144,7 +142,6 @@ defaultConfigText =
     \scratch_dir = \".icarium/scratch\"\n\
     \# Wall-clock timeout per dispatch (minutes, must be a positive integer).\n\
     \max_minutes_per_dispatch = 30\n\
-    \max_dispatches_per_run   = 20\n\
     \heartbeat_stale_seconds  = 300\n\
     \log_retention_runs       = 25\n\
     \\n\

@@ -114,8 +114,7 @@ runRun db o = do
                         D.applyOutcomeToTask c task res
                         summarize res
         Nothing -> do
-            let cap = fromMaybe (dcMaxDispatchesPerRun (cfgDispatch cfg)) (rMax o)
-            when (cap <= 0) $ fatal 2 "max must be > 0"
+            mapM_ (\n -> when (n <= 0) $ fatal 2 "max must be > 0") (rMax o)
             sigCount <- newIORef (0 :: Int)
             let sigHandler = do
                     modifyIORef sigCount (+1)
@@ -124,12 +123,12 @@ runRun db o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
-            withDb db (drainLoop o cfg cap 0 sigCount)
+            withDb db (drainLoop o cfg (rMax o) 0 sigCount)
 
-drainLoop :: RunOpts -> Config -> Int -> Int -> IORef Int -> Connection -> IO ()
-drainLoop opts cfg cap !i sigCount conn
-    | i >= cap = hPutStrLn stderr
-        ("icarium: reached max dispatches (" <> show cap <> "); stopping")
+drainLoop :: RunOpts -> Config -> Maybe Int -> Int -> IORef Int -> Connection -> IO ()
+drainLoop opts cfg mcap !i sigCount conn
+    | Just cap <- mcap, i >= cap =
+        hPutStrLn stderr ("icarium: reached max dispatches (" <> show cap <> "); stopping")
     | otherwise = do
         ts <- RT.listTasks conn [] True Nothing Nothing
         case ts of
@@ -153,7 +152,7 @@ drainLoop opts cfg cap !i sigCount conn
                 if n >= 1
                     then hPutStrLn stderr
                         "icarium: SIGINT received; stopping after current dispatch"
-                    else drainLoop opts cfg cap (i + 1) sigCount conn
+                    else drainLoop opts cfg mcap (i + 1) sigCount conn
 
 -- =============================================================
 -- Log parsing

@@ -93,7 +93,6 @@ fakeConfig = Config
         , dcAllowedTools          = []
         , dcScratchDir            = "/tmp"
         , dcMaxMinutesPerDispatch = 5
-        , dcMaxDispatchesPerRun   = 1
         , dcHeartbeatStaleSeconds = 300
         , dcLogRetentionRuns      = 1
         }

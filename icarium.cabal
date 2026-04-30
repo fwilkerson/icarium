@@ -80,6 +80,7 @@ test-suite icarium-test
                       TimeoutSpec
     build-depends:    base,
                       bytestring,
+                      directory,
                       text,
                       sqlite-simple,
                       icarium,

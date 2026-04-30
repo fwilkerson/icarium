@@ -7,7 +7,7 @@ test  = "cabal test all"
 
 [dispatch]
 model  = "claude-sonnet-4-6"
-effort = "high"
+effort = "medium"
 tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
@@ -15,7 +15,6 @@ allowed_tools = [
 ]
 scratch_dir = ".icarium/scratch"
 max_minutes_per_dispatch = 30
-max_dispatches_per_run   = 20
 heartbeat_stale_seconds  = 300
 log_retention_runs       = 25
 
