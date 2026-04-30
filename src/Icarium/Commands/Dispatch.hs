@@ -107,6 +107,7 @@ runRun db o = do
                         res <- D.dispatch c D.DispatchRequest
                             { D.drTask            = task
                             , D.drConfig          = cfg
+                            , D.drDbPath          = db
                             , D.drDryRun          = rDryRun o
                             , D.drModelOverride   = rModel o
                             , D.drEffortOverride  = rEffort o
@@ -124,10 +125,10 @@ runRun db o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
-            withDb db (drainLoop o cfg (rMax o) 0 sigCount)
+            withDb db (drainLoop db o cfg (rMax o) 0 sigCount)
 
-drainLoop :: RunOpts -> Config -> Maybe Int -> Int -> IORef Int -> Connection -> IO ()
-drainLoop opts cfg mcap !i sigCount conn
+drainLoop :: FilePath -> RunOpts -> Config -> Maybe Int -> Int -> IORef Int -> Connection -> IO ()
+drainLoop db opts cfg mcap !i sigCount conn
     | Just cap <- mcap, i >= cap =
         hPutStrLn stderr ("icarium: reached max dispatches (" <> show cap <> "); stopping")
     | otherwise = do
@@ -139,6 +140,7 @@ drainLoop opts cfg mcap !i sigCount conn
                 res <- D.dispatch conn D.DispatchRequest
                     { D.drTask           = t
                     , D.drConfig         = cfg
+                    , D.drDbPath         = db
                     , D.drDryRun         = rDryRun opts
                     , D.drModelOverride  = rModel  opts
                     , D.drEffortOverride = rEffort opts
@@ -153,7 +155,7 @@ drainLoop opts cfg mcap !i sigCount conn
                 if n >= 1
                     then hPutStrLn stderr
                         "icarium: SIGINT received; stopping after current dispatch"
-                    else drainLoop opts cfg mcap (i + 1) sigCount conn
+                    else drainLoop db opts cfg mcap (i + 1) sigCount conn
 
 -- =============================================================
 -- Log parsing

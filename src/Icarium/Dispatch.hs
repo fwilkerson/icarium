@@ -39,7 +39,7 @@ import           System.Timeout             (timeout)
 
 import           Icarium.Config             (CommandsConfig (..), Config (..), DispatchConfig (..),
                                              ProjectConfig (..))
-import           Icarium.Db                 (defaultDbPath, openDb)
+import           Icarium.Db                 (openDb)
 import           Icarium.Dispatch.Tick      (emptyTickState, summariseTick)
 import qualified Icarium.Git                as Git
 import           Icarium.Id                 (newId)
@@ -58,6 +58,7 @@ import           Icarium.Types
 data DispatchRequest = DispatchRequest
     { drTask           :: Task
     , drConfig         :: Config
+    , drDbPath         :: FilePath
     , drDryRun         :: Bool
     , drModelOverride  :: Maybe Text
     , drEffortOverride :: Maybe Effort
@@ -149,6 +150,7 @@ doReal conn req = do
     let cfg        = drConfig req
         dcfg       = cfgDispatch cfg
         task       = drTask   req
+        dbPath     = drDbPath req
         base       = effectiveBase   req
         model      = effectiveModel  req
         effort     = effectiveEffort req
@@ -192,7 +194,7 @@ doReal conn req = do
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
-            exit <- runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath maxMinutes
+            exit <- runClaudeStreaming dbPath did task prompt model effort tools allowed scratchDir logPath maxMinutes
             handlePostClaude conn did branch base cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
@@ -231,9 +233,9 @@ killGroupGracefully pgid = do
     void $ (try :: IO () -> IO (Either SomeException ())) (signalProcessGroup sigKILL pgid)
 
 runClaudeStreaming
-    :: Text -> Task -> Text -> Text -> Effort -> [Text] -> [Text] -> Text -> FilePath -> Int
+    :: FilePath -> Text -> Task -> Text -> Text -> Effort -> [Text] -> [Text] -> Text -> FilePath -> Int
     -> IO ExitCode
-runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath maxMinutes = do
+runClaudeStreaming dbPath did task prompt model effort tools allowed scratchDir logPath maxMinutes = do
     parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args =
@@ -265,10 +267,10 @@ runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
             -- Record the child PID so recovery can detect a dead process.
             mPid <- getPid p
             case mPid of
-                Just pid -> bracket (openDb defaultDbPath) close $ \c ->
+                Just pid -> bracket (openDb dbPath) close $ \c ->
                     RD.setPid c did (fromIntegral pid)
                 Nothing  -> pure ()
-            _ <- forkIO (teeAndHeartbeat (getStdout p) logH did (taskTitle task))
+            _ <- forkIO (teeAndHeartbeat dbPath (getStdout p) logH did (taskTitle task))
             result <- raceTimeout maxUsecs (waitExitCode p)
             case result of
                 Right exit -> pure exit
@@ -281,10 +283,10 @@ runClaudeStreaming did task prompt model effort tools allowed scratchDir logPath
 -- connection so we don't share sqlite-simple's Connection between
 -- threads. On any failure the thread just exits; the caller is not
 -- blocked waiting for it.
-teeAndHeartbeat :: Handle -> Handle -> Text -> Text -> IO ()
-teeAndHeartbeat src logH did title = do
+teeAndHeartbeat :: FilePath -> Handle -> Handle -> Text -> Text -> IO ()
+teeAndHeartbeat dbPath src logH did title = do
     hPutStrLn stderr $ "[" ++ T.unpack (T.take 8 did) ++ "] " ++ T.unpack (T.take 60 title)
-    r <- try (bracket (openDb defaultDbPath) close (loop src logH did emptyTickState))
+    r <- try (bracket (openDb dbPath) close (loop src logH did emptyTickState))
     case r :: Either SomeException () of
         Left e  -> hPutStrLn stderr ("icarium: heartbeat thread died: " <> show e)
         Right _ -> pure ()
