@@ -14,8 +14,7 @@ module Icarium.Repo.Category
     , knowledgeCategoriesBatch
     ) where
 
-import           Data.List              (groupBy, sortBy)
-import           Data.Ord               (comparing)
+import qualified Data.List.NonEmpty     as NE
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
@@ -110,42 +109,32 @@ knowledgeCategoriesFor conn kid = query conn
 -- Tasks with no categories are omitted from the result; use @lookup tid result@
 -- and default to @[]@.
 taskCategoriesBatch :: Connection -> [Text] -> IO [(Text, [Category])]
-taskCategoriesBatch _ [] = pure []
-taskCategoriesBatch conn ids = do
-    rows <- query conn (Query q) params
-                :: IO [(Text, Text, CategoryAxis, Text)]
-    let pairs = [(tid, Category cid axis catName) | (tid, cid, axis, catName) <- rows]
-        grouped = groupBy (\a b -> fst a == fst b)
-                . sortBy (comparing fst)
-                $ pairs
-    pure $ map (\grp -> (fst (head grp), map snd grp)) grouped
-  where
-    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
-    q  = "SELECT tc.task_id, c.id, c.axis, c.name \
-         \FROM categories c \
-         \JOIN task_categories tc ON tc.category_id = c.id \
-         \WHERE tc.task_id IN " <> ph <> " \
-         \ORDER BY tc.task_id, c.axis, c.name"
-    params = map SQLText ids
+taskCategoriesBatch c = categoriesBatchBy c "task_categories" "task_id"
 
 -- | Fetch categories for multiple knowledge ids in a single query.
 -- Returns an association list of (knowledge_id, [Category]).
 -- Entries with no categories are omitted; use @lookup kid result@ and default to @[]@.
 knowledgeCategoriesBatch :: Connection -> [Text] -> IO [(Text, [Category])]
-knowledgeCategoriesBatch _ [] = pure []
-knowledgeCategoriesBatch conn ids = do
+knowledgeCategoriesBatch c = categoriesBatchBy c "knowledge_categories" "knowledge_id"
+
+categoriesBatchBy
+    :: Connection
+    -> Text     -- ^ join table name (e.g. "task_categories")
+    -> Text     -- ^ FK column on the join table (e.g. "task_id")
+    -> [Text]
+    -> IO [(Text, [Category])]
+categoriesBatchBy _ _ _ [] = pure []
+categoriesBatchBy conn joinTable fkCol ids = do
     rows <- query conn (Query q) params
                 :: IO [(Text, Text, CategoryAxis, Text)]
-    let pairs = [(kid, Category cid axis catName) | (kid, cid, axis, catName) <- rows]
-        grouped = groupBy (\a b -> fst a == fst b)
-                . sortBy (comparing fst)
-                $ pairs
-    pure $ map (\grp -> (fst (head grp), map snd grp)) grouped
+    let pairs   = [(nid, Category cid axis catName) | (nid, cid, axis, catName) <- rows]
+        grouped = NE.groupAllWith fst pairs
+    pure $ map (\grp -> (fst (NE.head grp), map snd (NE.toList grp))) grouped
   where
     ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
-    q  = "SELECT kc.knowledge_id, c.id, c.axis, c.name \
+    q  = "SELECT jt." <> fkCol <> ", c.id, c.axis, c.name \
          \FROM categories c \
-         \JOIN knowledge_categories kc ON kc.category_id = c.id \
-         \WHERE kc.knowledge_id IN " <> ph <> " \
-         \ORDER BY kc.knowledge_id, c.axis, c.name"
+         \JOIN " <> joinTable <> " jt ON jt.category_id = c.id \
+         \WHERE jt." <> fkCol <> " IN " <> ph <> " \
+         \ORDER BY jt." <> fkCol <> ", c.axis, c.name"
     params = map SQLText ids
