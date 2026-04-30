@@ -22,7 +22,7 @@ import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLD
                                          query, query_)
 
 import           Icarium.Id             (newId)
-import           Icarium.Types          (Category (..), CategoryAxis (..), categoryAxisText)
+import           Icarium.Types          (Category (..), CategoryAxis (..))
 
 insertCategory :: Connection -> CategoryAxis -> Text -> IO Text
 insertCategory conn axis name = do
@@ -42,12 +42,12 @@ findCategory conn axis name = do
         []    -> Nothing
 
 listCategories :: Connection -> Maybe CategoryAxis -> IO [Category]
-listCategories conn mAxis = do
-    rows <- query_ conn
+listCategories conn mAxis = case mAxis of
+    Nothing -> query_ conn
         (Query "SELECT id, axis, name FROM categories ORDER BY axis, name")
-    pure $ case mAxis of
-        Nothing -> rows
-        Just a  -> filter ((== categoryAxisText a) . categoryAxisText . categoryAxis) rows
+    Just a  -> query conn
+        (Query "SELECT id, axis, name FROM categories WHERE axis = ? ORDER BY axis, name")
+        (Only a)
 
 deleteCategory :: Connection -> CategoryAxis -> Text -> IO Bool
 deleteCategory conn axis name = do

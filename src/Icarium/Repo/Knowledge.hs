@@ -137,7 +137,6 @@ deleteKnowledge conn kid = do
 -- Cap limits results; order is most-recently-created first.
 categoryMatchedKnowledge :: Connection -> [Category] -> Int -> IO [Knowledge]
 categoryMatchedKnowledge conn cats cap
-    | null cats    = pure []
     | null clauses = pure []
     | otherwise    = query conn q params
   where

@@ -8,7 +8,6 @@ module Icarium.Repo.Edge
     , dependencyTasks
     , taskEdgeCounts
     , knowledgeInboundCounts
-    , knowledgeDerivedFromTask
     , knowledgeDerivedFromDispatch
     ) where
 
@@ -145,18 +144,6 @@ knowledgeInboundCounts conn ids =
          \WHERE dst_kind = 'knowledge' AND dst_id IN " <> ph <> " \
          \GROUP BY dst_id"
     params = map SQLText ids
-
--- | Knowledge entries that have a derived_from edge pointing at the given task.
-knowledgeDerivedFromTask :: Connection -> Text -> IO [Knowledge]
-knowledgeDerivedFromTask conn tid = query conn
-    (Query "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
-           \FROM edges e \
-           \JOIN knowledge k ON k.id = e.src_id \
-           \WHERE e.kind = 'derived_from' \
-           \  AND e.src_kind = 'knowledge' \
-           \  AND e.dst_kind = 'task' AND e.dst_id = ? \
-           \ORDER BY e.created_at ASC")
-    (Only tid)
 
 -- | Knowledge derived from a task during a specific dispatch window.
 -- Filters by knowledge.created_at >= started_at (and <= ended_at when present)
