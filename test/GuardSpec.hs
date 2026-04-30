@@ -1,10 +1,10 @@
 module GuardSpec (tests) where
 
-import           Data.Text        (Text)
-import           Test.Tasty       (TestTree, testGroup)
-import           Test.Tasty.HUnit (testCase, (@?=))
+import           Data.Text                 (Text)
+import           Test.Tasty                (TestTree, testGroup)
+import           Test.Tasty.HUnit          (testCase, (@?=))
 
-import           Icarium.Dispatch (postClaudeGuard)
+import           Icarium.Dispatch.Internal (postClaudeGuard)
 
 tests :: TestTree
 tests = testGroup "postClaudeGuard"

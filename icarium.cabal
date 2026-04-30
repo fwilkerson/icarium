@@ -27,6 +27,7 @@ library
                       Icarium.Render
                       Icarium.Git
                       Icarium.Dispatch
+                      Icarium.Dispatch.Internal
                       Icarium.Dispatch.Tick
                       Icarium.Heartbeat
                       Icarium.Repo.Task

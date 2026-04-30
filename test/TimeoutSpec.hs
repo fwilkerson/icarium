@@ -1,20 +1,20 @@
 module TimeoutSpec (tests) where
 
-import           Control.Concurrent    (threadDelay)
-import           Data.Maybe            (isJust)
-import qualified Data.Text             as T
-import           Test.Tasty            (TestTree, testGroup)
-import           Test.Tasty.HUnit      (assertBool, testCase, (@?=))
+import           Control.Concurrent        (threadDelay)
+import           Data.Maybe                (isJust)
+import qualified Data.Text                 as T
+import           Test.Tasty                (TestTree, testGroup)
+import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
 
-import           Icarium.Config        (CategoriesConfig (..), CommandsConfig (..), Config (..),
-                                        DispatchConfig (..), ProjectConfig (..), validateConfig)
-import           Icarium.Dispatch      (DispatchResult (..), handlePostClaude, raceTimeout,
-                                        timeoutSentinel)
-import qualified Icarium.Repo.Dispatch as RD
-import qualified Icarium.Repo.Task     as RT
-import           Icarium.Types         (Dispatch (..), DispatchOutcome (..), Effort (..),
-                                        TaskState (..))
-import           TestHelpers           (withTestDb)
+import           Icarium.Config            (CategoriesConfig (..), CommandsConfig (..), Config (..),
+                                            DispatchConfig (..), ProjectConfig (..), validateConfig)
+import           Icarium.Dispatch.Internal (DispatchResult (..), handlePostClaude, raceTimeout,
+                                            timeoutSentinel)
+import qualified Icarium.Repo.Dispatch     as RD
+import qualified Icarium.Repo.Task         as RT
+import           Icarium.Types             (Dispatch (..), DispatchOutcome (..), Effort (..),
+                                            TaskState (..))
+import           TestHelpers               (withTestDb)
 
 tests :: TestTree
 tests = testGroup "timeout"
