@@ -5,7 +5,9 @@ module Icarium.Render
     , renderTaskList
     , mkBar
     , renderKnowledge
+    , KnowledgeRow (..)
     , renderKnowledgeList
+    , formatLinkedCount
     , renderEdgeLine
     , renderCategory
     , recommendedTitleMax
@@ -317,14 +319,36 @@ renderKnowledge k cats = T.unlines $
        , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
        ]
 
-renderKnowledgeList :: Bool -> [Knowledge] -> Text
+data KnowledgeRow = KnowledgeRow
+    { krKnowledge :: Knowledge
+    , krCats      :: [Category]
+    , krLinked    :: Int
+    }
+
+-- | Format a linked-count badge. Empty string when count is 0.
+formatLinkedCount :: Int -> Text
+formatLinkedCount 0 = ""
+formatLinkedCount n = "[linked:" <> T.pack (show n) <> "]"
+
+renderKnowledgeList :: Bool -> [KnowledgeRow] -> Text
 renderKnowledgeList _ [] = "(no knowledge)\n"
-renderKnowledgeList utf8 ks = T.unlines $ header : map row ks
+renderKnowledgeList utf8 rows = T.unlines $ map row rows
   where
-    header = padr 12 "id" <> "  " <> padr 6 "stale" <> "  title"
-    row k = padr 12 (T.take 10 (knowledgeId k)) <> "  "
-         <> padr 6 (if knowledgeStale k then "yes" else "no") <> "  "
-         <> truncateTitle utf8 recommendedTitleMax (knowledgeTitle k)
+    titleWidth = min recommendedTitleMax (maxLen recommendedTitleMax (map (T.length . knowledgeTitle . krKnowledge) rows))
+    catWidth   = maxLen 3 (map (T.length . formatCats . krCats) rows)
+
+    maxLen def [] = def
+    maxLen _   xs = maximum xs
+
+    row kr =
+        let k          = krKnowledge kr
+            idPart     = "  " <> T.take 10 (knowledgeId k)
+            titPart    = padr titleWidth (truncateTitle utf8 recommendedTitleMax (knowledgeTitle k))
+            catPart    = padr catWidth (formatCats (krCats kr))
+            linked     = formatLinkedCount (krLinked kr)
+            linkedPart = if T.null linked then "" else "  " <> linked
+            stalePart  = if knowledgeStale k then "  [stale]" else ""
+        in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> stalePart
 
 renderEdgeLine :: Edge -> Text
 renderEdgeLine e =

@@ -11,6 +11,7 @@ module Icarium.Repo.Category
     , taskCategoriesFor
     , taskCategoriesBatch
     , knowledgeCategoriesFor
+    , knowledgeCategoriesBatch
     ) where
 
 import           Data.List              (groupBy, sortBy)
@@ -125,4 +126,26 @@ taskCategoriesBatch conn ids = do
          \JOIN task_categories tc ON tc.category_id = c.id \
          \WHERE tc.task_id IN " <> ph <> " \
          \ORDER BY tc.task_id, c.axis, c.name"
+    params = map SQLText ids
+
+-- | Fetch categories for multiple knowledge ids in a single query.
+-- Returns an association list of (knowledge_id, [Category]).
+-- Entries with no categories are omitted; use @lookup kid result@ and default to @[]@.
+knowledgeCategoriesBatch :: Connection -> [Text] -> IO [(Text, [Category])]
+knowledgeCategoriesBatch _ [] = pure []
+knowledgeCategoriesBatch conn ids = do
+    rows <- query conn (Query q) params
+                :: IO [(Text, Text, CategoryAxis, Text)]
+    let pairs = [(kid, Category cid axis catName) | (kid, cid, axis, catName) <- rows]
+        grouped = groupBy (\a b -> fst a == fst b)
+                . sortBy (comparing fst)
+                $ pairs
+    pure $ map (\grp -> (fst (head grp), map snd grp)) grouped
+  where
+    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
+    q  = "SELECT kc.knowledge_id, c.id, c.axis, c.name \
+         \FROM categories c \
+         \JOIN knowledge_categories kc ON kc.category_id = c.id \
+         \WHERE kc.knowledge_id IN " <> ph <> " \
+         \ORDER BY kc.knowledge_id, c.axis, c.name"
     params = map SQLText ids

@@ -1,7 +1,7 @@
 module Icarium.Commands.Know (Command, parser, run, autoDeriveDeps) where
 
 import           Control.Monad          (forM_, void)
-import           Data.Maybe             (catMaybes, isNothing)
+import           Data.Maybe             (catMaybes, fromMaybe, isNothing)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.IO           as TIO
@@ -179,9 +179,23 @@ runList db o = withDb db $ \c -> do
             | lStale o  = Just True   -- stale only
             | lAll o    = Nothing     -- show all
             | otherwise = Just False  -- hide stale (default)
-    ks <- RK.listKnowledge c staleFilter (lDomain o) (lDiscipline o)
+    ks   <- RK.listKnowledge c staleFilter (lDomain o) (lDiscipline o)
+    rows <- buildKnowledgeRows c ks
     utf8 <- detectUtf8
-    TIO.putStr (Render.renderKnowledgeList utf8 ks)
+    TIO.putStr (Render.renderKnowledgeList utf8 rows)
+
+buildKnowledgeRows :: Connection -> [Knowledge] -> IO [Render.KnowledgeRow]
+buildKnowledgeRows c ks = do
+    let ids = map knowledgeId ks
+    catsBatch   <- RC.knowledgeCategoriesBatch c ids
+    countsBatch <- RE.knowledgeInboundCounts   c ids
+    pure [ Render.KnowledgeRow
+               { Render.krKnowledge = k
+               , Render.krCats      = fromMaybe [] (lookup (knowledgeId k) catsBatch)
+               , Render.krLinked    = fromMaybe 0  (lookup (knowledgeId k) countsBatch)
+               }
+         | k <- ks
+         ]
 
 -- =============================================================
 -- show

@@ -7,6 +7,7 @@ module Icarium.Repo.Edge
     , referencedKnowledge
     , dependencyTasks
     , taskEdgeCounts
+    , knowledgeInboundCounts
     , knowledgeDerivedFromTask
     , knowledgeDerivedFromDispatch
     ) where
@@ -130,6 +131,19 @@ taskEdgeCounts conn ids = do
     countQ k = "SELECT src_id, COUNT(*) FROM edges \
                \WHERE kind = '" <> k <> "' AND src_kind = 'task' AND src_id IN " <> ph <> " \
                \GROUP BY src_id"
+    params = map SQLText ids
+
+-- | Count inbound edges for multiple knowledge ids (all kinds, all source node kinds).
+-- Returns only ids with at least one inbound edge; caller treats missing as 0.
+knowledgeInboundCounts :: Connection -> [Text] -> IO [(Text, Int)]
+knowledgeInboundCounts _ [] = pure []
+knowledgeInboundCounts conn ids =
+    query conn (Query q) params :: IO [(Text, Int)]
+  where
+    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
+    q  = "SELECT dst_id, COUNT(*) FROM edges \
+         \WHERE dst_kind = 'knowledge' AND dst_id IN " <> ph <> " \
+         \GROUP BY dst_id"
     params = map SQLText ids
 
 -- | Knowledge entries that have a derived_from edge pointing at the given task.

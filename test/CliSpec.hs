@@ -44,6 +44,7 @@ tests = testGroup "CLI integration"
     , testCase "task add --state blocked exits 2"                  testTaskAddStateBlocked
     , testCase "dispatch run drains empty queue without --max"      testDispatchRunEmptyQueue
     , testCase "dispatch run ignores stale max_dispatches_per_run" testDispatchRunStaleConfig
+    , testCase "know list shows cats and linked count"             testKnowledgeListLayout
     ]
 
 testTaskRoundtrip :: IO ()
@@ -135,6 +136,28 @@ testDispatchRunStaleConfig = withSystemTempDirectory "icarium-test" $ \dir -> do
         ("ready queue empty" `isInfixOf` err)
     assertBool "no parse error surfaced"
         (not ("config parse error" `isInfixOf` err))
+
+testKnowledgeListLayout :: IO ()
+testKnowledgeListLayout = withTempDb $ \db -> do
+    -- k1: no categories, no inbound edges
+    (_, _, _) <- runIcarium db ["know", "add", "Plain entry no links"]
+
+    -- k2: no categories, will have one inbound references edge from a task
+    (_, k2Out, _) <- runIcarium db ["know", "add", "Entry with one inbound link"]
+    let k2Id = head (words k2Out)
+
+    (_, t1Out, _) <- runIcarium db ["task", "add", "Some task", "--state", "ready"]
+    let t1Id = head (words t1Out)
+    (linkCode, _, _) <- runIcarium db ["link", "add", t1Id, "references", k2Id]
+    linkCode @?= ExitSuccess
+
+    (code, out, _) <- runIcarium db ["know", "list"]
+    code @?= ExitSuccess
+    assertBool "list contains plain entry title"  ("Plain entry no links" `isInfixOf` out)
+    assertBool "list contains linked entry title" ("Entry with one inbound link" `isInfixOf` out)
+    assertBool "[linked:1] badge appears"         ("[linked:1]" `isInfixOf` out)
+    assertBool "no stale column (yes/no gone)"    (not ("  yes  " `isInfixOf` out || "  no  " `isInfixOf` out))
+    assertBool "cats column present ([-])"        ("[-]" `isInfixOf` out)
 
 minimalIcariumToml :: String
 minimalIcariumToml = unlines
