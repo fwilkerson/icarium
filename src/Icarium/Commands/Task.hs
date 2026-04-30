@@ -131,6 +131,7 @@ data ListOpts = ListOpts
     , lReady      :: Bool
     , lDomain     :: Maybe Text
     , lDiscipline :: Maybe Text
+    , lAll        :: Bool
     }
 
 listP :: Parser ListOpts
@@ -143,9 +144,10 @@ listP = ListOpts
            <> help "Filter by domain category"))
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Filter by discipline category"))
+    <*> switch (long "all" <> help "Include done and abandoned tasks")
 
 defaultActiveStates :: [TaskState]
-defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked, Abandoned]
+defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
@@ -153,15 +155,12 @@ runList db o = withDb db $ \c -> do
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let effectiveStates
             | not (null (lStates o)) = lStates o
+            | lAll o                 = []
             | otherwise              = defaultActiveStates
-        displayFilter
-            | lReady o               = [Ready]
-            | not (null (lStates o)) = lStates o
-            | otherwise              = []
     ts <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
     taskRows <- buildTaskRows c ts
     utf8     <- detectUtf8
-    TIO.putStr (Render.renderTaskList utf8 taskRows displayFilter)
+    TIO.putStr (Render.renderTaskList utf8 taskRows)
 
 -- | Load per-task categories and edge counts in batch, build TaskRow list.
 buildTaskRows :: Connection -> [Task] -> IO [Render.TaskRow]

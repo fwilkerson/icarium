@@ -179,87 +179,61 @@ recommendedTitleMax :: Int
 recommendedTitleMax = 72
 
 -- =============================================================
--- Grouped task list rendering
+-- Flat task list rendering
 -- =============================================================
 
--- | Render tasks grouped by state.
+-- | Render a flat, priority-sorted task list with state badges.
 --
--- @useUnicode@: True → Unicode tree glyphs and ellipsis; False → ASCII fallback.
--- The priority bar is always Unicode.
--- @filterStates@: the states explicitly requested by the caller.
---   * Empty → default view: show all four primary group headers (even if
---     empty) plus any secondary groups that have tasks.
---   * Length == 1 → single-state filter: suppress the group header.
---   * Length > 1 → multi-state filter: show a header for each requested
---     state (even if empty).
-renderTaskList :: Bool -> [TaskRow] -> [TaskState] -> Text
-renderTaskList useUnicode rows filterStates
-    | null rows && singleFilter = "(no tasks)\n"
-    | otherwise = T.intercalate "\n" (map renderBlock stateGroups)
+-- @useUnicode@: True → Unicode ellipsis; False → ASCII fallback.
+-- Rows are sorted priority DESC, ULID DESC; null priority sorts last.
+-- Done and abandoned are hidden by default — callers filter before passing.
+renderTaskList :: Bool -> [TaskRow] -> Text
+renderTaskList _ [] = "(no tasks)\n"
+renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
   where
-    singleFilter = length filterStates == 1
+    sorted = sortBy cmpRow rows
 
-    -- Display order: primary groups always present; secondary only if occupied.
-    primaryStates   = [Ready, Planned, Blocked, Idea]
-    secondaryStates = [InProgress, Abandoned, Done]
+    cmpRow a b =
+        let pa = taskPriority (trTask a)
+            pb = taskPriority (trTask b)
+        in case (pa, pb) of
+            (Nothing, Nothing) -> compareUlid b a
+            (Just _,  Nothing) -> LT
+            (Nothing, Just _)  -> GT
+            (Just x,  Just y)  -> case compare y x of
+                EQ -> compareUlid b a
+                o  -> o
+    compareUlid r1 r2 = compare (taskId (trTask r1)) (taskId (trTask r2))
 
-    inState s = filter (\r -> taskState (trTask r) == s) rows
-
-    stateGroups = case filterStates of
-        [] -> primaryStates
-           ++ filter (not . null . inState) secondaryStates
-        _  -> filterStates
-
-    -- Sort within a group: priority DESC (higher = first), NULL last;
-    -- then ULID DESC as tiebreaker (newer first).
-    sortGroup = sortBy cmpRow
-      where
-        cmpRow a b =
-            let pa = taskPriority (trTask a)
-                pb = taskPriority (trTask b)
-            in case (pa, pb) of
-                (Nothing, Nothing) -> compareUlid b a
-                (Just _,  Nothing) -> LT
-                (Nothing, Just _)  -> GT
-                (Just x,  Just y)  -> case compare y x of
-                    EQ -> compareUlid b a
-                    o  -> o
-        compareUlid r1 r2 = compare (taskId (trTask r1)) (taskId (trTask r2))
-
-    -- Global column widths across all rows. Title capped at recommendedTitleMax.
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . taskTitle . trTask) rows))
     catWidth   = maxLen 3 (map (T.length . formatCats . trCats) rows)
 
     maxLen def [] = def
     maxLen _   xs = maximum xs
 
-    -- Render one state group as a newline-terminated block of lines.
-    renderBlock s =
-        let groupRows = sortGroup (inState s)
-            n         = length groupRows
-            header    = [T.toUpper (taskStateText s) <> "  (" <> T.pack (show n) <> ")"
-                        | not singleFilter]
-            rowLines  = map (renderRow s) groupRows
-        in T.unlines (header ++ rowLines)
-
-    renderRow s row =
-        let t       = trTask row
-            idPart  = "  " <> padr 10 (T.take 10 (taskId t))
-            titPart = padr titleWidth (truncateTitle useUnicode titleWidth (taskTitle t))
-            barPart = case s of
-                Blocked -> truncateReason (fromMaybe "" (taskBlockReason t))
-                _       -> mkBar (taskPriority t)
-            catStr  = formatCats (trCats row)
-            catPart = padr catWidth catStr
-            edgePart = case s of
-                Blocked -> ""
-                _       -> let ec = formatEdgeCounts (trDeps row) (trRefs row)
-                            in if T.null ec then "" else "  " <> ec
-        in idPart <> "  " <> titPart <> "  " <> barPart <> "  " <> catPart <> edgePart
+    renderRow row =
+        let t        = trTask row
+            idPart   = "  " <> padr 10 (T.take 10 (taskId t))
+            titPart  = padr titleWidth (truncateTitle useUnicode titleWidth (taskTitle t))
+            barPart  = mkBar (taskPriority t)
+            catPart  = padr catWidth (formatCats (trCats row))
+            ec       = formatEdgeCounts (trDeps row) (trRefs row)
+            edgePart = if T.null ec then "" else "  " <> ec
+            badge    = "  [" <> stateBadgeText (taskState t) <> "]"
+            mainLine = idPart <> "  " <> titPart <> "  " <> barPart <> "  " <> catPart <> edgePart <> badge
+            hangLine = case (taskState t, taskBlockReason t) of
+                (Blocked, Just r) | not (T.null r) ->
+                    [T.replicate 14 " " <> truncateReason r]
+                _ -> []
+        in mainLine : hangLine
 
     truncateReason r
         | T.length r <= 60 = r
         | otherwise        = T.take 57 r <> "..."
+
+stateBadgeText :: TaskState -> Text
+stateBadgeText InProgress = "in-progress"
+stateBadgeText s          = taskStateText s
 
 -- | 5-cell Unicode priority bar. ■ filled, ◧ half-filled, □ empty,
 -- space-separated. Represents the 0–10 priority range in half-square steps.

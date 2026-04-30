@@ -13,13 +13,13 @@ import           TestHelpers      (minTask)
 tests :: TestTree
 tests = testGroup "render"
     [ testGroup "mkBar 5-cell Unicode bar" testMkBar
-    , testGroup "renderTaskList grouped view"
-        [ testCase "groups in READY/PLANNED/BLOCKED/IDEA order with counts" testGroupedHeaders
-        , testCase "single-state filter suppresses group header"            testSingleStateNoHeader
-        , testCase "blocked row replaces bar with truncated reason"         testBlockedReason
-        , testCase "edge counts omitted when both zero, shown otherwise"    testEdgeCountFormat
-        , testCase "NULL priority sorts last within group"                  testNullPrioritySort
-        , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis" testTitleTruncatedUtf8
+    , testGroup "renderTaskList flat view"
+        [ testCase "flat: all rows present with state badges, no group headers" testFlatStateBadges
+        , testCase "flat: no group headers ever"                                testNoGroupHeaders
+        , testCase "blocked row shows bar plus hang-line reason"                testBlockedReason
+        , testCase "edge counts omitted when both zero, shown otherwise"        testEdgeCountFormat
+        , testCase "NULL priority sorts last"                                   testNullPrioritySort
+        , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis"   testTitleTruncatedUtf8
         ]
     , testGroup "task show links section"
         [ testCase "no edges renders (none)"                               testLinksNoEdges
@@ -48,7 +48,7 @@ testMkBar =
     ]
 
 -- =============================================================
--- renderTaskList grouped view tests
+-- renderTaskList flat view tests
 -- =============================================================
 
 mkRow :: Text -> Text -> TaskState -> Maybe Int -> [Category] -> Int -> Int -> Maybe Text -> Icarium.Render.TaskRow
@@ -68,34 +68,31 @@ mkRow tid title st pri cats deps refs blockReason = Icarium.Render.TaskRow
     , Icarium.Render.trRefs = refs
     }
 
-testGroupedHeaders :: IO ()
-testGroupedHeaders = do
+testFlatStateBadges :: IO ()
+testFlatStateBadges = do
     let rows = [ mkRow "01ABCDEFGH01" "ready task"   Ready   (Just 5) [] 0 0 Nothing
                , mkRow "01ABCDEFGH02" "planned task" Planned (Just 3) [] 0 0 Nothing
                , mkRow "01ABCDEFGH03" "idea task"    Idea    Nothing  [] 0 0 Nothing
                ]
-        out = renderTaskList True rows []
-    assertBool "READY (1) header"   ("READY  (1)"   `T.isInfixOf` out)
-    assertBool "PLANNED (1) header" ("PLANNED  (1)" `T.isInfixOf` out)
-    assertBool "BLOCKED (0) header" ("BLOCKED  (0)" `T.isInfixOf` out)
-    assertBool "IDEA (1) header"    ("IDEA  (1)"    `T.isInfixOf` out)
-    iReady   <- mustJust "READY position"   (lengthBefore "READY"   out)
-    iPlanned <- mustJust "PLANNED position" (lengthBefore "PLANNED" out)
-    iBlocked <- mustJust "BLOCKED position" (lengthBefore "BLOCKED" out)
-    iIdea    <- mustJust "IDEA position"    (lengthBefore "IDEA"    out)
-    assertBool "READY before PLANNED"   (iReady   < iPlanned)
-    assertBool "PLANNED before BLOCKED" (iPlanned < iBlocked)
-    assertBool "BLOCKED before IDEA"    (iBlocked < iIdea)
-  where
-    lengthBefore needle haystack =
-        let (pre, suf) = T.breakOn needle haystack
-        in if T.null suf then Nothing else Just (T.length pre)
+        out = renderTaskList True rows
+    assertBool "ready task present"   ("ready task"   `T.isInfixOf` out)
+    assertBool "planned task present" ("planned task" `T.isInfixOf` out)
+    assertBool "idea task present"    ("idea task"    `T.isInfixOf` out)
+    assertBool "[ready] badge"        ("[ready]"      `T.isInfixOf` out)
+    assertBool "[planned] badge"      ("[planned]"    `T.isInfixOf` out)
+    assertBool "[idea] badge"         ("[idea]"       `T.isInfixOf` out)
+    -- Priority sorted: higher priority first
+    let ls  = T.lines out
+        idx t = head [i | (i, l) <- zip [0::Int ..] ls, t `T.isInfixOf` l]
+    assertBool "ready (pri 5) before planned (pri 3)" (idx "ready task"   < idx "planned task")
+    assertBool "planned (pri 3) before idea (null)"   (idx "planned task" < idx "idea task")
 
-testSingleStateNoHeader :: IO ()
-testSingleStateNoHeader = do
+testNoGroupHeaders :: IO ()
+testNoGroupHeaders = do
     let rows = [mkRow "01ABCDEFGH01" "only ready" Ready (Just 5) [] 0 0 Nothing]
-        out  = renderTaskList True rows [Ready]
-    assertBool "no READY header" (not ("READY" `T.isInfixOf` out))
+        out  = renderTaskList True rows
+    assertBool "no READY header"   (not ("READY"   `T.isInfixOf` out))
+    assertBool "no PLANNED header" (not ("PLANNED" `T.isInfixOf` out))
     assertBool "still has the row" ("only ready" `T.isInfixOf` out)
 
 testBlockedReason :: IO ()
@@ -104,10 +101,13 @@ testBlockedReason = do
         rows = [ mkRow "01ABCDEFGH01" "short" Blocked (Just 5) [] 0 0 (Just "nope")
                , mkRow "01ABCDEFGH02" "long"  Blocked (Just 5) [] 0 0 (Just longReason)
                ]
-        out = renderTaskList True rows [Blocked]
-    assertBool "shows short reason" ("nope" `T.isInfixOf` out)
-    assertBool "no priority bar in blocked" (not ("■ ■ ◧ □ □" `T.isInfixOf` out))
-    assertBool "long reason truncated with ellipsis" ((T.replicate 57 "x" <> "...") `T.isInfixOf` out)
+        out = renderTaskList True rows
+    assertBool "shows short reason"          ("nope"                            `T.isInfixOf` out)
+    assertBool "priority bar shown"          ("■ ■ ◧ □ □"                      `T.isInfixOf` out)
+    assertBool "long reason truncated"       ((T.replicate 57 "x" <> "...") `T.isInfixOf` out)
+    let hangLines = filter (T.isPrefixOf (T.replicate 14 " ")) (T.lines out)
+    assertBool "hang line present"           (not (null hangLines))
+    assertBool "hang line contains reason"   (any ("nope" `T.isInfixOf`) hangLines)
 
 testEdgeCountFormat :: IO ()
 testEdgeCountFormat = do
@@ -116,7 +116,7 @@ testEdgeCountFormat = do
                , mkRow "01ABCDEFGH03" "refs only"  Ready (Just 5) [] 0 3 Nothing
                , mkRow "01ABCDEFGH04" "both"       Ready (Just 5) [] 1 4 Nothing
                ]
-        out  = renderTaskList True rows [Ready]
+        out  = renderTaskList True rows
         line title = head $ filter (T.isInfixOf title) (T.lines out)
     assertBool "no edges → no bracket" (not ("[deps" `T.isInfixOf` line "no edges") && not ("[refs" `T.isInfixOf` line "no edges"))
     assertBool "deps-only" ("[deps:2]" `T.isInfixOf` line "deps only")
@@ -129,7 +129,7 @@ testNullPrioritySort = do
                , mkRow "01ABCDEFGH02" "low-pri"  Idea (Just 1) [] 0 0 Nothing
                , mkRow "01ABCDEFGH03" "high-pri" Idea (Just 9) [] 0 0 Nothing
                ]
-        out  = renderTaskList True rows [Idea]
+        out  = renderTaskList True rows
         ls   = filter (\l -> "pri" `T.isInfixOf` l) (T.lines out)
     assertBool "non-empty rendered rows" (not (null ls))
     let idx t = head [i | (i, l) <- zip [0::Int ..] ls, t `T.isInfixOf` l]
@@ -140,7 +140,7 @@ testTitleTruncatedUtf8 :: IO ()
 testTitleTruncatedUtf8 = do
     let longTitle = T.replicate 90 "x"
         rows = [mkRow "01ABCDEFGH01" longTitle Ready (Just 5) [] 0 0 Nothing]
-        out  = renderTaskList True rows [Ready]
+        out  = renderTaskList True rows
         ls   = T.lines out
     assertBool "has a data row" (not (null ls))
     let dataRow = head ls
