@@ -1,6 +1,7 @@
 module Icarium.Dispatch.Internal
     ( DispatchRequest(..)
     , DispatchResult(..)
+    , DispatchCtx(..)
     , dispatch
     , dispatchBranchName
     , applyOutcomeToTask
@@ -183,10 +184,16 @@ doReal conn req = do
     prompt <- buildPrompt conn task
 
     let retention = dcLogRetentionRuns (cfgDispatch cfg)
+        dx = DispatchCtx
+            { dxConn   = conn
+            , dxDid    = did
+            , dxBranch = branch
+            , dxBase   = base
+            }
     mBr <- Git.createBranch branch base
     case mBr of
         Left e ->
-            finishWith conn did branch base OFailure Nothing
+            finishWith dx OFailure Nothing
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
@@ -200,7 +207,7 @@ doReal conn req = do
                     , rcLogPath = logPath
                     }
             exit <- runClaudeStreaming ctx dcfg
-            handlePostClaude conn did branch base cfg exit baseSha logPath
+            handlePostClaude dx cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
 checkPreconditions base = do
@@ -245,6 +252,13 @@ data RunCtx = RunCtx
     , rcModel   :: Text
     , rcEffort  :: Effort
     , rcLogPath :: FilePath
+    }
+
+data DispatchCtx = DispatchCtx
+    { dxConn   :: Connection
+    , dxDid    :: Text
+    , dxBranch :: Text
+    , dxBase   :: Text
     }
 
 runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode
@@ -339,15 +353,18 @@ withLogHandle path act =
 -- =============================================================
 
 handlePostClaude
-    :: Connection -> Text -> Text -> Text -> Config -> ExitCode
-    -> Text -> FilePath
+    :: DispatchCtx -> Config -> ExitCode -> Text -> FilePath
     -> IO DispatchResult
-handlePostClaude conn did branch base cfg exit baseSha logPath = do
-    let ret     = dcLogRetentionRuns        (cfgDispatch cfg)
+handlePostClaude dx cfg exit baseSha logPath = do
+    let conn    = dxConn   dx
+        did     = dxDid    dx
+        branch  = dxBranch dx
+        base    = dxBase   dx
+        ret     = dcLogRetentionRuns        (cfgDispatch cfg)
         maxMins = dcMaxMinutesPerDispatch   (cfgDispatch cfg)
         cc      = cfgCommands cfg
         finish o mSha notes =
-            finishWith conn did branch base o mSha notes ret (Just logPath) (Just baseSha)
+            finishWith dx o mSha notes ret (Just logPath) (Just baseSha)
         step = do
             case exit of
                 ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
@@ -408,10 +425,14 @@ runGate cmdText
 -- =============================================================
 
 finishWith
-    :: Connection -> Text -> Text -> Text -> DispatchOutcome -> Maybe Text -> Text -> Int
+    :: DispatchCtx -> DispatchOutcome -> Maybe Text -> Text -> Int
     -> Maybe FilePath -> Maybe Text
     -> IO DispatchResult
-finishWith conn did branch base outcome mSha notes retention mLogPath mBaseSha = do
+finishWith dx outcome mSha notes retention mLogPath mBaseSha = do
+    let conn   = dxConn   dx
+        did    = dxDid    dx
+        branch = dxBranch dx
+        base   = dxBase   dx
     -- Best-effort: on failure, return to the base branch so the next
     -- dispatch (e.g. drain mode) doesn't fail its on-base-branch
     -- precondition. Ignore errors here so we don't mask the original

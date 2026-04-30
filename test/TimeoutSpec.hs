@@ -8,8 +8,8 @@ import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
 
 import           Icarium.Config            (CategoriesConfig (..), CommandsConfig (..), Config (..),
                                             DispatchConfig (..), ProjectConfig (..), validateConfig)
-import           Icarium.Dispatch.Internal (DispatchResult (..), handlePostClaude, raceTimeout,
-                                            timeoutSentinel)
+import           Icarium.Dispatch.Internal (DispatchCtx (..), DispatchResult (..), handlePostClaude,
+                                            raceTimeout, timeoutSentinel)
 import qualified Icarium.Repo.Dispatch     as RD
 import qualified Icarium.Repo.Task         as RT
 import           Icarium.Types             (Dispatch (..), DispatchOutcome (..), Effort (..),
@@ -69,8 +69,13 @@ testTimeoutOutcome = withTestDb $ \conn -> do
         }
     -- Use a non-existent base branch so the internal "git checkout base"
     -- on failure silently no-ops rather than mutating the real working tree.
-    res <- handlePostClaude conn did ("dispatch/" <> did) "test-no-such-branch"
-               fakeConfig timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
+    let dx = DispatchCtx
+            { dxConn   = conn
+            , dxDid    = did
+            , dxBranch = "dispatch/" <> did
+            , dxBase   = "test-no-such-branch"
+            }
+    res <- handlePostClaude dx fakeConfig timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
     dresOutcome res @?= OFailure
     assertBool "result notes say timed out"
         ("timed out" `T.isInfixOf` dresNotes res)
