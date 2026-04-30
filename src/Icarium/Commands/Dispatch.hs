@@ -16,10 +16,8 @@ import           Data.Time              (UTCTime, defaultTimeLocale, diffUTCTime
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
 import           System.Directory       (doesFileExist)
-import           System.Exit            (ExitCode (..))
 import           System.IO              (hPutStrLn, stderr)
 import           System.Posix.Signals   (Handler (..), installHandler, raiseSignal, sigINT)
-import           System.Process.Typed   (nullStream, proc, runProcess, setStderr, setStdout)
 import           Text.Printf            (printf)
 
 import qualified Icarium.Git            as Git
@@ -29,6 +27,7 @@ import           Icarium.Config         (Config, DispatchConfig (..), cfgDispatc
                                          defaultConfigPath, loadConfig)
 import           Icarium.Db             (withDb)
 import qualified Icarium.Dispatch       as D
+import           Icarium.Heartbeat      (heartbeatStale, pidAlive)
 import qualified Icarium.Render         as Render
 import qualified Icarium.Repo.Dispatch  as RD
 import qualified Icarium.Repo.Edge      as RE
@@ -438,8 +437,8 @@ runRecover db o = do
 
 reconcileDispatch :: Connection -> UTCTime -> Int -> Dispatch -> IO ()
 reconcileDispatch c now staleSec d = do
-    alive <- maybe (pure False) isPidAlive (dispatchPid d)
-    stale <- isHeartbeatStale now staleSec (dispatchHeartbeat d)
+    alive <- maybe (pure False) pidAlive (dispatchPid d)
+    let stale = heartbeatStale now staleSec (dispatchHeartbeat d)
     if alive && not stale
         then pure ()
         else do
@@ -461,23 +460,6 @@ reconcileDispatch c now staleSec d = do
                 <> "  task:" <> dispatchTaskId d
                 <> "  branch:" <> dispatchBranch d
                 <> "  " <> notes
-
-isPidAlive :: Int -> IO Bool
-isPidAlive pid = do
-    code <- runProcess
-        $ setStdout nullStream
-        $ setStderr nullStream
-        $ proc "kill" ["-0", show pid]
-    pure $ case code of
-        ExitSuccess   -> True
-        ExitFailure _ -> False
-
-isHeartbeatStale :: UTCTime -> Int -> Text -> IO Bool
-isHeartbeatStale now thresholdSec hbText =
-    pure $ case parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S"
-                           (T.unpack hbText) of
-        Nothing -> True
-        Just hb -> diffUTCTime now hb > fromIntegral thresholdSec
 
 boolText :: Bool -> Text
 boolText True  = "yes"

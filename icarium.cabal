@@ -28,6 +28,7 @@ library
                       Icarium.Git
                       Icarium.Dispatch
                       Icarium.Dispatch.Tick
+                      Icarium.Heartbeat
                       Icarium.Repo.Task
                       Icarium.Repo.Knowledge
                       Icarium.Repo.Edge
@@ -73,6 +74,7 @@ test-suite icarium-test
     main-is:          Main.hs
     other-modules:    CliSpec
                       GuardSpec
+                      HeartbeatSpec
                       RenderSpec
                       RepoSpec
                       TestHelpers
@@ -82,6 +84,7 @@ test-suite icarium-test
                       bytestring,
                       directory,
                       text,
+                      time,
                       sqlite-simple,
                       icarium,
                       tasty,

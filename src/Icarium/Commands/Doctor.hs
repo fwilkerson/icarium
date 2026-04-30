@@ -2,19 +2,17 @@ module Icarium.Commands.Doctor (Options, parser, run) where
 
 import           Control.Exception      (bracket)
 import           Control.Monad          (filterM)
-import           Data.Text              (Text)
 import qualified Data.Text              as T
-import           Data.Time              (UTCTime, defaultTimeLocale, diffUTCTime, getCurrentTime,
-                                         parseTimeM)
+import           Data.Time              (UTCTime, getCurrentTime)
 import           Database.SQLite.Simple (close)
 import           Options.Applicative
 import           System.Directory       (doesFileExist, findExecutable)
 import           System.Exit            (ExitCode (..), exitWith)
-import           System.Process.Typed   (nullStream, proc, runProcess, setStderr, setStdout)
 
 import           Icarium.Config         (DispatchConfig (..), cfgDispatch, defaultConfigPath,
                                          loadConfig)
 import           Icarium.Db             (dbSchemaVersion, openDb)
+import           Icarium.Heartbeat      (heartbeatStale, pidAlive)
 import qualified Icarium.Repo.Dispatch  as RD
 import           Icarium.Schema         (schemaVersion)
 import           Icarium.Types          (Dispatch (..))
@@ -117,26 +115,9 @@ checkOrphanedDispatches dbPath = do
 
 isOrphanedDispatch :: UTCTime -> Int -> Dispatch -> IO Bool
 isOrphanedDispatch now staleSec d = do
-    alive <- maybe (pure False) checkPidAlive (dispatchPid d)
-    stale <- checkHeartbeatStale now staleSec (dispatchHeartbeat d)
+    alive <- maybe (pure False) pidAlive (dispatchPid d)
+    let stale = heartbeatStale now staleSec (dispatchHeartbeat d)
     pure (not alive || stale)
-
-checkPidAlive :: Int -> IO Bool
-checkPidAlive pid = do
-    code <- runProcess
-        $ setStdout nullStream
-        $ setStderr nullStream
-        $ proc "kill" ["-0", show pid]
-    pure $ case code of
-        ExitSuccess   -> True
-        ExitFailure _ -> False
-
-checkHeartbeatStale :: UTCTime -> Int -> Text -> IO Bool
-checkHeartbeatStale now thresholdSec hbText =
-    pure $ case parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S"
-                           (T.unpack hbText) of
-        Nothing -> True
-        Just hb -> diffUTCTime now hb > fromIntegral thresholdSec
 
 printCheck :: Check -> IO ()
 printCheck c = case checkResult c of
