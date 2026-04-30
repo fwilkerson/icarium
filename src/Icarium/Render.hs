@@ -14,6 +14,7 @@ module Icarium.Render
     , renderDispatch
     , DispatchRow (..)
     , renderDispatchList
+    , fmtSecs
     ) where
 
 import           Data.List     (sortBy)
@@ -409,6 +410,13 @@ outcomeBadge Nothing             = "[open]"
 outcomeBadge (Just OSuccess)     = "[success]"
 outcomeBadge (Just OFailure)     = "[failure]"
 outcomeBadge (Just OInterrupted) = "[interrupted]"
+
+fmtSecs :: Int -> Text
+fmtSecs s
+    | s < 60    = T.pack (show s) <> "s"
+    | s < 3600  = T.pack (show (s `div` 60)) <> "m"
+    | otherwise = T.pack (show (s `div` 3600)) <> "h "
+               <> T.pack (show ((s `mod` 3600) `div` 60)) <> "m"
 
 -- =============================================================
 -- Utilities

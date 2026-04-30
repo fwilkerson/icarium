@@ -11,8 +11,7 @@ import           Data.Text              (Text)
 import qualified Data.Text              as T
 import qualified Data.Text.Encoding     as TE
 import qualified Data.Text.IO           as TIO
-import           Data.Time              (UTCTime, defaultTimeLocale, diffUTCTime, getCurrentTime,
-                                         parseTimeM)
+import           Data.Time              (UTCTime, diffUTCTime, getCurrentTime)
 import           Database.SQLite.Simple (Connection)
 import           Options.Applicative
 import           System.Directory       (doesFileExist)
@@ -25,7 +24,7 @@ import qualified Icarium.Git            as Git
 import           Icarium.Commands.Util
 import           Icarium.Config         (Config, DispatchConfig (..), cfgDispatch,
                                          defaultConfigPath, loadConfig)
-import           Icarium.Db             (withDb)
+import           Icarium.Db             (parseDbTime, withDb)
 import qualified Icarium.Dispatch       as D
 import           Icarium.Heartbeat      (heartbeatStale, pidAlive)
 import qualified Icarium.Render         as Render
@@ -303,22 +302,15 @@ summarize r = do
 
 formatDispatchDuration :: UTCTime -> Dispatch -> Text
 formatDispatchDuration now d =
-    case parseTimestamp (dispatchStartedAt d) of
+    case parseDbTime (dispatchStartedAt d) of
         Nothing    -> ""
         Just start ->
-            let (diff, isOpen) = case dispatchEndedAt d >>= parseTimestamp of
+            let (diff, isOpen) = case dispatchEndedAt d >>= parseDbTime of
                     Just end -> (diffUTCTime end start, False)
                     Nothing  -> (diffUTCTime now start, True)
                 secs  = max 0 (round (toRational diff) :: Int)
-                body  = fmtSecs secs
+                body  = Render.fmtSecs secs
             in if isOpen then body <> " (running)" else body
-  where
-    parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S" . T.unpack
-    fmtSecs s
-        | s < 60    = T.pack (show s) <> "s"
-        | s < 3600  = T.pack (show (s `div` 60)) <> "m"
-        | otherwise = T.pack (show (s `div` 3600)) <> "h "
-                   <> T.pack (show ((s `mod` 3600) `div` 60)) <> "m"
 
 data ListOpts = ListOpts
     { lTask    :: Maybe Text

@@ -5,14 +5,15 @@ import qualified Data.Text        as T
 import           Test.Tasty       (TestTree, testGroup)
 import           Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
-import           Icarium.Render   (renderTaskHuman, renderTaskList)
+import           Icarium.Render   (fmtSecs, renderTaskHuman, renderTaskList)
 import qualified Icarium.Render
 import           Icarium.Types
 import           TestHelpers      (minTask)
 
 tests :: TestTree
 tests = testGroup "render"
-    [ testGroup "mkBar 5-cell Unicode bar" testMkBar
+    [ testGroup "fmtSecs" testFmtSecs
+    , testGroup "mkBar 5-cell Unicode bar" testMkBar
     , testGroup "renderTaskList flat view"
         [ testCase "flat: all rows present with state badges, no group headers" testFlatStateBadges
         , testCase "flat: no group headers ever"                                testNoGroupHeaders
@@ -38,6 +39,23 @@ tests = testGroup "render"
 
 mustJust :: String -> Maybe a -> IO a
 mustJust msg = maybe (assertFailure msg) pure
+
+-- =============================================================
+-- fmtSecs tests
+-- =============================================================
+
+testFmtSecs :: [TestTree]
+testFmtSecs =
+    [ testCase (show s <> " -> " <> show expected) (fmtSecs s @?= expected)
+    | (s, expected) <-
+        [ (0,    "0s")
+        , (59,   "59s")
+        , (60,   "1m")
+        , (3599, "59m")
+        , (3600, "1h 0m")
+        , (3661, "1h 1m")
+        ]
+    ]
 
 -- =============================================================
 -- mkBar tests

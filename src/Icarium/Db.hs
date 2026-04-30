@@ -5,11 +5,15 @@ module Icarium.Db
     , initDb
     , dbSchemaVersion
     , migrateDb
+    , parseDbTime
     ) where
 
 import           Control.Exception      (bracket)
 import           Control.Monad          (forM_)
 import           Data.Int               (Int64)
+import           Data.Text              (Text)
+import qualified Data.Text              as T
+import           Data.Time              (UTCTime, defaultTimeLocale, parseTimeM)
 import           Database.SQLite.Simple (Connection, Only (..), close, open, query_)
 import           Icarium.Migrations     (Migration (..), migrations)
 import           Icarium.Schema         (applySchema)
@@ -57,3 +61,6 @@ dbSchemaVersion conn = do
     pure $ case rows of
         (Only v : _) -> v
         _            -> 0
+
+parseDbTime :: Text -> Maybe UTCTime
+parseDbTime = parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S" . T.unpack
