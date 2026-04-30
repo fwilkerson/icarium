@@ -67,7 +67,7 @@ addP = AddOpts . T.pack
     <*> optional (T.pack <$> strOption (long "discipline" <> metavar "NAME"
            <> help "Tag with this discipline category"))
     <*> many (T.pack <$> strOption (long "derived-from" <> metavar "ID"
-                <> help "Task or knowledge id this was derived from"))
+                <> help "Shorthand for `icarium link add <THIS_KNOWLEDGE> derived-from <ID>`; may be repeated"))
     <*> optional (T.pack <$> strOption (long "supersedes" <> metavar "KNOWLEDGE_ID"
            <> help "Mark this entry as superseding KNOWLEDGE_ID"))
 

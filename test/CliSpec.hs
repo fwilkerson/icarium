@@ -45,6 +45,9 @@ tests = testGroup "CLI integration"
     , testCase "dispatch run drains empty queue without --max"      testDispatchRunEmptyQueue
     , testCase "dispatch run ignores stale max_dispatches_per_run" testDispatchRunStaleConfig
     , testCase "know list shows cats and linked count"             testKnowledgeListLayout
+    , testCase "link --help has corrected argument order example"   testLinkHelpExample
+    , testCase "link list emits header row when edges exist"        testLinkListHeader
+    , testCase "know add --help and link add --help cross-reference each other" testHelpCrossRef
     ]
 
 testTaskRoundtrip :: IO ()
@@ -158,6 +161,33 @@ testKnowledgeListLayout = withTempDb $ \db -> do
     assertBool "[linked:1] badge appears"         ("[linked:1]" `isInfixOf` out)
     assertBool "no stale column (yes/no gone)"    (not ("  yes  " `isInfixOf` out || "  no  " `isInfixOf` out))
     assertBool "cats column present ([-])"        ("[-]" `isInfixOf` out)
+
+testLinkHelpExample :: IO ()
+testLinkHelpExample = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["link", "--help"]
+    code @?= ExitSuccess
+    assertBool "old order absent"    (not ("depends-on TASK_A TASK_B" `isInfixOf` out))
+    assertBool "correct order present" ("TASK_A depends-on TASK_B" `isInfixOf` out)
+
+testLinkListHeader :: IO ()
+testLinkListHeader = withTempDb $ \db -> do
+    (_, tOut, _) <- runIcarium db ["task", "add", "Src task", "--state", "ready"]
+    let tid = head (words tOut)
+    (_, kOut, _) <- runIcarium db ["know", "add", "Dst knowledge"]
+    let kid = head (words kOut)
+    (_, _, _)    <- runIcarium db ["link", "add", tid, "references", kid]
+
+    (code, out, _) <- runIcarium db ["link", "list"]
+    code @?= ExitSuccess
+    assertBool "header row present" ("EDGE_ID" `isInfixOf` out)
+
+testHelpCrossRef :: IO ()
+testHelpCrossRef = withTempDb $ \db -> do
+    (_, knowOut, _) <- runIcarium db ["know", "add", "--help"]
+    assertBool "know add --help mentions link add" ("link add" `isInfixOf` knowOut)
+
+    (_, linkOut, _) <- runIcarium db ["link", "add", "--help"]
+    assertBool "link add --help mentions know add --derived-from" ("know add --derived-from" `isInfixOf` linkOut)
 
 minimalIcariumToml :: String
 minimalIcariumToml = unlines

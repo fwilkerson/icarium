@@ -50,7 +50,7 @@ addP = AddOpts . T.pack
     <$> strArgument (metavar "SRC_ID")
     <*> argument edgeKindReader
             (metavar "KIND"
-             <> help "depends-on | references | derived-from | supersedes")
+             <> help "depends-on | references | derived-from | supersedes. For derived-from, `know add --derived-from <ID>` is the convenience equivalent.")
     <*> (T.pack <$> strArgument (metavar "DST_ID"))
 
 -- | Resolve a node id (ULID prefix or full) to (kind, canonical id).
@@ -122,7 +122,9 @@ runList db o = withDb db $ \c -> do
     es <- RE.listEdges c mFrom mTo (lKind o)
     case es of
         [] -> TIO.putStrLn "(no edges)"
-        _  -> mapM_ (TIO.putStrLn . Render.renderEdgeLine) es
+        _  -> do
+            TIO.putStrLn "EDGE_ID     KIND  FROM  ->  TO"
+            mapM_ (TIO.putStrLn . Render.renderEdgeLine) es
 
 -- =============================================================
 -- rm

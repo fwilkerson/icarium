@@ -41,7 +41,7 @@ runCmd db (CmdDispatch c) = Dispatch.run db c
 parser :: ParserInfo Args
 parser = info (argsP <**> helper)
     ( fullDesc
-   <> progDesc "Task/knowledge/dispatch tool for headless-agent workflows"
+   <> progDesc "Task/knowledge/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id."
    <> header   "icarium" )
 
 argsP :: Parser Args
@@ -68,7 +68,7 @@ cmdP = subparser
               (progDesc "Manage knowledge entries (list is the default). Example: icarium know --discipline planning"))
    <> command "link"
         (info (CmdLink <$> Link.parser <**> helper)
-              (progDesc "Manage typed edges between nodes (list is the default). Example: icarium link add depends-on TASK_A TASK_B"))
+              (progDesc "Manage typed edges between nodes (list is the default). Example: icarium link add TASK_A depends-on TASK_B"))
    <> command "category"
         (info (CmdCategory <$> Category.parser <**> helper)
               (progDesc "Manage category vocabulary (list is the default). Example: icarium category --axis domain"))
