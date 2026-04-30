@@ -209,7 +209,8 @@ showP = ShowOpts . T.pack
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
-    Just t <- RT.getTask c tid
+    mt  <- RT.getTask c tid
+    t   <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
     refs <- RE.referencedKnowledge c (taskId t)
     deps <- RE.dependencyTasks     c (taskId t)
     cats <- RC.taskCategoriesFor   c (taskId t)

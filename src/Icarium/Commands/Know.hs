@@ -213,7 +213,8 @@ runShow db o = withDb db $ \c -> do
     kid <- case eId of
         Left err -> fatal 1 err
         Right x  -> pure x
-    Just k <- RK.getKnowledge c kid
+    mk   <- RK.getKnowledge c kid
+    k    <- maybe (fatal 1 ("knowledge not found: " <> T.unpack kid)) pure mk
     cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
     TIO.putStr (Render.renderKnowledge k cats)
 
