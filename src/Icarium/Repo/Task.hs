@@ -4,6 +4,7 @@ module Icarium.Repo.Task
     , emptyUpdate
     , insertTask
     , getTask
+    , getTasksByIds
     , getTasksByPrefix
     , resolveTaskId
     , listTasks
@@ -65,6 +66,16 @@ escapeLike = T.concatMap esc
   where
     esc c | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
            | otherwise                  = T.singleton c
+
+-- | Fetch tasks by exact ids in a single batch query.
+getTasksByIds :: Connection -> [Text] -> IO [Task]
+getTasksByIds _ [] = pure []
+getTasksByIds conn ids =
+    query conn
+        (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id IN " <> ph)
+        (map SQLText ids)
+  where
+    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
 
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]

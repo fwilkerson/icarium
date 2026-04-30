@@ -1,10 +1,11 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
-import           Control.Monad          (forM_, unless, void, when)
+import           Control.Monad          (forM, forM_, unless, void, when)
 import           Data.Aeson             (FromJSON (..), decode, withObject, (.:?))
 import qualified Data.ByteString.Lazy   as BL
 import           Data.Either            (fromRight)
 import           Data.IORef             (IORef, modifyIORef, newIORef, readIORef)
+import           Data.List              (nub)
 import           Data.Maybe             (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
@@ -277,6 +278,25 @@ summarize r = do
 -- list
 -- =============================================================
 
+formatDispatchDuration :: UTCTime -> Dispatch -> Text
+formatDispatchDuration now d =
+    case parseTimestamp (dispatchStartedAt d) of
+        Nothing    -> ""
+        Just start ->
+            let (diff, isOpen) = case dispatchEndedAt d >>= parseTimestamp of
+                    Just end -> (diffUTCTime end start, False)
+                    Nothing  -> (diffUTCTime now start, True)
+                secs  = max 0 (round (toRational diff) :: Int)
+                body  = fmtSecs secs
+            in if isOpen then body <> " (running)" else body
+  where
+    parseTimestamp = parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S" . T.unpack
+    fmtSecs s
+        | s < 60    = T.pack (show s) <> "s"
+        | s < 3600  = T.pack (show (s `div` 60)) <> "m"
+        | otherwise = T.pack (show (s `div` 3600)) <> "h "
+                   <> T.pack (show ((s `mod` 3600) `div` 60)) <> "m"
+
 data ListOpts = ListOpts
     { lTask    :: Maybe Text
     , lOutcome :: Maybe DispatchOutcome
@@ -300,9 +320,23 @@ runList db o = withDb db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <- RD.listDispatches c mTaskId
     let filtered = case lOutcome o of
-            Nothing -> ds
+            Nothing   -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
-    TIO.putStr (Render.renderDispatchList filtered)
+    now      <- getCurrentTime
+    let taskIds = nub (map dispatchTaskId filtered)
+    tasks    <- RT.getTasksByIds c taskIds
+    let titleMap = [(taskId t, taskTitle t) | t <- tasks]
+    knowCounts <- forM filtered $ \d ->
+        length <$> RE.knowledgeDerivedFromDispatch c
+            (dispatchTaskId d) (dispatchStartedAt d) (dispatchEndedAt d)
+    let rows = zipWith (\d kc -> Render.DispatchRow
+                { Render.drDispatch  = d
+                , Render.drTaskTitle = fromMaybe "" (lookup (dispatchTaskId d) titleMap)
+                , Render.drKnowCount = kc
+                , Render.drDuration  = formatDispatchDuration now d
+                }) filtered knowCounts
+    utf8 <- detectUtf8
+    TIO.putStr (Render.renderDispatchList utf8 rows)
 
 -- =============================================================
 -- show

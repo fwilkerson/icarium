@@ -12,6 +12,7 @@ module Icarium.Render
     , renderCategory
     , recommendedTitleMax
     , renderDispatch
+    , DispatchRow (..)
     , renderDispatchList
     ) where
 
@@ -380,24 +381,43 @@ renderDispatch d mt ks = T.unlines $
         [] -> ["  (none)"]
         _  -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
 
-renderDispatchList :: [Dispatch] -> Text
-renderDispatchList ds =
-    let headerRow = T.intercalate "  "
-            [ padr 12 "id"
-            , padr 12 "task_id"
-            , padr 11 "outcome"
-            , padr 34 "branch"
-            , "started_at"
-            ]
-        rows = map row ds
-        row d = T.intercalate "  "
-            [ padr 12 (T.take 10 (dispatchId d))
-            , padr 12 (T.take 10 (dispatchTaskId d))
-            , padr 11 (maybe "open" dispatchOutcomeText (dispatchOutcome d))
-            , padr 34 (dispatchBranch d)
-            , dispatchStartedAt d
-            ]
-    in T.unlines (headerRow : rows)
+data DispatchRow = DispatchRow
+    { drDispatch  :: Dispatch
+    , drTaskTitle :: Text
+    , drKnowCount :: Int
+    , drDuration  :: Text
+    }
+
+renderDispatchList :: Bool -> [DispatchRow] -> Text
+renderDispatchList _ [] = "(no dispatches)\n"
+renderDispatchList utf8 rows = T.unlines $ map renderRow rows
+  where
+    titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . drTaskTitle) rows))
+    durWidth   = maxLen 2 (map (T.length . drDuration) rows)
+    knowWidth  = maxLen 0 (map (T.length . fmtKnow . drKnowCount) rows)
+
+    maxLen def [] = def
+    maxLen _   xs = maximum xs
+
+    fmtKnow 0 = ""
+    fmtKnow n = "[know:" <> T.pack (show n) <> "]"
+
+    renderRow dr =
+        let d        = drDispatch dr
+            didPart  = "  " <> padr 10 (T.take 10 (dispatchId d))
+            tidPart  = padr 10 (T.take 10 (dispatchTaskId d))
+            titPart  = padr titleWidth (truncateTitle utf8 titleWidth (drTaskTitle dr))
+            durPart  = padr durWidth (drDuration dr)
+            know     = fmtKnow (drKnowCount dr)
+            knowPart = if knowWidth == 0 then "" else "  " <> padr knowWidth know
+            badge    = outcomeBadge (dispatchOutcome d)
+        in didPart <> "   " <> tidPart <> "  " <> titPart <> "  " <> durPart <> knowPart <> "  " <> badge
+
+outcomeBadge :: Maybe DispatchOutcome -> Text
+outcomeBadge Nothing             = "[open]"
+outcomeBadge (Just OSuccess)     = "[success]"
+outcomeBadge (Just OFailure)     = "[failure]"
+outcomeBadge (Just OInterrupted) = "[interrupted]"
 
 -- =============================================================
 -- Utilities

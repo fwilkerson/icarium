@@ -21,6 +21,9 @@ tests = testGroup "render"
         , testCase "NULL priority sorts last"                                   testNullPrioritySort
         , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis"   testTitleTruncatedUtf8
         ]
+    , testGroup "renderDispatchList"
+        [ testCase "title, duration, outcome badge, know badge, no branch/header" testDispatchListFormat
+        ]
     , testGroup "task show links section"
         [ testCase "no edges renders (none)"                               testLinksNoEdges
         , testCase "only depends-on edges"                                 testLinksOnlyDeps
@@ -148,6 +151,53 @@ testTitleTruncatedUtf8 = do
     assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` dataRow))
     let titlePart = T.take Icarium.Render.recommendedTitleMax (T.drop 14 dataRow)
     assertBool "title column is exactly 72 chars" (T.length titlePart == Icarium.Render.recommendedTitleMax)
+
+-- =============================================================
+-- renderDispatchList tests
+-- =============================================================
+
+minDispatch :: Text -> Text -> Maybe DispatchOutcome -> Dispatch
+minDispatch did tid outcome = Dispatch
+    { dispatchId         = did
+    , dispatchTaskId     = tid
+    , dispatchBranch     = "dispatch/" <> did
+    , dispatchBaseBranch = "main"
+    , dispatchBaseSha    = "abc"
+    , dispatchPid        = Nothing
+    , dispatchModel      = "claude-sonnet-4-6"
+    , dispatchEffort     = Medium
+    , dispatchStartedAt  = "2026-04-01 10:00:00"
+    , dispatchHeartbeat  = "2026-04-01 10:05:00"
+    , dispatchEndedAt    = case outcome of { Nothing -> Nothing; Just _ -> Just "2026-04-01 10:12:00" }
+    , dispatchOutcome    = outcome
+    , dispatchMergeSha   = Nothing
+    , dispatchLastCommit = Nothing
+    , dispatchNotes      = Nothing
+    , dispatchLogPath    = Nothing
+    }
+
+testDispatchListFormat :: IO ()
+testDispatchListFormat = do
+    let d1 = minDispatch "01AAA0000000000000000000AA" "01TTT0000000000000000000AA" (Just OSuccess)
+        d2 = minDispatch "01BBB0000000000000000000BB" "01TTT0000000000000000000BB" (Just OFailure)
+        d3 = minDispatch "01CCC0000000000000000000CC" "01TTT0000000000000000000CC" Nothing
+        rows =
+            [ Icarium.Render.DispatchRow { Icarium.Render.drDispatch = d1, Icarium.Render.drTaskTitle = "Add unified search", Icarium.Render.drKnowCount = 1, Icarium.Render.drDuration = "12m" }
+            , Icarium.Render.DispatchRow { Icarium.Render.drDispatch = d2, Icarium.Render.drTaskTitle = "FTS5 backend decision", Icarium.Render.drKnowCount = 0, Icarium.Render.drDuration = "47m" }
+            , Icarium.Render.DispatchRow { Icarium.Render.drDispatch = d3, Icarium.Render.drTaskTitle = "Search CLI shape", Icarium.Render.drKnowCount = 0, Icarium.Render.drDuration = "3m (running)" }
+            ]
+        out = Icarium.Render.renderDispatchList True rows
+    assertBool "dispatch-id prefix in output"  ("01AAA00000" `T.isInfixOf` out)
+    assertBool "task title present"            ("Add unified search" `T.isInfixOf` out)
+    assertBool "[know:1] badge shown"          ("[know:1]" `T.isInfixOf` out)
+    assertBool "no [know:0] badge"             (not ("[know:0]" `T.isInfixOf` out))
+    assertBool "[success] outcome badge"       ("[success]" `T.isInfixOf` out)
+    assertBool "[failure] outcome badge"       ("[failure]" `T.isInfixOf` out)
+    assertBool "[open] outcome badge"          ("[open]" `T.isInfixOf` out)
+    assertBool "branch column absent"          (not ("dispatch/01AAA" `T.isInfixOf` out))
+    assertBool "no column header row"          (not ("task_id" `T.isInfixOf` out))
+    assertBool "duration shown"                ("12m" `T.isInfixOf` out)
+    assertBool "(running) suffix on open"      ("(running)" `T.isInfixOf` out)
 
 -- =============================================================
 -- task show links section tests
