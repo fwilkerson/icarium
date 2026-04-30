@@ -209,9 +209,6 @@ renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . taskTitle . trTask) rows))
     catWidth   = maxLen 3 (map (T.length . formatCats . trCats) rows)
 
-    maxLen def [] = def
-    maxLen _   xs = maximum xs
-
     renderRow row =
         let t        = trTask row
             idPart   = "  " <> padr 10 (T.take 10 (taskId t))
@@ -312,9 +309,6 @@ renderKnowledgeList utf8 rows = T.unlines $ map row rows
     titleWidth = min recommendedTitleMax (maxLen recommendedTitleMax (map (T.length . knowledgeTitle . krKnowledge) rows))
     catWidth   = maxLen 3 (map (T.length . formatCats . krCats) rows)
 
-    maxLen def [] = def
-    maxLen _   xs = maximum xs
-
     row kr =
         let k          = krKnowledge kr
             idPart     = "  " <> T.take 10 (knowledgeId k)
@@ -396,9 +390,6 @@ renderDispatchList utf8 rows = T.unlines $ map renderRow rows
     durWidth   = maxLen 2 (map (T.length . drDuration) rows)
     knowWidth  = maxLen 0 (map (T.length . fmtKnow . drKnowCount) rows)
 
-    maxLen def [] = def
-    maxLen _   xs = maximum xs
-
     fmtKnow 0 = ""
     fmtKnow n = "[know:" <> T.pack (show n) <> "]"
 
@@ -422,6 +413,10 @@ outcomeBadge (Just OInterrupted) = "[interrupted]"
 -- =============================================================
 -- Utilities
 -- =============================================================
+
+maxLen :: Int -> [Int] -> Int
+maxLen def [] = def
+maxLen _   xs = maximum xs
 
 padr :: Int -> Text -> Text
 padr n s = s <> T.replicate (max 0 (n - T.length s)) " "
