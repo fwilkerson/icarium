@@ -2,7 +2,7 @@ module Icarium.Types
     ( -- * Enums
       TaskState(..), taskStateText, parseTaskState, parseTaskStateDb
     , Effort(..), effortText, parseEffort
-    , EdgeKind(..), edgeKindDbText, edgeKindDisplay, parseEdgeKind
+    , EdgeKind(..), edgeKindDbText, edgeKindDisplay, parseEdgeKind, parseEdgeKindDb
     , NodeKind(..), nodeKindText, parseNodeKind
     , CategoryAxis(..), categoryAxisText, parseCategoryAxis
     , DispatchOutcome(..), dispatchOutcomeText, parseDispatchOutcome

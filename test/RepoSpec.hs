@@ -106,24 +106,16 @@ tests = testGroup "repo"
 
 edgeKindTests :: [TestTree]
 edgeKindTests =
-    -- parseEdgeKind accepts hyphens (CLI form)
-    -- edgeKindDbText produces underscores (DB storage form)
-    -- edgeKindDisplay produces hyphens (human/CLI display)
-    [ testCase "depends-on parses"    $ parseEdgeKind "depends-on"   @?= Just DependsOn
-    , testCase "references parses"    $ parseEdgeKind "references"   @?= Just References
-    , testCase "derived-from parses"  $ parseEdgeKind "derived-from" @?= Just DerivedFrom
-    , testCase "supersedes parses"    $ parseEdgeKind "supersedes"   @?= Just Supersedes
-    , testCase "depends_on rejected"  $ parseEdgeKind "depends_on"   @?= Nothing
-    , testCase "derived_from rejected"$ parseEdgeKind "derived_from" @?= Nothing
-    , testCase "edgeKindDbText DependsOn"   $ edgeKindDbText DependsOn   @?= "depends_on"
-    , testCase "edgeKindDbText References"  $ edgeKindDbText References  @?= "references"
-    , testCase "edgeKindDbText DerivedFrom" $ edgeKindDbText DerivedFrom @?= "derived_from"
-    , testCase "edgeKindDbText Supersedes"  $ edgeKindDbText Supersedes  @?= "supersedes"
-    , testCase "edgeKindDisplay DependsOn"   $ edgeKindDisplay DependsOn   @?= "depends-on"
-    , testCase "edgeKindDisplay References"  $ edgeKindDisplay References  @?= "references"
-    , testCase "edgeKindDisplay DerivedFrom" $ edgeKindDisplay DerivedFrom @?= "derived-from"
-    , testCase "edgeKindDisplay Supersedes"  $ edgeKindDisplay Supersedes  @?= "supersedes"
+    [ testCase "all constructors round-trip through display form" $
+        mapM_ (\k -> parseEdgeKind (edgeKindDisplay k) @?= Just k) allEdgeKinds
+    , testCase "all constructors round-trip through DB form" $
+        mapM_ (\k -> parseEdgeKindDb (edgeKindDbText k) @?= Just k) allEdgeKinds
+    , testCase "underscore form rejected by parseEdgeKind (hyphens enforced)" $ do
+        parseEdgeKind "depends_on"  @?= Nothing
+        parseEdgeKind "derived_from" @?= Nothing
     ]
+  where
+    allEdgeKinds = [DependsOn, References, DerivedFrom, Supersedes]
 
 -- =============================================================
 -- Config smoke test
