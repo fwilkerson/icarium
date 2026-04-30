@@ -11,14 +11,15 @@ module Icarium.Repo.Edge
     , knowledgeDerivedFromDispatch
     ) where
 
-import           Data.Maybe             (fromMaybe)
+import           Data.Maybe             (catMaybes, fromMaybe)
 import           Data.Text              (Text)
 import qualified Data.Text              as T
 import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
-                                         query, query_)
+                                         query)
 
 import           Icarium.Id             (newId)
-import           Icarium.Types          (Edge (..), EdgeKind (..), Knowledge, NodeKind (..), Task)
+import           Icarium.Types          (Edge (..), EdgeKind (..), Knowledge, NodeKind (..), Task,
+                                         edgeKindDbText)
 
 -- | Insert an edge. The DB enforces kind/endpoint typing and node
 -- existence via CHECK constraints and triggers (see schema.sql).
@@ -45,17 +46,19 @@ listEdges
     -> Maybe Text       -- ^ filter by dst id
     -> Maybe EdgeKind   -- ^ filter by kind
     -> IO [Edge]
-listEdges conn mSrc mDst mKind = do
-    rows <- query_ conn
-        (Query $ "SELECT " <> edgeCols <> " FROM edges ORDER BY created_at ASC")
-    pure
-        $ filterBy mKind (\k -> (== k) . edgeKind)
-        . filterBy mDst  (\d -> (== d) . edgeDstId)
-        . filterBy mSrc  (\s -> (== s) . edgeSrcId)
-        $ rows
+listEdges conn mSrc mDst mKind =
+    query conn
+        (Query $ "SELECT " <> edgeCols <> " FROM edges" <> whereClause <> " ORDER BY created_at ASC")
+        params
   where
-    filterBy Nothing  _ xs = xs
-    filterBy (Just v) p xs = filter (p v) xs
+    filters = catMaybes
+        [ fmap (\s -> ("src_id = ?", SQLText s))                  mSrc
+        , fmap (\d -> ("dst_id = ?", SQLText d))                  mDst
+        , fmap (\k -> ("kind = ?",   SQLText (edgeKindDbText k))) mKind
+        ]
+    (whereClause, params) = case filters of
+        [] -> ("", [])
+        fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
 
 deleteEdge :: Connection -> Text -> IO Bool
 deleteEdge conn eid = do

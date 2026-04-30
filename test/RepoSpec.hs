@@ -68,6 +68,9 @@ tests = testGroup "repo"
         , testCase "left on missing"        testResolveEdgeMissing
         , testCase "left on ambiguous"      testResolveEdgeAmbiguous
         ]
+    , testGroup "listEdges filtering"
+        [ testCase "src + kind filter returns only matching rows" testListEdgesSrcKindFilter
+        ]
     , testGroup "resolveNode (PREFIX_RESOLUTION: link add src/dst, link list --from/--to, know add --derived-from)"
         [ testCase "resolves task prefix"       testResolveNodeTask
         , testCase "resolves knowledge prefix"  testResolveNodeKnowledge
@@ -419,6 +422,24 @@ testResolveEdgeAmbiguous = withTestDb $ \c -> do
     case r of
         Left msg -> assertBool "error mentions input" ("01EEEE0000" `T.isInfixOf` T.pack msg)
         Right _  -> fail "expected Left for ambiguous edge"
+
+-- =============================================================
+-- listEdges filtering tests
+-- =============================================================
+
+testListEdgesSrcKindFilter :: IO ()
+testListEdgesSrcKindFilter = withTestDb $ \c -> do
+    t1  <- RT.insertTask c RT.NewTask { RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    t2  <- RT.insertTask c RT.NewTask { RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    t3  <- RT.insertTask c RT.NewTask { RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing }
+    kid <- RK.insertKnowledge c RK.NewKnowledge { RK.nkTitle = "K", RK.nkBody = "" }
+    _   <- RE.insertEdge c DependsOn  TaskNode t1 TaskNode      t2
+    _   <- RE.insertEdge c References TaskNode t1 KnowledgeNode kid
+    _   <- RE.insertEdge c DependsOn  TaskNode t2 TaskNode      t3
+    es  <- RE.listEdges c (Just t1) Nothing (Just DependsOn)
+    length es @?= 1
+    edgeSrcId (head es) @?= t1
+    edgeKind  (head es) @?= DependsOn
 
 -- =============================================================
 -- resolveNode tests
