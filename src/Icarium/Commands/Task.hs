@@ -106,22 +106,6 @@ runAdd db o = withDb db $ \c -> do
         void $ RE.insertEdge c References TaskNode tid KnowledgeNode refId
     TIO.putStrLn tid
 
--- | Resolve a task input (ULID prefix) to a canonical ULID.
-requireTask :: Connection -> Text -> IO Text
-requireTask c input = do
-    r <- RT.resolveTaskId c input
-    case r of
-        Right tid -> pure tid
-        Left err  -> fatal 2 err
-
--- | Resolve a knowledge input (ULID prefix) to a canonical ULID.
-requireKnowledge :: Connection -> Text -> IO Text
-requireKnowledge c input = do
-    r <- RK.resolveKnowledgeId c input
-    case r of
-        Right kid -> pure kid
-        Left err  -> fatal 2 err
-
 -- =============================================================
 -- list
 -- =============================================================

@@ -131,26 +131,6 @@ autoDeriveDeps c []   (Just tid) = do
                 <> " ambiguous; skipping auto derived-from edge")
             pure []
 
--- | Look up an id that could refer to either a task or a knowledge entry
--- via ULID prefix match.
-resolveNode :: Connection -> Text -> IO (NodeKind, Text)
-resolveNode c input = do
-    ts <- RT.getTasksByPrefix c input
-    ks <- RK.getKnowledgesByPrefix c input
-    case (ts, ks) of
-        ([t], [] ) -> pure (TaskNode, taskId t)
-        ([], [k] ) -> pure (KnowledgeNode, knowledgeId k)
-        ([], []  ) -> fatal 2 ("unknown node: " <> T.unpack input)
-        _          -> fatal 2 ("ambiguous id: " <> T.unpack input)
-
--- | Resolve a knowledge input (ULID prefix) to a canonical ULID.
-requireKnowledge :: Connection -> Text -> IO Text
-requireKnowledge c input = do
-    r <- RK.resolveKnowledgeId c input
-    case r of
-        Right kid -> pure kid
-        Left err  -> fatal 2 err
-
 -- =============================================================
 -- list
 -- =============================================================
@@ -209,10 +189,7 @@ showP = ShowOpts . T.pack
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
-    eId <- RK.resolveKnowledgeId c (sId o)
-    kid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    kid <- resolveOrFatal (RK.resolveKnowledgeId c (sId o))
     mk   <- RK.getKnowledge c kid
     k    <- maybe (fatal 1 ("knowledge not found: " <> T.unpack kid)) pure mk
     cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
@@ -251,10 +228,7 @@ staleFlag =
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do
-    eId <- RK.resolveKnowledgeId c (uId o)
-    kid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    kid <- resolveOrFatal (RK.resolveKnowledgeId c (uId o))
     body <- case uBody o of
         BodyNone -> pure Nothing
         b        -> Just <$> resolveBody b
@@ -289,10 +263,7 @@ rmP = RmOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
 runRm db o = withDb db $ \c -> do
-    eId <- RK.resolveKnowledgeId c (rId o)
-    kid <- case eId of
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    kid <- resolveOrFatal (RK.resolveKnowledgeId c (rId o))
     ok <- RK.deleteKnowledge c kid
     if ok then TIO.putStrLn ("deleted " <> kid)
           else fatal 1 ("knowledge not found: " <> T.unpack (rId o))

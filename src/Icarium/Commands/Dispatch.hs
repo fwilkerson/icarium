@@ -351,9 +351,7 @@ showP = ShowOpts . T.pack
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
-    did <- RD.resolveDispatchId c (sId o) >>= \case
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    did <- resolveOrFatal (RD.resolveDispatchId c (sId o))
     md <- RD.getDispatch c did
     case md of
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
@@ -380,9 +378,7 @@ logsP = LogsOpts . T.pack
 
 runLogs :: FilePath -> LogsOpts -> IO ()
 runLogs db o = withDb db $ \c -> do
-    did <- RD.resolveDispatchId c (gId o) >>= \case
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    did <- resolveOrFatal (RD.resolveDispatchId c (gId o))
     md <- RD.getDispatch c did
     case md of
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
@@ -421,9 +417,7 @@ runRecover db o = do
     withDb db $ \c -> do
         open <- case recDispatchId o of
             Just raw -> do
-                did <- RD.resolveDispatchId c raw >>= \case
-                    Left err -> fatal 1 err
-                    Right x  -> pure x
+                did <- resolveOrFatal (RD.resolveDispatchId c raw)
                 md <- RD.getDispatch c did
                 pure $ case md of
                     Just d | isNothing (dispatchOutcome d) -> [d]

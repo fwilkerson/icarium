@@ -10,6 +10,10 @@ module Icarium.Commands.Util
       -- * Category validation
     , requireCategory
     , resolveAxisFlag
+      -- * Node resolution
+    , requireTask
+    , requireKnowledge
+    , resolveNode
       -- * Body input handling
     , BodyInput(..)
     , bodyInputParser
@@ -32,6 +36,8 @@ import           System.Exit            (ExitCode (..), exitWith)
 import           System.IO              (hPutStrLn, stderr)
 
 import qualified Icarium.Repo.Category  as RC
+import qualified Icarium.Repo.Knowledge as RK
+import qualified Icarium.Repo.Task      as RT
 import           Icarium.Types
 
 fatal :: Int -> String -> IO a
@@ -103,6 +109,30 @@ detectUtf8 = do
     lang    <- lookupEnv "LANG"
     let envVal = map toUpper $ fromMaybe "" (lcAll <|> lcCtype <|> lang)
     return ("UTF" `isInfixOf` envVal)
+
+requireTask :: Connection -> Text -> IO Text
+requireTask c input = do
+    r <- RT.resolveTaskId c input
+    case r of
+        Right tid -> pure tid
+        Left err  -> fatal 2 err
+
+requireKnowledge :: Connection -> Text -> IO Text
+requireKnowledge c input = do
+    r <- RK.resolveKnowledgeId c input
+    case r of
+        Right kid -> pure kid
+        Left err  -> fatal 2 err
+
+resolveNode :: Connection -> Text -> IO (NodeKind, Text)
+resolveNode c input = do
+    ts <- RT.getTasksByPrefix c input
+    ks <- RK.getKnowledgesByPrefix c input
+    case (ts, ks) of
+        ([t], [] ) -> pure (TaskNode, taskId t)
+        ([], [k] ) -> pure (KnowledgeNode, knowledgeId k)
+        ([], []  ) -> fatal 2 ("unknown node: " <> T.unpack input)
+        _          -> fatal 2 ("ambiguous id: " <> T.unpack input)
 
 requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
 requireCategory c axis name = do

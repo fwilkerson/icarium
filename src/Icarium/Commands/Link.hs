@@ -1,18 +1,15 @@
 module Icarium.Commands.Link (Command, parser, run) where
 
-import           Control.Monad          (when)
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-import qualified Data.Text.IO           as TIO
-import           Database.SQLite.Simple (Connection)
+import           Control.Monad         (when)
+import           Data.Text             (Text)
+import qualified Data.Text             as T
+import qualified Data.Text.IO          as TIO
 import           Options.Applicative
 
 import           Icarium.Commands.Util
-import           Icarium.Db             (withDb)
-import qualified Icarium.Render         as Render
-import qualified Icarium.Repo.Edge      as RE
-import qualified Icarium.Repo.Knowledge as RK
-import qualified Icarium.Repo.Task      as RT
+import           Icarium.Db            (withDb)
+import qualified Icarium.Render        as Render
+import qualified Icarium.Repo.Edge     as RE
 import           Icarium.Types
 
 data Command
@@ -52,17 +49,6 @@ addP = AddOpts . T.pack
             (metavar "KIND"
              <> help "depends-on | references | derived-from | supersedes. For derived-from, `know add --derived-from <ID>` is the convenience equivalent.")
     <*> (T.pack <$> strArgument (metavar "DST_ID"))
-
--- | Resolve a node id (ULID prefix or full) to (kind, canonical id).
-resolveNode :: Connection -> Text -> IO (NodeKind, Text)
-resolveNode c input = do
-    ts <- RT.getTasksByPrefix c input
-    ks <- RK.getKnowledgesByPrefix c input
-    case (ts, ks) of
-        ([t], [] ) -> pure (TaskNode, taskId t)
-        ([], [k] ) -> pure (KnowledgeNode, knowledgeId k)
-        ([], []  ) -> fatal 2 ("unknown node: " <> T.unpack input)
-        _          -> fatal 2 ("ambiguous id: " <> T.unpack input)
 
 -- | Validate that the edge endpoints match the edge kind's typing rules.
 -- Mirrors the CHECK constraint in schema.sql; catching it here gives a
@@ -137,9 +123,7 @@ rmP = RmOpts . T.pack <$> strArgument (metavar "EDGE_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
 runRm db o = withDb db $ \c -> do
-    eid <- RE.resolveEdgeId c (rId o) >>= \case
-        Left err -> fatal 1 err
-        Right x  -> pure x
+    eid <- resolveOrFatal (RE.resolveEdgeId c (rId o))
     ok <- RE.deleteEdge c eid
     if ok then TIO.putStrLn ("deleted " <> eid)
           else fatal 1 ("edge not found: " <> T.unpack (rId o))
