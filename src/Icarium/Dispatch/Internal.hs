@@ -147,17 +147,13 @@ renderCmdPreview model effort tools allowed = T.unwords
 
 doReal :: Connection -> DispatchRequest -> IO DispatchResult
 doReal conn req = do
-    let cfg        = drConfig req
-        dcfg       = cfgDispatch cfg
-        task       = drTask   req
-        dbPath     = drDbPath req
-        base       = effectiveBase   req
-        model      = effectiveModel  req
-        effort     = effectiveEffort req
-        tools      = dcTools                 dcfg
-        allowed    = dcAllowedTools          dcfg
-        scratchDir = dcScratchDir            dcfg
-        maxMinutes = dcMaxMinutesPerDispatch dcfg
+    let cfg    = drConfig req
+        dcfg   = cfgDispatch cfg
+        task   = drTask   req
+        dbPath = drDbPath req
+        base   = effectiveBase   req
+        model  = effectiveModel  req
+        effort = effectiveEffort req
 
     checkPreconditions base
     baseSha <- either (ioFail . show) pure =<< Git.revParse base
@@ -168,7 +164,7 @@ doReal conn req = do
         logDir  = ".icarium" </> "logs"
         logPath = logDir </> T.unpack did <> ".jsonl"
     createDirectoryIfMissing True logDir
-    createDirectoryIfMissing True (T.unpack scratchDir)
+    createDirectoryIfMissing True (T.unpack (dcScratchDir dcfg))
 
     RD.insertDispatch conn did RD.NewDispatch
         { RD.ndTaskId     = taskId task
@@ -194,7 +190,16 @@ doReal conn req = do
                 ("git checkout -b failed: " <> T.pack (show e)) retention
                 Nothing (Just baseSha)
         Right () -> do
-            exit <- runClaudeStreaming dbPath did task prompt model effort tools allowed scratchDir logPath maxMinutes
+            let ctx = RunCtx
+                    { rcDbPath  = dbPath
+                    , rcDid     = did
+                    , rcTask    = task
+                    , rcPrompt  = prompt
+                    , rcModel   = model
+                    , rcEffort  = effort
+                    , rcLogPath = logPath
+                    }
+            exit <- runClaudeStreaming ctx dcfg
             handlePostClaude conn did branch base cfg exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
@@ -232,10 +237,29 @@ killGroupGracefully pgid = do
     threadDelay (10 * 1_000_000)
     void $ (try :: IO () -> IO (Either SomeException ())) (signalProcessGroup sigKILL pgid)
 
-runClaudeStreaming
-    :: FilePath -> Text -> Task -> Text -> Text -> Effort -> [Text] -> [Text] -> Text -> FilePath -> Int
-    -> IO ExitCode
-runClaudeStreaming dbPath did task prompt model effort tools allowed scratchDir logPath maxMinutes = do
+data RunCtx = RunCtx
+    { rcDbPath  :: FilePath
+    , rcDid     :: Text
+    , rcTask    :: Task
+    , rcPrompt  :: Text
+    , rcModel   :: Text
+    , rcEffort  :: Effort
+    , rcLogPath :: FilePath
+    }
+
+runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode
+runClaudeStreaming ctx dcfg = do
+    let dbPath     = rcDbPath  ctx
+        did        = rcDid     ctx
+        task       = rcTask    ctx
+        prompt     = rcPrompt  ctx
+        model      = rcModel   ctx
+        effort     = rcEffort  ctx
+        logPath    = rcLogPath ctx
+        tools      = dcTools                dcfg
+        allowed    = dcAllowedTools         dcfg
+        scratchDir = dcScratchDir           dcfg
+        maxMinutes = dcMaxMinutesPerDispatch dcfg
     parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args =

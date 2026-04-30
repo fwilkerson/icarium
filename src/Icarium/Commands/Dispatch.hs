@@ -124,13 +124,35 @@ runRun db o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
-            withDb db (drainLoop db o cfg (rMax o) 0 sigCount)
+            withDb db $ \conn -> do
+                let ctx = DrainCtx
+                        { dctxDb       = db
+                        , dctxOpts     = o
+                        , dctxCfg      = cfg
+                        , dctxMCap     = rMax o
+                        , dctxSigCount = sigCount
+                        , dctxConn     = conn
+                        }
+                drainLoop ctx 0
 
-drainLoop :: FilePath -> RunOpts -> Config -> Maybe Int -> Int -> IORef Int -> Connection -> IO ()
-drainLoop db opts cfg mcap !i sigCount conn
-    | Just cap <- mcap, i >= cap =
+data DrainCtx = DrainCtx
+    { dctxDb       :: FilePath
+    , dctxOpts     :: RunOpts
+    , dctxCfg      :: Config
+    , dctxMCap     :: Maybe Int
+    , dctxSigCount :: IORef Int
+    , dctxConn     :: Connection
+    }
+
+drainLoop :: DrainCtx -> Int -> IO ()
+drainLoop ctx !i
+    | Just cap <- dctxMCap ctx, i >= cap =
         hPutStrLn stderr ("icarium: reached max dispatches (" <> show cap <> "); stopping")
     | otherwise = do
+        let conn = dctxConn     ctx
+            opts = dctxOpts     ctx
+            cfg  = dctxCfg      ctx
+            db   = dctxDb       ctx
         ts <- RT.listTasks conn [] True Nothing Nothing
         case ts of
             [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
@@ -150,11 +172,11 @@ drainLoop db opts cfg mcap !i sigCount conn
                     "icarium: " <> dispatchOutcomeText (D.dresOutcome res)
                     <> " \x2014 " <> D.dresNotes res
                 printSummary res
-                n <- readIORef sigCount
+                n <- readIORef (dctxSigCount ctx)
                 if n >= 1
                     then hPutStrLn stderr
                         "icarium: SIGINT received; stopping after current dispatch"
-                    else drainLoop db opts cfg mcap (i + 1) sigCount conn
+                    else drainLoop ctx (i + 1)
 
 -- =============================================================
 -- Log parsing
