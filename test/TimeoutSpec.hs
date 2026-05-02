@@ -3,6 +3,9 @@ module TimeoutSpec (tests) where
 import Control.Concurrent (threadDelay)
 import Data.Maybe (isJust)
 import Data.Text qualified as T
+import System.Directory (withCurrentDirectory)
+import System.IO.Temp (withSystemTempDirectory)
+import System.Process.Typed (proc, readProcess, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
@@ -64,7 +67,7 @@ testNegativeMaxMinutes =
         Right _ -> error "expected Left for max_minutes_per_dispatch = -1"
 
 testTimeoutOutcome :: IO ()
-testTimeoutOutcome = withTestDb $ \conn -> do
+testTimeoutOutcome = withTempRepo $ \_repoDir -> withTestDb $ \conn -> do
     tid <-
         RT.insertTask
             conn
@@ -88,14 +91,12 @@ testTimeoutOutcome = withTestDb $ \conn -> do
             , RD.ndLogPath = Nothing
             , RD.ndPid = Nothing
             }
-    -- Use a non-existent base branch so the internal "git checkout base"
-    -- on failure silently no-ops rather than mutating the real working tree.
     let dx =
             DispatchCtx
                 { dxConn = conn
                 , dxDid = did
                 , dxBranch = "dispatch/" <> did
-                , dxBase = "test-no-such-branch"
+                , dxBase = "main"
                 }
     res <- handlePostClaude dx fakeConfig timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
     dresOutcome res @?= OFailure
@@ -110,6 +111,24 @@ testTimeoutOutcome = withTestDb $ \conn -> do
             assertBool
                 "DB notes say timed out"
                 (maybe False ("timed out" `T.isInfixOf`) (dispatchNotes d))
+
+{- | Create a throwaway git repo with one commit on main, cd into it for the
+duration of the action, and clean up. Required because handlePostClaude's
+failure path runs git operations against the current working directory; if
+the test ran against the project's real .git, checkpointDirtyTree would
+commit the developer's in-progress work to whatever branch is checked out.
+-}
+withTempRepo :: (FilePath -> IO a) -> IO a
+withTempRepo k =
+    withSystemTempDirectory "icarium-timeout-test" $ \dir -> do
+        let git args = readProcess (setWorkingDir dir (proc "git" args))
+        _ <- git ["init", "-b", "main"]
+        _ <- git ["config", "user.email", "test@example.com"]
+        _ <- git ["config", "user.name", "Test"]
+        writeFile (dir <> "/README") "init"
+        _ <- git ["add", "README"]
+        _ <- git ["commit", "-m", "initial"]
+        withCurrentDirectory dir (k dir)
 
 fakeConfig :: Config
 fakeConfig =
