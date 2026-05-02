@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Icarium.Dispatch.Claude (
     RunCtx (..),
     raceTimeout,
@@ -9,7 +11,7 @@ module Icarium.Dispatch.Claude (
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, bracket, try)
+import Control.Exception (SomeException, bracket, handle, try)
 import Control.Monad (void)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
@@ -71,9 +73,9 @@ are silently ignored.
 -}
 killGroupGracefully :: CPid -> IO ()
 killGroupGracefully pgid = do
-    void $ (try :: IO () -> IO (Either SomeException ())) (signalProcessGroup sigINT pgid)
+    handle (\(_ :: SomeException) -> pure ()) (signalProcessGroup sigINT pgid)
     threadDelay (10 * 1_000_000)
-    void $ (try :: IO () -> IO (Either SomeException ())) (signalProcessGroup sigKILL pgid)
+    handle (\(_ :: SomeException) -> pure ()) (signalProcessGroup sigKILL pgid)
 
 data RunCtx = RunCtx
     { rcDbPath :: FilePath
