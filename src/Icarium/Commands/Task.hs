@@ -81,38 +81,10 @@ addP =
                     <> help "0-10. Higher number = higher priority (sorts first); also more bubbles in the priority bar."
                 )
             )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "domain"
-                        <> metavar "NAME"
-                        <> help "Tag with this domain category"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "discipline"
-                        <> metavar "NAME"
-                        <> help "Tag with this discipline category"
-                    )
-            )
-        <*> many
-            ( T.pack
-                <$> strOption
-                    ( long "depends-on"
-                        <> metavar "TASK_ID"
-                        <> help "Add a depends_on edge to TASK_ID"
-                    )
-            )
-        <*> many
-            ( T.pack
-                <$> strOption
-                    ( long "references"
-                        <> metavar "KNOWLEDGE_ID"
-                        <> help "Add a references edge to KNOWLEDGE_ID"
-                    )
-            )
+        <*> optional (textOption "domain" "NAME" "Tag with this domain category")
+        <*> optional (textOption "discipline" "NAME" "Tag with this discipline category")
+        <*> many (textOption "depends-on" "TASK_ID" "Add a depends_on edge to TASK_ID")
+        <*> many (textOption "references" "KNOWLEDGE_ID" "Add a references edge to KNOWLEDGE_ID")
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
@@ -168,22 +140,8 @@ listP =
                 )
             )
         <*> switch (long "ready" <> help "Only state=ready tasks with all depends-on satisfied (matches what `dispatch run` and `task next` pick)")
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "domain"
-                        <> metavar "NAME"
-                        <> help "Filter by domain category"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "discipline"
-                        <> metavar "NAME"
-                        <> help "Filter by discipline category"
-                    )
-            )
+        <*> optional (textOption "domain" "NAME" "Filter by domain category")
+        <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
         <*> switch (long "all" <> help "Include done and abandoned tasks")
 
 defaultActiveStates :: [TaskState]
@@ -299,39 +257,11 @@ updateP =
                     <> help "0-10. Higher number = higher priority (sorts first); also more bubbles in the priority bar."
                 )
             )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "title"
-                        <> metavar "TEXT"
-                        <> help "Replace task title. Keep ≤ 72 chars; longer titles are truncated in `task list`."
-                    )
-            )
+        <*> optional (textOption "title" "TEXT" "Replace task title. Keep ≤ 72 chars; longer titles are truncated in `task list`.")
         <*> bodyInputParser
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "block-reason"
-                        <> metavar "TEXT"
-                        <> help "Reason for blocked state (required with --state blocked)"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "domain"
-                        <> metavar "NAME"
-                        <> help "Replace domain category; empty string clears"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "discipline"
-                        <> metavar "NAME"
-                        <> help "Replace discipline category; empty string clears"
-                    )
-            )
+        <*> optional (textOption "block-reason" "TEXT" "Reason for blocked state (required with --state blocked)")
+        <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
+        <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do

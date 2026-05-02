@@ -62,38 +62,10 @@ addP =
     AddOpts . T.pack
         <$> strArgument (metavar "TITLE" <> help "Entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`.")
         <*> bodyInputParser
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "domain"
-                        <> metavar "NAME"
-                        <> help "Tag with this domain category"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "discipline"
-                        <> metavar "NAME"
-                        <> help "Tag with this discipline category"
-                    )
-            )
-        <*> many
-            ( T.pack
-                <$> strOption
-                    ( long "derived-from"
-                        <> metavar "ID"
-                        <> help "Shorthand for `icarium link add <THIS_KNOWLEDGE> derived-from <ID>`; may be repeated"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "supersedes"
-                        <> metavar "KNOWLEDGE_ID"
-                        <> help "Mark this entry as superseding KNOWLEDGE_ID"
-                    )
-            )
+        <*> optional (textOption "domain" "NAME" "Tag with this domain category")
+        <*> optional (textOption "discipline" "NAME" "Tag with this discipline category")
+        <*> many (textOption "derived-from" "ID" "Shorthand for `icarium link add <THIS_KNOWLEDGE> derived-from <ID>`; may be repeated")
+        <*> optional (textOption "supersedes" "KNOWLEDGE_ID" "Mark this entry as superseding KNOWLEDGE_ID")
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
@@ -189,22 +161,8 @@ listP =
     ListOpts
         <$> switch (long "stale" <> help "Only entries flagged stale")
         <*> switch (long "all" <> help "Include stale entries")
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "domain"
-                        <> metavar "NAME"
-                        <> help "Filter by domain category"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "discipline"
-                        <> metavar "NAME"
-                        <> help "Filter by discipline category"
-                    )
-            )
+        <*> optional (textOption "domain" "NAME" "Filter by domain category")
+        <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
@@ -276,32 +234,11 @@ updateP :: Parser UpdateOpts
 updateP =
     UpdateOpts . T.pack
         <$> strArgument (metavar "KNOWLEDGE_ID")
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "title"
-                        <> metavar "TEXT"
-                        <> help "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`."
-                    )
-            )
+        <*> optional (textOption "title" "TEXT" "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`.")
         <*> bodyInputParser
         <*> staleFlag
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "domain"
-                        <> metavar "NAME"
-                        <> help "Replace domain category; empty string clears"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "discipline"
-                        <> metavar "NAME"
-                        <> help "Replace discipline category; empty string clears"
-                    )
-            )
+        <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
+        <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
 
 staleFlag :: Parser (Maybe Bool)
 staleFlag =

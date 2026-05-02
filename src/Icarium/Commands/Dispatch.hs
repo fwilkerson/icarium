@@ -94,14 +94,7 @@ runP =
                     <> help "Cap dispatches in queue mode (ignored with TASK_ID)"
                 )
             )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "model"
-                        <> metavar "MODEL"
-                        <> help "Override the model for this dispatch"
-                    )
-            )
+        <*> optional (textOption "model" "MODEL" "Override the model for this dispatch")
         <*> optional
             ( option
                 effortReader
@@ -110,14 +103,7 @@ runP =
                     <> help "low | medium | high"
                 )
             )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "base-branch"
-                        <> metavar "NAME"
-                        <> help "Override the base branch for git operations"
-                    )
-            )
+        <*> optional (textOption "base-branch" "NAME" "Override the base branch for git operations")
         <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
 runRun :: FilePath -> RunOpts -> IO ()
@@ -370,14 +356,7 @@ data ListOpts = ListOpts
 listP :: Parser ListOpts
 listP =
     ListOpts
-        <$> optional
-            ( T.pack
-                <$> strOption
-                    ( long "task"
-                        <> metavar "TASK_ID"
-                        <> help "Only dispatches for this task"
-                    )
-            )
+        <$> optional (textOption "task" "TASK_ID" "Only dispatches for this task")
         <*> optional
             ( option
                 outcomeReader

@@ -104,22 +104,8 @@ data ListOpts = ListOpts
 listP :: Parser ListOpts
 listP =
     ListOpts
-        <$> optional
-            ( T.pack
-                <$> strOption
-                    ( long "from"
-                        <> metavar "ID"
-                        <> help "Only edges outgoing from this node"
-                    )
-            )
-        <*> optional
-            ( T.pack
-                <$> strOption
-                    ( long "to"
-                        <> metavar "ID"
-                        <> help "Only edges incoming to this node"
-                    )
-            )
+        <$> optional (textOption "from" "ID" "Only edges outgoing from this node")
+        <*> optional (textOption "to" "ID" "Only edges incoming to this node")
         <*> optional
             ( option
                 edgeKindReader

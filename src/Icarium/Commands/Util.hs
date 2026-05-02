@@ -26,6 +26,7 @@ module Icarium.Commands.Util (
     -- * Small helpers
     subcmd,
     detectUtf8,
+    textOption,
 ) where
 
 import Data.Char (toUpper)
@@ -125,6 +126,10 @@ detectUtf8 = do
     lang <- lookupEnv "LANG"
     let envVal = map toUpper $ fromMaybe "" (lcAll <|> lcCtype <|> lang)
     return ("UTF" `isInfixOf` envVal)
+
+textOption :: String -> String -> String -> Parser Text
+textOption flg mv hlp =
+    T.pack <$> strOption (long flg <> metavar mv <> help hlp)
 
 requireTask :: Connection -> Text -> IO Text
 requireTask c input = do
