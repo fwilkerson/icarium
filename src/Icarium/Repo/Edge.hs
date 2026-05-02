@@ -24,7 +24,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Internal (escapeLike)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
 import Icarium.Types (
     Edge (..),
     EdgeKind (..),
@@ -102,28 +102,11 @@ deleteEdge conn eid = do
 
 -- | Edges whose ULID starts with @prefix@.
 getEdgesByPrefix :: Connection -> Text -> IO [Edge]
-getEdgesByPrefix conn prefix =
-    query
-        conn
-        (Query $ "SELECT " <> edgeCols <> " FROM edges WHERE id LIKE ? ESCAPE '\\'")
-        (Only (escapeLike prefix <> "%"))
+getEdgesByPrefix conn = prefixLookup conn "edges" edgeCols
 
 -- | Resolve a user-supplied string to a canonical edge ULID via prefix match.
 resolveEdgeId :: Connection -> Text -> IO (Either String Text)
-resolveEdgeId conn input = do
-    es <- getEdgesByPrefix conn input
-    case es of
-        [e] -> pure (Right (edgeId e))
-        [] -> pure (Left $ "edge not found: " <> T.unpack input)
-        _ ->
-            pure
-                ( Left $
-                    "ambiguous id: "
-                        <> T.unpack input
-                        <> " (matches "
-                        <> show (length es)
-                        <> " edges)"
-                )
+resolveEdgeId conn = resolveByPrefix (getEdgesByPrefix conn) edgeId "edge"
 
 -- | Knowledge linked by @references@ edges from the given task.
 referencedKnowledge :: Connection -> Text -> IO [Knowledge]

@@ -14,10 +14,9 @@ module Icarium.Repo.Dispatch (
 ) where
 
 import Data.Text (Text, unpack)
-import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
-import Icarium.Repo.Internal (escapeLike)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
 import Icarium.Types (Dispatch (..), DispatchOutcome, Effort)
 
 data NewDispatch = NewDispatch
@@ -75,34 +74,11 @@ getDispatch conn did = do
 
 -- | Dispatches whose ULID starts with @prefix@.
 getDispatchesByPrefix :: Connection -> Text -> IO [Dispatch]
-getDispatchesByPrefix conn prefix =
-    query
-        conn
-        (Query $ "SELECT " <> dispatchCols <> " FROM dispatches WHERE id LIKE ? ESCAPE '\\'")
-        (Only (escapeLike prefix <> "%"))
+getDispatchesByPrefix conn = prefixLookup conn "dispatches" dispatchCols
 
-{- | Resolve a user-supplied string to a canonical dispatch ULID.
-Tries exact-id match first, then ULID prefix match.
--}
+-- | Resolve a user-supplied string to a canonical dispatch ULID via prefix match.
 resolveDispatchId :: Connection -> Text -> IO (Either String Text)
-resolveDispatchId conn input = do
-    md <- getDispatch conn input
-    case md of
-        Just d -> pure (Right (dispatchId d))
-        Nothing -> do
-            ds <- getDispatchesByPrefix conn input
-            case ds of
-                [d] -> pure (Right (dispatchId d))
-                [] -> pure (Left $ "dispatch not found: " <> T.unpack input)
-                _ ->
-                    pure
-                        ( Left $
-                            "ambiguous id: "
-                                <> T.unpack input
-                                <> " (matches: "
-                                <> T.unpack (T.intercalate ", " (map dispatchId ds))
-                                <> ")"
-                        )
+resolveDispatchId conn = resolveByPrefix (getDispatchesByPrefix conn) dispatchId "dispatch"
 
 {- | Every dispatch whose outcome column is NULL. Heartbeat freshness
 is the caller's concern (recovery, status).

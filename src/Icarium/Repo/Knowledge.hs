@@ -25,7 +25,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Internal (escapeLike)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
 import Icarium.Types (Category (..), CategoryAxis (..), Knowledge (..))
 
 data NewKnowledge = NewKnowledge
@@ -67,28 +67,11 @@ getKnowledge conn kid = do
 
 -- | Knowledge entries whose ULID starts with @prefix@.
 getKnowledgesByPrefix :: Connection -> Text -> IO [Knowledge]
-getKnowledgesByPrefix conn prefix =
-    query
-        conn
-        (Query $ "SELECT " <> knowCols <> " FROM knowledge WHERE id LIKE ? ESCAPE '\\'")
-        (Only (escapeLike prefix <> "%"))
+getKnowledgesByPrefix conn = prefixLookup conn "knowledge" knowCols
 
 -- | Resolve a user-supplied string to a canonical knowledge ULID via prefix match.
 resolveKnowledgeId :: Connection -> Text -> IO (Either String Text)
-resolveKnowledgeId conn input = do
-    ks <- getKnowledgesByPrefix conn input
-    case ks of
-        [k] -> pure (Right (knowledgeId k))
-        [] -> pure (Left $ "knowledge not found: " <> T.unpack input)
-        _ ->
-            pure
-                ( Left $
-                    "ambiguous id: "
-                        <> T.unpack input
-                        <> " (matches "
-                        <> show (length ks)
-                        <> " entries)"
-                )
+resolveKnowledgeId conn = resolveByPrefix (getKnowledgesByPrefix conn) knowledgeId "knowledge"
 
 {- | List knowledge entries. @staleFilter@: @Nothing@ = all entries,
 @Just True@ = stale only, @Just False@ = exclude stale.

@@ -25,7 +25,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Internal (escapeLike)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
 import Icarium.Types (Task (..), TaskState (..))
 
 data NewTask = NewTask
@@ -85,28 +85,11 @@ getTasksByIds conn ids =
 
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]
-getTasksByPrefix conn prefix =
-    query
-        conn
-        (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id LIKE ? ESCAPE '\\'")
-        (Only (escapeLike prefix <> "%"))
+getTasksByPrefix conn = prefixLookup conn "tasks" taskCols
 
 -- | Resolve a user-supplied string to a canonical task ULID via prefix match.
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
-resolveTaskId conn input = do
-    ts <- getTasksByPrefix conn input
-    case ts of
-        [t] -> pure (Right (taskId t))
-        [] -> pure (Left $ "task not found: " <> T.unpack input)
-        _ ->
-            pure
-                ( Left $
-                    "ambiguous id: "
-                        <> T.unpack input
-                        <> " (matches "
-                        <> show (length ts)
-                        <> " tasks)"
-                )
+resolveTaskId conn = resolveByPrefix (getTasksByPrefix conn) taskId "task"
 
 {- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
 (state='ready' with all depends_on satisfied). Otherwise pulls from
