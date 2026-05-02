@@ -1,9 +1,13 @@
-module Icarium.Dispatch
-    ( DispatchRequest(..)
-    , DispatchResult(..)
-    , dispatch
-    , applyOutcomeToTask
-    ) where
+module Icarium.Dispatch (
+    DispatchRequest (..),
+    DispatchResult (..),
+    dispatch,
+    applyOutcomeToTask,
+) where
 
-import           Icarium.Dispatch.Internal (DispatchRequest (..), DispatchResult (..),
-                                            applyOutcomeToTask, dispatch)
+import Icarium.Dispatch.Internal (
+    DispatchRequest (..),
+    DispatchResult (..),
+    applyOutcomeToTask,
+    dispatch,
+ )

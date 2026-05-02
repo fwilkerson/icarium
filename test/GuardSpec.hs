@@ -1,19 +1,21 @@
 module GuardSpec (tests) where
 
-import           Data.Text                 (Text)
-import           Test.Tasty                (TestTree, testGroup)
-import           Test.Tasty.HUnit          (testCase, (@?=))
+import Data.Text (Text)
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (testCase, (@?=))
 
-import           Icarium.Dispatch.Internal (postClaudeGuard)
+import Icarium.Dispatch.Internal (postClaudeGuard)
 
 tests :: TestTree
-tests = testGroup "postClaudeGuard"
-    [ testCase "dirty tree fires dirty-tree note"           testGuardDirtyTree
-    , testCase "empty diff fires empty-diff note"           testGuardEmptyDiff
-    , testCase "dirty tree takes priority over empty diff"  testGuardDirtyFirst
-    , testCase "clean tree with new commit passes"          testGuardPasses
-    , testCase "revParse error does not fire empty-diff"    testGuardRevParseError
-    ]
+tests =
+    testGroup
+        "postClaudeGuard"
+        [ testCase "dirty tree fires dirty-tree note" testGuardDirtyTree
+        , testCase "empty diff fires empty-diff note" testGuardEmptyDiff
+        , testCase "dirty tree takes priority over empty diff" testGuardDirtyFirst
+        , testCase "clean tree with new commit passes" testGuardPasses
+        , testCase "revParse error does not fire empty-diff" testGuardRevParseError
+        ]
 
 baseSha :: Text
 baseSha = "aaaa0000"
@@ -24,10 +26,11 @@ newSha = "bbbb1111"
 testGuardDirtyTree :: IO ()
 testGuardDirtyTree =
     postClaudeGuard "?? snapshot-test.json\n M src/Foo.hs" (Right newSha) baseSha
-        @?= Just "agent left uncommitted changes; refusing to merge\n\
-                 \uncommitted:\n\
-                 \  ?? snapshot-test.json\n\
-                 \   M src/Foo.hs"
+        @?= Just
+            "agent left uncommitted changes; refusing to merge\n\
+            \uncommitted:\n\
+            \  ?? snapshot-test.json\n\
+            \   M src/Foo.hs"
 
 testGuardEmptyDiff :: IO ()
 testGuardEmptyDiff =
@@ -37,9 +40,10 @@ testGuardEmptyDiff =
 testGuardDirtyFirst :: IO ()
 testGuardDirtyFirst =
     postClaudeGuard "?? leftover.txt" (Right baseSha) baseSha
-        @?= Just "agent left uncommitted changes; refusing to merge\n\
-                 \uncommitted:\n\
-                 \  ?? leftover.txt"
+        @?= Just
+            "agent left uncommitted changes; refusing to merge\n\
+            \uncommitted:\n\
+            \  ?? leftover.txt"
 
 testGuardPasses :: IO ()
 testGuardPasses =

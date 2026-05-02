@@ -1,0 +1,6 @@
+# Fourmolu defaults. The diff-friendly knobs (import-export-style,
+# comma-style, respectful) are already the upstream defaults, so this
+# file pins one default explicitly only because fourmolu requires the
+# YAML to be a non-empty object. Run `fourmolu --print-defaults` to
+# see the full set in effect.
+indentation: 4

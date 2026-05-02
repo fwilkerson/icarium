@@ -1,40 +1,47 @@
-module Icarium.Commands.Category
-    ( Command
-    , parser
-    , run
-      -- * Exported for Init and tests
-    , SyncReport(..)
-    , syncCategories
-    ) where
+module Icarium.Commands.Category (
+    Command,
+    parser,
+    run,
 
-import           Control.Monad          (forM, forM_, when)
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-import qualified Data.Text.IO           as TIO
-import           Database.SQLite.Simple (Connection)
-import           Options.Applicative
-import           System.Exit            (ExitCode (..), exitWith)
-import           System.IO              (hPutStrLn, stderr)
+    -- * Exported for Init and tests
+    SyncReport (..),
+    syncCategories,
+) where
 
-import           Icarium.Commands.Util
-import           Icarium.Config         (CategoriesConfig (..), Config (..), defaultConfigPath,
-                                         loadConfig)
-import           Icarium.Db             (withDb)
-import qualified Icarium.Render         as Render
-import qualified Icarium.Repo.Category  as RC
-import           Icarium.Types
+import Control.Monad (forM, forM_, when)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Database.SQLite.Simple (Connection)
+import Options.Applicative
+import System.Exit (ExitCode (..), exitWith)
+import System.IO (hPutStrLn, stderr)
+
+import Icarium.Commands.Util
+import Icarium.Config (
+    CategoriesConfig (..),
+    Config (..),
+    defaultConfigPath,
+    loadConfig,
+ )
+import Icarium.Db (withDb)
+import Icarium.Render qualified as Render
+import Icarium.Repo.Category qualified as RC
+import Icarium.Types
 
 data Command
     = List ListOpts
     | Sync SyncOpts
 
 parser :: Parser Command
-parser = subparser
-    ( subcmd "list" "List categories (alias: ls)" (List <$> listP)
-   <> subcmd "sync"
-        "Reconcile icarium.toml [categories] → DB. Use --prune to delete DB-only categories."
-        (Sync <$> syncP)
-    )
+parser =
+    subparser
+        ( subcmd "list" "List categories (alias: ls)" (List <$> listP)
+            <> subcmd
+                "sync"
+                "Reconcile icarium.toml [categories] → DB. Use --prune to delete DB-only categories."
+                (Sync <$> syncP)
+        )
 
 run :: FilePath -> Command -> IO ()
 run db = \case
@@ -43,69 +50,83 @@ run db = \case
 
 -- ------------------------------------------------------------------ list
 
-newtype ListOpts = ListOpts { lAxis :: Maybe CategoryAxis }
+newtype ListOpts = ListOpts {lAxis :: Maybe CategoryAxis}
 
 listP :: Parser ListOpts
-listP = ListOpts
-    <$> optional (option axisReader (long "axis" <> metavar "AXIS"
-           <> help "Filter by axis (domain | discipline)."))
+listP =
+    ListOpts
+        <$> optional
+            ( option
+                axisReader
+                ( long "axis"
+                    <> metavar "AXIS"
+                    <> help "Filter by axis (domain | discipline)."
+                )
+            )
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
     cats <- RC.listCategories c (lAxis o)
     case cats of
         [] -> TIO.putStrLn "(no categories)"
-        _  -> mapM_ (TIO.putStrLn . Render.renderCategory) cats
+        _ -> mapM_ (TIO.putStrLn . Render.renderCategory) cats
 
 -- ------------------------------------------------------------------ sync
 
-newtype SyncOpts = SyncOpts { sPrune :: Bool }
+newtype SyncOpts = SyncOpts {sPrune :: Bool}
 
 syncP :: Parser SyncOpts
-syncP = SyncOpts
-    <$> switch (long "prune"
-             <> help "Delete DB-only categories with no attachments (fails if any are in use)")
+syncP =
+    SyncOpts
+        <$> switch
+            ( long "prune"
+                <> help "Delete DB-only categories with no attachments (fails if any are in use)"
+            )
 
 data SyncReport = SyncReport
     { srInserted :: [(CategoryAxis, Text)]
-    , srOrphans  :: [Category]
-    , srPruned   :: [Category]
+    , srOrphans :: [Category]
+    , srPruned :: [Category]
     , srBlocking :: [(Category, [Text])]
-    } deriving (Show)
+    }
+    deriving (Show)
 
--- | Reconcile toml categories into the DB.
---
--- Inserts categories present in toml but absent from DB.
--- prune=False: records DB-only categories as orphans (caller should exit non-zero).
--- prune=True: deletes all DB-only categories when none are in use; if any are
--- in use, records them as blocking and performs no deletions.
+{- | Reconcile toml categories into the DB.
+
+Inserts categories present in toml but absent from DB.
+prune=False: records DB-only categories as orphans (caller should exit non-zero).
+prune=True: deletes all DB-only categories when none are in use; if any are
+in use, records them as blocking and performs no deletions.
+-}
 syncCategories :: Connection -> CategoriesConfig -> Bool -> IO SyncReport
 syncCategories conn cfg prune = do
-    dbCats   <- RC.listCategories conn Nothing
+    dbCats <- RC.listCategories conn Nothing
     let tomlCats = tomlCategoryList cfg
-        toIns    = toInsertList dbCats tomlCats
-        orphans  = dbOnlyList  dbCats tomlCats
+        toIns = toInsertList dbCats tomlCats
+        orphans = dbOnlyList dbCats tomlCats
     forM_ toIns $ uncurry (RC.insertCategory conn)
-    (pruned, blocking, remaining) <- if not prune
-        then pure ([], [], orphans)
-        else do
-            results <- forM orphans $ \cat -> do
-                usages <- RC.categoryNodeUsages conn (categoryId cat)
-                pure (cat, usages)
-            let blockingRs = [(cat, ids) | (cat, ids) <- results, not (null ids)]
-                unusedCats = [cat | (cat, []) <- results]
-            if null blockingRs
-                then do
-                    forM_ unusedCats $ \cat ->
-                        RC.deleteCategory conn (categoryAxis cat) (categoryName cat)
-                    pure (unusedCats, [], [])
-                else pure ([], blockingRs, [])
-    pure SyncReport
-        { srInserted = toIns
-        , srOrphans  = remaining
-        , srPruned   = pruned
-        , srBlocking = blocking
-        }
+    (pruned, blocking, remaining) <-
+        if not prune
+            then pure ([], [], orphans)
+            else do
+                results <- forM orphans $ \cat -> do
+                    usages <- RC.categoryNodeUsages conn (categoryId cat)
+                    pure (cat, usages)
+                let blockingRs = [(cat, ids) | (cat, ids) <- results, not (null ids)]
+                    unusedCats = [cat | (cat, []) <- results]
+                if null blockingRs
+                    then do
+                        forM_ unusedCats $ \cat ->
+                            RC.deleteCategory conn (categoryAxis cat) (categoryName cat)
+                        pure (unusedCats, [], [])
+                    else pure ([], blockingRs, [])
+    pure
+        SyncReport
+            { srInserted = toIns
+            , srOrphans = remaining
+            , srPruned = pruned
+            , srBlocking = blocking
+            }
 
 runSync :: FilePath -> SyncOpts -> IO ()
 runSync db o = do
@@ -119,11 +140,15 @@ runSync db o = do
         forM_ (srOrphans rpt) $ \cat ->
             hPutStrLn stderr $ "orphan: " <> T.unpack (catLabel cat)
         forM_ (srBlocking rpt) $ \(cat, nodeIds) -> do
-            hPutStrLn stderr $ "blocking: " <> T.unpack (catLabel cat)
-                            <> " → " <> T.unpack (T.intercalate ", " nodeIds)
+            hPutStrLn stderr $
+                "blocking: "
+                    <> T.unpack (catLabel cat)
+                    <> " → "
+                    <> T.unpack (T.intercalate ", " nodeIds)
         if null (srOrphans rpt) && null (srBlocking rpt)
-            then when (null (srInserted rpt) && null (srPruned rpt))
-                    $ TIO.putStrLn "in sync"
+            then
+                when (null (srInserted rpt) && null (srPruned rpt)) $
+                    TIO.putStrLn "in sync"
             else exitWith (ExitFailure 1)
 
 -- ------------------------------------------------------------------ helpers
@@ -134,7 +159,7 @@ catLabel cat = categoryAxisText (categoryAxis cat) <> ":" <> categoryName cat
 tomlCategoryList :: CategoriesConfig -> [(CategoryAxis, Text)]
 tomlCategoryList cfg =
     [(Domain, n) | n <- catDomains cfg]
-    ++ [(Discipline, n) | n <- catDisciplines cfg]
+        ++ [(Discipline, n) | n <- catDisciplines cfg]
 
 toInsertList :: [Category] -> [(CategoryAxis, Text)] -> [(CategoryAxis, Text)]
 toInsertList dbCats =

@@ -1,23 +1,25 @@
 module TickSpec (tests) where
 
-import qualified Data.ByteString.Char8 as BC
-import qualified Data.Text             as T
-import           Test.Tasty            (TestTree, testGroup)
-import           Test.Tasty.HUnit      (assertBool, testCase, (@?=))
+import Data.ByteString.Char8 qualified as BC
+import Data.Text qualified as T
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import           Icarium.Dispatch.Tick (TickState, emptyTickState, summariseTick)
+import Icarium.Dispatch.Tick (TickState, emptyTickState, summariseTick)
 
 tests :: TestTree
-tests = testGroup "summariseTick"
-    [ testCase "system event emits model= session= line"               testTickSystem
-    , testCase "assistant tool_use emits * tool line with name"        testTickAssistantToolUse
-    , testCase "assistant text emits > assistant line"                 testTickAssistantText
-    , testCase "user is_error tool_result emits x tool_result line"    testTickUserError
-    , testCase "user tool_result without is_error emits nothing"       testTickUserNoError
-    , testCase "result event emits + result and = usage lines"         testTickResult
-    , testCase "20th assistant event fires periodic = usage line"      testTickPeriodicUsage
-    , testCase "malformed JSON emits ? unknown line and does not crash" testTickMalformed
-    ]
+tests =
+    testGroup
+        "summariseTick"
+        [ testCase "system event emits model= session= line" testTickSystem
+        , testCase "assistant tool_use emits * tool line with name" testTickAssistantToolUse
+        , testCase "assistant text emits > assistant line" testTickAssistantText
+        , testCase "user is_error tool_result emits x tool_result line" testTickUserError
+        , testCase "user tool_result without is_error emits nothing" testTickUserNoError
+        , testCase "result event emits + result and = usage lines" testTickResult
+        , testCase "20th assistant event fires periodic = usage line" testTickPeriodicUsage
+        , testCase "malformed JSON emits ? unknown line and does not crash" testTickMalformed
+        ]
 
 tickTs :: String
 tickTs = "12:00:00"
@@ -36,23 +38,23 @@ testTickSystem = do
     let line = "{\"type\":\"system\",\"model\":\"claude-x\",\"session_id\":\"abcd1234xyz\"}"
         (out, _) = tick line
     length out @?= 1
-    assertBool ". system glyph"   (". system"       `strIn` head out)
-    assertBool "model= present"   ("model=claude-x" `strIn` head out)
+    assertBool ". system glyph" (". system" `strIn` head out)
+    assertBool "model= present" ("model=claude-x" `strIn` head out)
     assertBool "session= present" ("session=abcd1234" `strIn` head out)
 
 testTickAssistantToolUse :: IO ()
 testTickAssistantToolUse = do
     let line = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}"
         (out, _) = tick line
-    assertBool "non-empty output"  (not (null out))
-    assertBool "* tool glyph"      ("* tool" `strIn` head out)
-    assertBool "tool name in body" ("Bash"   `strIn` head out)
+    assertBool "non-empty output" (not (null out))
+    assertBool "* tool glyph" ("* tool" `strIn` head out)
+    assertBool "tool name in body" ("Bash" `strIn` head out)
 
 testTickAssistantText :: IO ()
 testTickAssistantText = do
     let line = "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hello world\"}]}}"
         (out, _) = tick line
-    assertBool "non-empty output"   (not (null out))
+    assertBool "non-empty output" (not (null out))
     assertBool "> assistant glyph" ("> assistant" `strIn` head out)
 
 testTickUserError :: IO ()
@@ -74,8 +76,8 @@ testTickResult = do
         (out, _) = tick line
     length out @?= 2
     assertBool "+ result line" ("+ result" `strIn` head out)
-    assertBool "= usage line"  ("= usage"  `strIn` (out !! 1))
-    assertBool "in 100"        ("in 100"   `strIn` (out !! 1))
+    assertBool "= usage line" ("= usage" `strIn` (out !! 1))
+    assertBool "in 100" ("in 100" `strIn` (out !! 1))
 
 testTickPeriodicUsage :: IO ()
 testTickPeriodicUsage = do
@@ -84,7 +86,7 @@ testTickPeriodicUsage = do
         (out20, st20) = tickWith assistantLine st19
     assertBool "periodic = usage fires on 20th" (any ("= usage" `strIn`) out20)
     let (out21, _) = tickWith assistantLine st20
-    assertBool "no periodic usage on 21st"      (not (any ("= usage" `strIn`) out21))
+    assertBool "no periodic usage on 21st" (not (any ("= usage" `strIn`) out21))
 
 testTickMalformed :: IO ()
 testTickMalformed = do

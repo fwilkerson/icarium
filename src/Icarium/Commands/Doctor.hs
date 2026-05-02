@@ -1,21 +1,25 @@
 module Icarium.Commands.Doctor (Options, parser, run) where
 
-import           Control.Exception      (bracket)
-import           Control.Monad          (filterM)
-import qualified Data.Text              as T
-import           Data.Time              (UTCTime, getCurrentTime)
-import           Database.SQLite.Simple (close)
-import           Options.Applicative
-import           System.Directory       (doesFileExist, findExecutable)
-import           System.Exit            (ExitCode (..), exitWith)
+import Control.Exception (bracket)
+import Control.Monad (filterM)
+import Data.Text qualified as T
+import Data.Time (UTCTime, getCurrentTime)
+import Database.SQLite.Simple (close)
+import Options.Applicative
+import System.Directory (doesFileExist, findExecutable)
+import System.Exit (ExitCode (..), exitWith)
 
-import           Icarium.Config         (DispatchConfig (..), cfgDispatch, defaultConfigPath,
-                                         loadConfig)
-import           Icarium.Db             (dbSchemaVersion, openDb)
-import           Icarium.Heartbeat      (heartbeatStale, pidAlive)
-import qualified Icarium.Repo.Dispatch  as RD
-import           Icarium.Schema         (schemaVersion)
-import           Icarium.Types          (Dispatch (..))
+import Icarium.Config (
+    DispatchConfig (..),
+    cfgDispatch,
+    defaultConfigPath,
+    loadConfig,
+ )
+import Icarium.Db (dbSchemaVersion, openDb)
+import Icarium.Heartbeat (heartbeatStale, pidAlive)
+import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Schema (schemaVersion)
+import Icarium.Types (Dispatch (..))
 
 data Options = Options
 
@@ -25,19 +29,20 @@ parser = pure Options
 data CheckResult = OK String | WARN String | FAIL String
 
 data Check = Check
-    { checkName   :: String
+    { checkName :: String
     , checkResult :: CheckResult
     }
 
 run :: FilePath -> Options -> IO ()
 run dbPath _ = do
-    basic <- sequence
-        [ checkConfig
-        , checkFile   "database" dbPath
-        , checkSchema dbPath
-        , checkBinary "claude"
-        , checkBinary "git"
-        ]
+    basic <-
+        sequence
+            [ checkConfig
+            , checkFile "database" dbPath
+            , checkSchema dbPath
+            , checkBinary "claude"
+            , checkBinary "git"
+            ]
     orphans <- checkOrphanedDispatches dbPath
     let checks = basic ++ orphans
     mapM_ printCheck checks
@@ -47,14 +52,16 @@ run dbPath _ = do
 
 isFail :: Check -> Bool
 isFail (Check _ (FAIL _)) = True
-isFail _                  = False
+isFail _ = False
 
 checkFile :: String -> FilePath -> IO Check
 checkFile name path = do
     e <- doesFileExist path
-    pure $ Check name $
-        if e then OK path
-             else FAIL ("missing: " <> path)
+    pure $
+        Check name $
+            if e
+                then OK path
+                else FAIL ("missing: " <> path)
 
 checkConfig :: IO Check
 checkConfig = do
@@ -64,14 +71,15 @@ checkConfig = do
         else do
             r <- loadConfig defaultConfigPath
             pure $ Check "config" $ case r of
-                Right _  -> OK defaultConfigPath
+                Right _ -> OK defaultConfigPath
                 Left msg -> FAIL ("parse error\n" <> msg)
 
 checkBinary :: String -> IO Check
 checkBinary name = do
     r <- findExecutable name
-    pure $ Check ("bin:" <> name) $
-        maybe (FAIL "not on PATH") OK r
+    pure $
+        Check ("bin:" <> name) $
+            maybe (FAIL "not on PATH") OK r
 
 checkSchema :: FilePath -> IO Check
 checkSchema dbPath = do
@@ -81,37 +89,48 @@ checkSchema dbPath = do
         else do
             v <- bracket (openDb dbPath) close dbSchemaVersion
             let expected = fromIntegral schemaVersion :: Integer
-                actual   = fromIntegral v             :: Integer
-            pure $ Check "schema" $
-                if actual == expected
-                    then OK ("v" <> show actual)
-                    else FAIL ("expected v" <> show expected
-                               <> ", got v" <> show actual)
+                actual = fromIntegral v :: Integer
+            pure $
+                Check "schema" $
+                    if actual == expected
+                        then OK ("v" <> show actual)
+                        else
+                            FAIL
+                                ( "expected v"
+                                    <> show expected
+                                    <> ", got v"
+                                    <> show actual
+                                )
 
 checkOrphanedDispatches :: FilePath -> IO [Check]
 checkOrphanedDispatches dbPath = do
-    dbOk  <- doesFileExist dbPath
+    dbOk <- doesFileExist dbPath
     cfgOk <- doesFileExist defaultConfigPath
     if not dbOk || not cfgOk
         then pure []
         else do
             mcfg <- either (const Nothing) Just <$> loadConfig defaultConfigPath
             case mcfg of
-                Nothing  -> pure []
+                Nothing -> pure []
                 Just cfg -> do
                     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
                     now <- getCurrentTime
                     bracket (openDb dbPath) close $ \conn -> do
-                        open    <- RD.listOpenDispatches conn
+                        open <- RD.listOpenDispatches conn
                         orphans <- filterM (isOrphanedDispatch now staleSec) open
-                        pure $ if null orphans
-                            then [Check "dispatches" (OK "no orphaned dispatches")]
-                            else map toWarn orphans
+                        pure $
+                            if null orphans
+                                then [Check "dispatches" (OK "no orphaned dispatches")]
+                                else map toWarn orphans
   where
-    toWarn d = Check "dispatch"
-        (WARN $ T.unpack (T.take 8 (dispatchId d))
-             <> ": pid dead or heartbeat stale."
-             <> " Run `icarium dispatch recover` to reconcile.")
+    toWarn d =
+        Check
+            "dispatch"
+            ( WARN $
+                T.unpack (T.take 8 (dispatchId d))
+                    <> ": pid dead or heartbeat stale."
+                    <> " Run `icarium dispatch recover` to reconcile."
+            )
 
 isOrphanedDispatch :: UTCTime -> Int -> Dispatch -> IO Bool
 isOrphanedDispatch now staleSec d = do
@@ -121,7 +140,7 @@ isOrphanedDispatch now staleSec d = do
 
 printCheck :: Check -> IO ()
 printCheck c = case checkResult c of
-    OK   msg -> putStrLn $ "  ok    " <> pad 10 (checkName c) <> "  " <> msg
+    OK msg -> putStrLn $ "  ok    " <> pad 10 (checkName c) <> "  " <> msg
     WARN msg -> putStrLn $ "  WARN  " <> pad 10 (checkName c) <> "  " <> msg
     FAIL msg -> putStrLn $ "  FAIL  " <> pad 10 (checkName c) <> "  " <> msg
   where

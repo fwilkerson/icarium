@@ -1,28 +1,28 @@
-module Icarium.Render
-    ( renderTaskHuman
-    , renderTaskPrompt
-    , TaskRow (..)
-    , renderTaskList
-    , mkBar
-    , renderKnowledge
-    , KnowledgeRow (..)
-    , renderKnowledgeList
-    , formatLinkedCount
-    , renderEdgeLine
-    , renderCategory
-    , recommendedTitleMax
-    , renderDispatch
-    , DispatchRow (..)
-    , renderDispatchList
-    , fmtSecs
-    ) where
+module Icarium.Render (
+    renderTaskHuman,
+    renderTaskPrompt,
+    TaskRow (..),
+    renderTaskList,
+    mkBar,
+    renderKnowledge,
+    KnowledgeRow (..),
+    renderKnowledgeList,
+    formatLinkedCount,
+    renderEdgeLine,
+    renderCategory,
+    recommendedTitleMax,
+    renderDispatch,
+    DispatchRow (..),
+    renderDispatchList,
+    fmtSecs,
+) where
 
-import           Data.List     (sortBy)
-import           Data.Maybe    (fromMaybe, listToMaybe)
-import           Data.Text     (Text)
-import qualified Data.Text     as T
+import Data.List (sortBy)
+import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
 
-import           Icarium.Types
+import Icarium.Types
 
 -- =============================================================
 -- Task list row (carries per-task data for grouped list view)
@@ -31,53 +31,56 @@ import           Icarium.Types
 data TaskRow = TaskRow
     { trTask :: Task
     , trCats :: [Category]
-    , trDeps :: Int   -- count of depends_on edges from this task
-    , trRefs :: Int   -- count of references edges from this task
+    , trDeps :: Int -- count of depends_on edges from this task
+    , trRefs :: Int -- count of references edges from this task
     }
 
 -- =============================================================
 -- Task rendering
 -- =============================================================
 
--- | Human-facing task view. Shows metadata + body + linked nodes.
---
--- @utf8@: True → Unicode tree glyphs; False → ASCII fallback.
+{- | Human-facing task view. Shows metadata + body + linked nodes.
+
+@utf8@: True → Unicode tree glyphs; False → ASCII fallback.
+-}
 renderTaskHuman :: Bool -> Task -> [Knowledge] -> [Task] -> [Category] -> Text
-renderTaskHuman utf8 t refs deps cats = T.unlines $
-    [ "id:        " <> taskId t
-    , "title:     " <> taskTitle t
-    , "state:     " <> taskStateText (taskState t)
-    , priorityLine t
-    ]
-    <> blockReasonLines t
-    <> [ "created:   " <> taskCreatedAt t
-       , "updated:   " <> taskUpdatedAt t
-       ]
-    <> categoriesBlock cats
-    <> [ ""
-       , "## Body"
-       , ""
-       , if T.null (taskBody t) then "(no body)" else taskBody t
-       , ""
-       ]
-    <> linksSection utf8 t deps refs
+renderTaskHuman utf8 t refs deps cats =
+    T.unlines $
+        [ "id:        " <> taskId t
+        , "title:     " <> taskTitle t
+        , "state:     " <> taskStateText (taskState t)
+        , priorityLine t
+        ]
+            <> blockReasonLines t
+            <> [ "created:   " <> taskCreatedAt t
+               , "updated:   " <> taskUpdatedAt t
+               ]
+            <> categoriesBlock cats
+            <> [ ""
+               , "## Body"
+               , ""
+               , if T.null (taskBody t) then "(no body)" else taskBody t
+               , ""
+               ]
+            <> linksSection utf8 t deps refs
 
 priorityLine :: Task -> Text
 priorityLine t = case taskPriority t of
-    Just p  -> "priority:  " <> T.pack (show p)
+    Just p -> "priority:  " <> T.pack (show p)
     Nothing -> "priority:  -"
 
 blockReasonLines :: Task -> [Text]
 blockReasonLines t = case taskBlockReason t of
-    Just r  | not (T.null r) -> ["block_reason: " <> r]
-    _                        -> []
+    Just r | not (T.null r) -> ["block_reason: " <> r]
+    _ -> []
 
--- | Combined links tree replacing the old flat dep/ref sections.
---
--- All depends-on edges first (sorted by target id ASC), then references.
--- Last edge gets └─ (or \- in ASCII mode); others get ├─ (or +-).
+{- | Combined links tree replacing the old flat dep/ref sections.
+
+All depends-on edges first (sorted by target id ASC), then references.
+Last edge gets └─ (or \- in ASCII mode); others get ├─ (or +-).
+-}
 linksSection :: Bool -> Task -> [Task] -> [Knowledge] -> [Text]
-linksSection _    _ []   []   = ["## Links", "", "(none)", ""]
+linksSection _ _ [] [] = ["## Links", "", "(none)", ""]
 linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
   where
     rootLine = T.take 10 (taskId t) <> "  " <> taskTitle t
@@ -92,57 +95,62 @@ linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
     kindWidth = max (T.length "depends-on") (T.length "references")
 
     branchG = if utf8 then "├─" else "+-"
-    lastG   = if utf8 then "└─" else "\\-"
+    lastG = if utf8 then "└─" else "\\-"
 
     mkEdge i e =
-        let g       = if i == n - 1 then lastG else branchG
+        let g = if i == n - 1 then lastG else branchG
             kindStr = either (const "depends-on") (const "references") e
-            idStr   = either (T.take 10 . taskId) (T.take 10 . knowledgeId) e
-            titStr  = either taskTitle knowledgeTitle e
-            suffix  = case e of
-                Left  dep -> "  [" <> taskStateText (taskState dep) <> "]"
+            idStr = either (T.take 10 . taskId) (T.take 10 . knowledgeId) e
+            titStr = either taskTitle knowledgeTitle e
+            suffix = case e of
+                Left dep -> "  [" <> taskStateText (taskState dep) <> "]"
                 Right ref -> if knowledgeStale ref then "  [STALE]" else ""
-        in g <> " " <> padr kindWidth kindStr <> "  " <> idStr <> "  " <> titStr <> suffix
+         in g <> " " <> padr kindWidth kindStr <> "  " <> idStr <> "  " <> titStr <> suffix
 
-    edgeLines = zipWith mkEdge [0..] allEdges
+    edgeLines = zipWith mkEdge [0 ..] allEdges
 
--- | The exact prompt the dispatcher will send to the headless agent.
--- Sharing this with @task show --prompt@ keeps the two in lockstep.
--- @refs@ = explicit references (always rendered); @catMatched@ = auto-pulled
--- by category (rendered under a separate hedged section, omitted if empty).
+{- | The exact prompt the dispatcher will send to the headless agent.
+Sharing this with @task show --prompt@ keeps the two in lockstep.
+@refs@ = explicit references (always rendered); @catMatched@ = auto-pulled
+by category (rendered under a separate hedged section, omitted if empty).
+-}
 renderTaskPrompt :: Task -> [Knowledge] -> [Knowledge] -> [Task] -> Text
-renderTaskPrompt t refs catMatched deps = T.unlines $
-    [ "# Task " <> taskId t
-    , ""
-    , "**" <> taskTitle t <> "**"
-    , ""
-    , if T.null (taskBody t) then "(no body)" else taskBody t
-    , ""
-    ]
-    <> promptDeps deps
-    <> promptRefs refs
-    <> promptRelated catMatched
-    <> workingAgreement t
+renderTaskPrompt t refs catMatched deps =
+    T.unlines $
+        [ "# Task " <> taskId t
+        , ""
+        , "**" <> taskTitle t <> "**"
+        , ""
+        , if T.null (taskBody t) then "(no body)" else taskBody t
+        , ""
+        ]
+            <> promptDeps deps
+            <> promptRefs refs
+            <> promptRelated catMatched
+            <> workingAgreement t
 
 promptDeps :: [Task] -> [Text]
 promptDeps [] = []
 promptDeps ds =
     "## Completed dependencies"
-    : ""
-    : map (\d -> "- " <> taskId d <> "  " <> taskTitle d) ds
-    ++ [""]
+        : ""
+        : map (\d -> "- " <> taskId d <> "  " <> taskTitle d) ds
+        ++ [""]
 
 promptRefs :: [Knowledge] -> [Text]
 promptRefs [] = []
 promptRefs ks =
     "## Referenced knowledge"
-    : ""
-    : concatMap (\k ->
-        [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
-        , ""
-        , knowledgeBody k
-        , ""
-        ]) ks
+        : ""
+        : concatMap
+            ( \k ->
+                [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
+                , ""
+                , knowledgeBody k
+                , ""
+                ]
+            )
+            ks
 
 promptRelated :: [Knowledge] -> [Text]
 promptRelated [] = []
@@ -152,12 +160,15 @@ promptRelated ks =
     , "These entries share categories with this task. They may not all apply directly — use judgment."
     , ""
     ]
-    <> concatMap (\k ->
-        [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
-        , ""
-        , knowledgeBody k
-        , ""
-        ]) ks
+        <> concatMap
+            ( \k ->
+                [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
+                , ""
+                , knowledgeBody k
+                , ""
+                ]
+            )
+            ks
 
 workingAgreement :: Task -> [Text]
 workingAgreement t =
@@ -175,8 +186,9 @@ workingAgreement t =
     , ""
     ]
 
--- | Recommended maximum title length (matches git commit subject convention).
--- Titles exceeding this are truncated with an ellipsis in list views.
+{- | Recommended maximum title length (matches git commit subject convention).
+Titles exceeding this are truncated with an ellipsis in list views.
+-}
 recommendedTitleMax :: Int
 recommendedTitleMax = 72
 
@@ -184,11 +196,12 @@ recommendedTitleMax = 72
 -- Flat task list rendering
 -- =============================================================
 
--- | Render a flat, priority-sorted task list with state badges.
---
--- @useUnicode@: True → Unicode ellipsis; False → ASCII fallback.
--- Rows are sorted priority DESC, ULID DESC; null priority sorts last.
--- Done and abandoned are hidden by default — callers filter before passing.
+{- | Render a flat, priority-sorted task list with state badges.
+
+@useUnicode@: True → Unicode ellipsis; False → ASCII fallback.
+Rows are sorted priority DESC, ULID DESC; null priority sorts last.
+Done and abandoned are hidden by default — callers filter before passing.
+-}
 renderTaskList :: Bool -> [TaskRow] -> Text
 renderTaskList _ [] = "(no tasks)\n"
 renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
@@ -198,71 +211,74 @@ renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
     cmpRow a b =
         let pa = taskPriority (trTask a)
             pb = taskPriority (trTask b)
-        in case (pa, pb) of
-            (Nothing, Nothing) -> compareUlid b a
-            (Just _,  Nothing) -> LT
-            (Nothing, Just _)  -> GT
-            (Just x,  Just y)  -> case compare y x of
-                EQ -> compareUlid b a
-                o  -> o
+         in case (pa, pb) of
+                (Nothing, Nothing) -> compareUlid b a
+                (Just _, Nothing) -> LT
+                (Nothing, Just _) -> GT
+                (Just x, Just y) -> case compare y x of
+                    EQ -> compareUlid b a
+                    o -> o
     compareUlid r1 r2 = compare (taskId (trTask r1)) (taskId (trTask r2))
 
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . taskTitle . trTask) rows))
-    catWidth   = maxLen 3 (map (T.length . formatCats . trCats) rows)
+    catWidth = maxLen 3 (map (T.length . formatCats . trCats) rows)
 
     renderRow row =
-        let t        = trTask row
-            idPart   = "  " <> padr 10 (T.take 10 (taskId t))
-            titPart  = padr titleWidth (truncateTitle useUnicode titleWidth (taskTitle t))
-            barPart  = mkBar (taskPriority t)
-            catPart  = padr catWidth (formatCats (trCats row))
-            ec       = formatEdgeCounts (trDeps row) (trRefs row)
+        let t = trTask row
+            idPart = "  " <> padr 10 (T.take 10 (taskId t))
+            titPart = padr titleWidth (truncateTitle useUnicode titleWidth (taskTitle t))
+            barPart = mkBar (taskPriority t)
+            catPart = padr catWidth (formatCats (trCats row))
+            ec = formatEdgeCounts (trDeps row) (trRefs row)
             edgePart = if T.null ec then "" else "  " <> ec
-            badge    = "  [" <> stateBadgeText (taskState t) <> "]"
+            badge = "  [" <> stateBadgeText (taskState t) <> "]"
             mainLine = idPart <> "  " <> titPart <> "  " <> barPart <> "  " <> catPart <> edgePart <> badge
             hangLine = case (taskState t, taskBlockReason t) of
-                (Blocked, Just r) | not (T.null r) ->
-                    [T.replicate 14 " " <> truncateReason r]
+                (Blocked, Just r)
+                    | not (T.null r) ->
+                        [T.replicate 14 " " <> truncateReason r]
                 _ -> []
-        in mainLine : hangLine
+         in mainLine : hangLine
 
     truncateReason r
         | T.length r <= 60 = r
-        | otherwise        = T.take 57 r <> "..."
+        | otherwise = T.take 57 r <> "..."
 
 stateBadgeText :: TaskState -> Text
 stateBadgeText InProgress = "in-progress"
-stateBadgeText s          = taskStateText s
+stateBadgeText s = taskStateText s
 
--- | 5-cell Unicode priority bar. ■ filled, ◧ half-filled, □ empty,
--- space-separated. Represents the 0–10 priority range in half-square steps.
+{- | 5-cell Unicode priority bar. ■ filled, ◧ half-filled, □ empty,
+space-separated. Represents the 0–10 priority range in half-square steps.
+-}
 mkBar :: Maybe Int -> Text
 mkBar mp =
-    let p     = max 0 (min 10 (fromMaybe 0 mp))
-        full  = p `div` 2
-        half  = p `mod` 2
+    let p = max 0 (min 10 (fromMaybe 0 mp))
+        full = p `div` 2
+        half = p `mod` 2
         empty = 5 - full - half
         cells = replicate full "■" ++ replicate half "◧" ++ replicate empty "□"
-    in T.intercalate " " cells
+     in T.intercalate " " cells
 
--- | Truncate a title to fit within @width@ characters, appending an ellipsis
--- when truncation occurs. UTF-8 mode uses the single-char @…@; ASCII uses @...@.
+{- | Truncate a title to fit within @width@ characters, appending an ellipsis
+when truncation occurs. UTF-8 mode uses the single-char @…@; ASCII uses @...@.
+-}
 truncateTitle :: Bool -> Int -> Text -> Text
 truncateTitle utf8 width title
     | T.length title <= width = title
-    | utf8                    = T.take (width - 1) title <> "…"
-    | otherwise               = T.take (width - 3) title <> "..."
+    | utf8 = T.take (width - 1) title <> "…"
+    | otherwise = T.take (width - 3) title <> "..."
 
 -- | Format categories as [dom/disc], [-/disc], [dom/-], or [-].
 formatCats :: [Category] -> Text
 formatCats cats =
-    let dom  = listToMaybe [categoryName c | c <- cats, categoryAxis c == Domain]
+    let dom = listToMaybe [categoryName c | c <- cats, categoryAxis c == Domain]
         disc = listToMaybe [categoryName c | c <- cats, categoryAxis c == Discipline]
-    in case (dom, disc) of
-        (Nothing, Nothing) -> "[-]"
-        (Just d,  Nothing) -> "[" <> d <> "/-]"
-        (Nothing, Just di) -> "[-/" <> di <> "]"
-        (Just d,  Just di) -> "[" <> d <> "/" <> di <> "]"
+     in case (dom, disc) of
+            (Nothing, Nothing) -> "[-]"
+            (Just d, Nothing) -> "[" <> d <> "/-]"
+            (Nothing, Just di) -> "[-/" <> di <> "]"
+            (Just d, Just di) -> "[" <> d <> "/" <> di <> "]"
 
 -- | Edge count annotation. Empty string when both counts are 0.
 formatEdgeCounts :: Int -> Int -> Text
@@ -270,32 +286,34 @@ formatEdgeCounts 0 0 = ""
 formatEdgeCounts d r =
     "[" <> T.intercalate " " parts <> "]"
   where
-    parts = ["deps:" <> T.pack (show d) | d > 0]
-         <> ["refs:" <> T.pack (show r) | r > 0]
+    parts =
+        ["deps:" <> T.pack (show d) | d > 0]
+            <> ["refs:" <> T.pack (show r) | r > 0]
 
 -- =============================================================
 -- Knowledge rendering
 -- =============================================================
 
 renderKnowledge :: Knowledge -> [Category] -> Text
-renderKnowledge k cats = T.unlines $
-    [ "id:       " <> knowledgeId k
-    , "title:    " <> knowledgeTitle k
-    , "stale:    " <> (if knowledgeStale k then "yes" else "no")
-    , "created:  " <> knowledgeCreatedAt k
-    , "updated:  " <> knowledgeUpdatedAt k
-    ]
-    <> categoriesBlock cats
-    <> [ ""
-       , "## Body"
-       , ""
-       , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
-       ]
+renderKnowledge k cats =
+    T.unlines $
+        [ "id:       " <> knowledgeId k
+        , "title:    " <> knowledgeTitle k
+        , "stale:    " <> (if knowledgeStale k then "yes" else "no")
+        , "created:  " <> knowledgeCreatedAt k
+        , "updated:  " <> knowledgeUpdatedAt k
+        ]
+            <> categoriesBlock cats
+            <> [ ""
+               , "## Body"
+               , ""
+               , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
+               ]
 
 data KnowledgeRow = KnowledgeRow
     { krKnowledge :: Knowledge
-    , krCats      :: [Category]
-    , krLinked    :: Int
+    , krCats :: [Category]
+    , krLinked :: Int
     }
 
 -- | Format a linked-count badge. Empty string when count is 0.
@@ -308,79 +326,92 @@ renderKnowledgeList _ [] = "(no knowledge)\n"
 renderKnowledgeList utf8 rows = T.unlines $ map row rows
   where
     titleWidth = min recommendedTitleMax (maxLen recommendedTitleMax (map (T.length . knowledgeTitle . krKnowledge) rows))
-    catWidth   = maxLen 3 (map (T.length . formatCats . krCats) rows)
+    catWidth = maxLen 3 (map (T.length . formatCats . krCats) rows)
 
     row kr =
-        let k          = krKnowledge kr
-            idPart     = "  " <> T.take 10 (knowledgeId k)
-            titPart    = padr titleWidth (truncateTitle utf8 titleWidth (knowledgeTitle k))
-            catPart    = padr catWidth (formatCats (krCats kr))
-            linked     = formatLinkedCount (krLinked kr)
+        let k = krKnowledge kr
+            idPart = "  " <> T.take 10 (knowledgeId k)
+            titPart = padr titleWidth (truncateTitle utf8 titleWidth (knowledgeTitle k))
+            catPart = padr catWidth (formatCats (krCats kr))
+            linked = formatLinkedCount (krLinked kr)
             linkedPart = if T.null linked then "" else "  " <> linked
-            stalePart  = if knowledgeStale k then "  [stale]" else ""
-        in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> stalePart
+            stalePart = if knowledgeStale k then "  [stale]" else ""
+         in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> stalePart
 
 renderEdgeLine :: Edge -> Text
 renderEdgeLine e =
-    T.take 10 (edgeId e) <> "  "
-    <> edgeKindDisplay (edgeKind e) <> "  "
-    <> nodeKindText (edgeSrcKind e) <> ":" <> T.take 10 (edgeSrcId e)
-    <> "  ->  "
-    <> nodeKindText (edgeDstKind e) <> ":" <> T.take 10 (edgeDstId e)
+    T.take 10 (edgeId e)
+        <> "  "
+        <> edgeKindDisplay (edgeKind e)
+        <> "  "
+        <> nodeKindText (edgeSrcKind e)
+        <> ":"
+        <> T.take 10 (edgeSrcId e)
+        <> "  ->  "
+        <> nodeKindText (edgeDstKind e)
+        <> ":"
+        <> T.take 10 (edgeDstId e)
 
 renderCategory :: Category -> Text
 renderCategory c =
-    categoryAxisText (categoryAxis c) <> "  " <> categoryName c
-    <> "  (" <> categoryId c <> ")"
+    categoryAxisText (categoryAxis c)
+        <> "  "
+        <> categoryName c
+        <> "  ("
+        <> categoryId c
+        <> ")"
 
 categoriesBlock :: [Category] -> [Text]
 categoriesBlock [] = []
 categoriesBlock cats =
     "Categories:"
-    : concatMap axisLine [Domain, Discipline]
+        : concatMap axisLine [Domain, Discipline]
   where
     axisLine axis =
         let names = [categoryName c | c <- cats, categoryAxis c == axis]
-        in [ "  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names
-           | not (null names) ]
+         in [ "  " <> padr 12 (categoryAxisText axis <> ":") <> T.intercalate ", " names
+            | not (null names)
+            ]
 
 -- =============================================================
 -- Dispatch rendering
 -- =============================================================
 
 renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
-renderDispatch d mt ks = T.unlines $
-    [ field "id"            (dispatchId d)
-    , field "task_id"       (dispatchTaskId d)
-    , field "task_title"    (maybe "(task missing)" taskTitle mt)
-    , field "branch"        (dispatchBranch d)
-    , field "base_branch"   (dispatchBaseBranch d)
-    , field "base_sha"      (dispatchBaseSha d)
-    , field "pid"           (maybe "" (T.pack . show) (dispatchPid d))
-    , field "model"         (dispatchModel d)
-    , field "effort"        (effortText (dispatchEffort d))
-    , field "started_at"    (dispatchStartedAt d)
-    , field "heartbeat_at"  (dispatchHeartbeat d)
-    , field "ended_at"      (fromMaybe "" (dispatchEndedAt d))
-    , field "outcome"       (maybe "open" dispatchOutcomeText (dispatchOutcome d))
-    , field "merge_sha"     (fromMaybe "" (dispatchMergeSha d))
-    , field "last_commit"   (fromMaybe "" (dispatchLastCommit d))
-    , field "log_path"      (fromMaybe "" (dispatchLogPath d))
-    , field "notes"         (fromMaybe "" (dispatchNotes d))
-    , ""
-    , "Knowledge added:"
-    ] ++ knowledgeLines
+renderDispatch d mt ks =
+    T.unlines $
+        [ field "id" (dispatchId d)
+        , field "task_id" (dispatchTaskId d)
+        , field "task_title" (maybe "(task missing)" taskTitle mt)
+        , field "branch" (dispatchBranch d)
+        , field "base_branch" (dispatchBaseBranch d)
+        , field "base_sha" (dispatchBaseSha d)
+        , field "pid" (maybe "" (T.pack . show) (dispatchPid d))
+        , field "model" (dispatchModel d)
+        , field "effort" (effortText (dispatchEffort d))
+        , field "started_at" (dispatchStartedAt d)
+        , field "heartbeat_at" (dispatchHeartbeat d)
+        , field "ended_at" (fromMaybe "" (dispatchEndedAt d))
+        , field "outcome" (maybe "open" dispatchOutcomeText (dispatchOutcome d))
+        , field "merge_sha" (fromMaybe "" (dispatchMergeSha d))
+        , field "last_commit" (fromMaybe "" (dispatchLastCommit d))
+        , field "log_path" (fromMaybe "" (dispatchLogPath d))
+        , field "notes" (fromMaybe "" (dispatchNotes d))
+        , ""
+        , "Knowledge added:"
+        ]
+            ++ knowledgeLines
   where
     field k v = padr 14 (k <> ":") <> " " <> v
     knowledgeLines = case ks of
         [] -> ["  (none)"]
-        _  -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
+        _ -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
 
 data DispatchRow = DispatchRow
-    { drDispatch  :: Dispatch
+    { drDispatch :: Dispatch
     , drTaskTitle :: Text
     , drKnowCount :: Int
-    , drDuration  :: Text
+    , drDuration :: Text
     }
 
 renderDispatchList :: Bool -> [DispatchRow] -> Text
@@ -388,35 +419,38 @@ renderDispatchList _ [] = "(no dispatches)\n"
 renderDispatchList utf8 rows = T.unlines $ map renderRow rows
   where
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . drTaskTitle) rows))
-    durWidth   = maxLen 2 (map (T.length . drDuration) rows)
-    knowWidth  = maxLen 0 (map (T.length . fmtKnow . drKnowCount) rows)
+    durWidth = maxLen 2 (map (T.length . drDuration) rows)
+    knowWidth = maxLen 0 (map (T.length . fmtKnow . drKnowCount) rows)
 
     fmtKnow 0 = ""
     fmtKnow n = "[know:" <> T.pack (show n) <> "]"
 
     renderRow dr =
-        let d        = drDispatch dr
-            didPart  = "  " <> padr 10 (T.take 10 (dispatchId d))
-            tidPart  = padr 10 (T.take 10 (dispatchTaskId d))
-            titPart  = padr titleWidth (truncateTitle utf8 titleWidth (drTaskTitle dr))
-            durPart  = padr durWidth (drDuration dr)
-            know     = fmtKnow (drKnowCount dr)
+        let d = drDispatch dr
+            didPart = "  " <> padr 10 (T.take 10 (dispatchId d))
+            tidPart = padr 10 (T.take 10 (dispatchTaskId d))
+            titPart = padr titleWidth (truncateTitle utf8 titleWidth (drTaskTitle dr))
+            durPart = padr durWidth (drDuration dr)
+            know = fmtKnow (drKnowCount dr)
             knowPart = if knowWidth == 0 then "" else "  " <> padr knowWidth know
-            badge    = outcomeBadge (dispatchOutcome d)
-        in didPart <> "   " <> tidPart <> "  " <> titPart <> "  " <> durPart <> knowPart <> "  " <> badge
+            badge = outcomeBadge (dispatchOutcome d)
+         in didPart <> "   " <> tidPart <> "  " <> titPart <> "  " <> durPart <> knowPart <> "  " <> badge
 
 outcomeBadge :: Maybe DispatchOutcome -> Text
-outcomeBadge Nothing             = "[open]"
-outcomeBadge (Just OSuccess)     = "[success]"
-outcomeBadge (Just OFailure)     = "[failure]"
+outcomeBadge Nothing = "[open]"
+outcomeBadge (Just OSuccess) = "[success]"
+outcomeBadge (Just OFailure) = "[failure]"
 outcomeBadge (Just OInterrupted) = "[interrupted]"
 
 fmtSecs :: Int -> Text
 fmtSecs s
-    | s < 60    = T.pack (show s) <> "s"
-    | s < 3600  = T.pack (show (s `div` 60)) <> "m"
-    | otherwise = T.pack (show (s `div` 3600)) <> "h "
-               <> T.pack (show ((s `mod` 3600) `div` 60)) <> "m"
+    | s < 60 = T.pack (show s) <> "s"
+    | s < 3600 = T.pack (show (s `div` 60)) <> "m"
+    | otherwise =
+        T.pack (show (s `div` 3600))
+            <> "h "
+            <> T.pack (show ((s `mod` 3600) `div` 60))
+            <> "m"
 
 -- =============================================================
 -- Utilities
@@ -424,7 +458,7 @@ fmtSecs s
 
 maxLen :: Int -> [Int] -> Int
 maxLen def [] = def
-maxLen _   xs = maximum xs
+maxLen _ xs = maximum xs
 
 padr :: Int -> Text -> Text
 padr n s = s <> T.replicate (max 0 (n - T.length s)) " "

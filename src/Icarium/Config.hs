@@ -1,103 +1,116 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Icarium.Config
-    ( defaultConfigPath
-    , defaultConfigText
-      -- * Types
-    , Config(..)
-    , ProjectConfig(..)
-    , CommandsConfig(..)
-    , DispatchConfig(..)
-    , CategoriesConfig(..)
-      -- * IO
-    , loadConfig
-    , validateConfig
-    ) where
 
-import           Data.Text     (Text)
-import qualified Data.Text     as T
-import qualified Data.Text.IO  as TIO
-import qualified Toml
-import           Toml          (TomlCodec, (.=))
+module Icarium.Config (
+    defaultConfigPath,
+    defaultConfigText,
 
-import           Icarium.Types (Effort, effortText, parseEffort)
+    -- * Types
+    Config (..),
+    ProjectConfig (..),
+    CommandsConfig (..),
+    DispatchConfig (..),
+    CategoriesConfig (..),
+
+    -- * IO
+    loadConfig,
+    validateConfig,
+) where
+
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Toml (TomlCodec, (.=))
+import Toml qualified
+
+import Icarium.Types (Effort, effortText, parseEffort)
 
 -- =============================================================
 -- Types
 -- =============================================================
 
 data Config = Config
-    { cfgProject    :: ProjectConfig
-    , cfgCommands   :: CommandsConfig
-    , cfgDispatch   :: DispatchConfig
+    { cfgProject :: ProjectConfig
+    , cfgCommands :: CommandsConfig
+    , cfgDispatch :: DispatchConfig
     , cfgCategories :: CategoriesConfig
-    } deriving (Show)
+    }
+    deriving (Show)
 
 newtype ProjectConfig = ProjectConfig
     { pcIntegrationBranch :: Text
-    } deriving (Show)
+    }
+    deriving (Show)
 
 data CommandsConfig = CommandsConfig
     { ccBuild :: Text
-    , ccTest  :: Text
-    } deriving (Show)
+    , ccTest :: Text
+    }
+    deriving (Show)
 
 data DispatchConfig = DispatchConfig
-    { dcModel                 :: Text
-    , dcEffort                :: Effort
-    , dcTools                 :: [Text]
-    , dcAllowedTools          :: [Text]
-    , dcScratchDir            :: Text
+    { dcModel :: Text
+    , dcEffort :: Effort
+    , dcTools :: [Text]
+    , dcAllowedTools :: [Text]
+    , dcScratchDir :: Text
     , dcMaxMinutesPerDispatch :: Int
     , dcHeartbeatStaleSeconds :: Int
-    , dcLogRetentionRuns      :: Int
-    } deriving (Show)
+    , dcLogRetentionRuns :: Int
+    }
+    deriving (Show)
 
 data CategoriesConfig = CategoriesConfig
-    { catDomains     :: [Text]
+    { catDomains :: [Text]
     , catDisciplines :: [Text]
-    } deriving (Show)
+    }
+    deriving (Show)
 
 -- =============================================================
 -- TOML codecs
 -- =============================================================
 
 projectCodec :: TomlCodec ProjectConfig
-projectCodec = ProjectConfig
-    <$> Toml.text "integration_branch" .= pcIntegrationBranch
+projectCodec =
+    ProjectConfig
+        <$> Toml.text "integration_branch" .= pcIntegrationBranch
 
 commandsCodec :: TomlCodec CommandsConfig
-commandsCodec = CommandsConfig
-    <$> Toml.text "build" .= ccBuild
-    <*> Toml.text "test"  .= ccTest
+commandsCodec =
+    CommandsConfig
+        <$> Toml.text "build" .= ccBuild
+        <*> Toml.text "test" .= ccTest
 
 effortField :: Toml.Key -> TomlCodec Effort
 effortField = Toml.textBy effortText $ \t ->
     case parseEffort t of
-        Just e  -> Right e
+        Just e -> Right e
         Nothing -> Left $ "invalid effort: " <> t
 
 dispatchCodec :: TomlCodec DispatchConfig
-dispatchCodec = DispatchConfig
-    <$> Toml.text                     "model"                    .= dcModel
-    <*> effortField                   "effort"                   .= dcEffort
-    <*> Toml.arrayOf Toml._Text       "tools"                    .= dcTools
-    <*> Toml.arrayOf Toml._Text       "allowed_tools"            .= dcAllowedTools
-    <*> Toml.text                     "scratch_dir"              .= dcScratchDir
-    <*> Toml.int                      "max_minutes_per_dispatch" .= dcMaxMinutesPerDispatch
-    <*> Toml.int                      "heartbeat_stale_seconds"  .= dcHeartbeatStaleSeconds
-    <*> Toml.int                      "log_retention_runs"       .= dcLogRetentionRuns
+dispatchCodec =
+    DispatchConfig
+        <$> Toml.text "model" .= dcModel
+        <*> effortField "effort" .= dcEffort
+        <*> Toml.arrayOf Toml._Text "tools" .= dcTools
+        <*> Toml.arrayOf Toml._Text "allowed_tools" .= dcAllowedTools
+        <*> Toml.text "scratch_dir" .= dcScratchDir
+        <*> Toml.int "max_minutes_per_dispatch" .= dcMaxMinutesPerDispatch
+        <*> Toml.int "heartbeat_stale_seconds" .= dcHeartbeatStaleSeconds
+        <*> Toml.int "log_retention_runs" .= dcLogRetentionRuns
 
 categoriesCodec :: TomlCodec CategoriesConfig
-categoriesCodec = CategoriesConfig
-    <$> Toml.arrayOf Toml._Text "domains"     .= catDomains
-    <*> Toml.arrayOf Toml._Text "disciplines" .= catDisciplines
+categoriesCodec =
+    CategoriesConfig
+        <$> Toml.arrayOf Toml._Text "domains" .= catDomains
+        <*> Toml.arrayOf Toml._Text "disciplines" .= catDisciplines
 
 configCodec :: TomlCodec Config
-configCodec = Config
-    <$> Toml.table projectCodec    "project"    .= cfgProject
-    <*> Toml.table commandsCodec   "commands"   .= cfgCommands
-    <*> Toml.table dispatchCodec   "dispatch"   .= cfgDispatch
-    <*> Toml.table categoriesCodec "categories" .= cfgCategories
+configCodec =
+    Config
+        <$> Toml.table projectCodec "project" .= cfgProject
+        <*> Toml.table commandsCodec "commands" .= cfgCommands
+        <*> Toml.table dispatchCodec "dispatch" .= cfgDispatch
+        <*> Toml.table categoriesCodec "categories" .= cfgCategories
 
 -- =============================================================
 -- IO
@@ -106,8 +119,9 @@ configCodec = Config
 defaultConfigPath :: FilePath
 defaultConfigPath = "icarium.toml"
 
--- | Validate a decoded config. Returns Left with a human-readable error
--- when a field value is semantically invalid.
+{- | Validate a decoded config. Returns Left with a human-readable error
+when a field value is semantically invalid.
+-}
 validateConfig :: Config -> Either String Config
 validateConfig c
     | dcMaxMinutesPerDispatch (cfgDispatch c) <= 0 =
@@ -119,7 +133,7 @@ loadConfig fp = do
     src <- TIO.readFile fp
     pure $ case Toml.decode configCodec src of
         Left errs -> Left (T.unpack (Toml.prettyTomlDecodeErrors errs))
-        Right c   -> validateConfig c
+        Right c -> validateConfig c
 
 -- | Template written by @icarium init@. Values must match the codec above.
 defaultConfigText :: Text

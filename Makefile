@@ -23,7 +23,7 @@ lint:
 	hlint src/ app/ test/
 
 format:
-	find src app test -name '*.hs' | xargs ./bin/stylish-haskell -i
+	find src app test -name '*.hs' | xargs ./bin/fourmolu --mode inplace
 
 # Live recompile loop. Foreground; Ctrl-C to stop. Library only — faster
 # reload than including the executable.

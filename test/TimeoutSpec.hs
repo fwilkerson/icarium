@@ -1,29 +1,46 @@
 module TimeoutSpec (tests) where
 
-import           Control.Concurrent        (threadDelay)
-import           Data.Maybe                (isJust)
-import qualified Data.Text                 as T
-import           Test.Tasty                (TestTree, testGroup)
-import           Test.Tasty.HUnit          (assertBool, testCase, (@?=))
+import Control.Concurrent (threadDelay)
+import Data.Maybe (isJust)
+import Data.Text qualified as T
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import           Icarium.Config            (CategoriesConfig (..), CommandsConfig (..), Config (..),
-                                            DispatchConfig (..), ProjectConfig (..), validateConfig)
-import           Icarium.Dispatch.Internal (DispatchCtx (..), DispatchResult (..), handlePostClaude,
-                                            raceTimeout, timeoutSentinel)
-import qualified Icarium.Repo.Dispatch     as RD
-import qualified Icarium.Repo.Task         as RT
-import           Icarium.Types             (Dispatch (..), DispatchOutcome (..), Effort (..),
-                                            TaskState (..))
-import           TestHelpers               (withTestDb)
+import Icarium.Config (
+    CategoriesConfig (..),
+    CommandsConfig (..),
+    Config (..),
+    DispatchConfig (..),
+    ProjectConfig (..),
+    validateConfig,
+ )
+import Icarium.Dispatch.Internal (
+    DispatchCtx (..),
+    DispatchResult (..),
+    handlePostClaude,
+    raceTimeout,
+    timeoutSentinel,
+ )
+import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Repo.Task qualified as RT
+import Icarium.Types (
+    Dispatch (..),
+    DispatchOutcome (..),
+    Effort (..),
+    TaskState (..),
+ )
+import TestHelpers (withTestDb)
 
 tests :: TestTree
-tests = testGroup "timeout"
-    [ testCase "raceTimeout fires after deadline"        testRaceTimeoutFires
-    , testCase "raceTimeout completes before deadline"   testRaceTimeoutPasses
-    , testCase "zero max_minutes rejected by config"     testZeroMaxMinutes
-    , testCase "negative max_minutes rejected by config" testNegativeMaxMinutes
-    , testCase "timeout sentinel → OFailure recorded"    testTimeoutOutcome
-    ]
+tests =
+    testGroup
+        "timeout"
+        [ testCase "raceTimeout fires after deadline" testRaceTimeoutFires
+        , testCase "raceTimeout completes before deadline" testRaceTimeoutPasses
+        , testCase "zero max_minutes rejected by config" testZeroMaxMinutes
+        , testCase "negative max_minutes rejected by config" testNegativeMaxMinutes
+        , testCase "timeout sentinel → OFailure recorded" testTimeoutOutcome
+        ]
 
 testRaceTimeoutFires :: IO ()
 testRaceTimeoutFires = do
@@ -38,72 +55,87 @@ testRaceTimeoutPasses = do
 testZeroMaxMinutes :: IO ()
 testZeroMaxMinutes =
     case validateConfig (configWith 0) of
-        Left msg -> assertBool "message names field"
-                        ("max_minutes_per_dispatch" `T.isInfixOf` T.pack msg)
-        Right _  -> error "expected Left for max_minutes_per_dispatch = 0"
+        Left msg ->
+            assertBool
+                "message names field"
+                ("max_minutes_per_dispatch" `T.isInfixOf` T.pack msg)
+        Right _ -> error "expected Left for max_minutes_per_dispatch = 0"
 
 testNegativeMaxMinutes :: IO ()
 testNegativeMaxMinutes =
     case validateConfig (configWith (-1)) of
-        Left  _ -> pure ()
+        Left _ -> pure ()
         Right _ -> error "expected Left for max_minutes_per_dispatch = -1"
 
 testTimeoutOutcome :: IO ()
 testTimeoutOutcome = withTestDb $ \conn -> do
-    tid <- RT.insertTask conn RT.NewTask
-        { RT.ntTitle    = "timeout test task"
-        , RT.ntBody     = "body"
-        , RT.ntState    = Ready
-        , RT.ntPriority = Nothing
-        }
+    tid <-
+        RT.insertTask
+            conn
+            RT.NewTask
+                { RT.ntTitle = "timeout test task"
+                , RT.ntBody = "body"
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                }
     let did = "01DISPATCH00000000000000000"
-    RD.insertDispatch conn did RD.NewDispatch
-        { RD.ndTaskId     = tid
-        , RD.ndBranch     = "dispatch/" <> did
-        , RD.ndBaseBranch = "main"
-        , RD.ndBaseSha    = "deadbeef"
-        , RD.ndModel      = "test"
-        , RD.ndEffort     = High
-        , RD.ndLogPath    = Nothing
-        , RD.ndPid        = Nothing
-        }
+    RD.insertDispatch
+        conn
+        did
+        RD.NewDispatch
+            { RD.ndTaskId = tid
+            , RD.ndBranch = "dispatch/" <> did
+            , RD.ndBaseBranch = "main"
+            , RD.ndBaseSha = "deadbeef"
+            , RD.ndModel = "test"
+            , RD.ndEffort = High
+            , RD.ndLogPath = Nothing
+            , RD.ndPid = Nothing
+            }
     -- Use a non-existent base branch so the internal "git checkout base"
     -- on failure silently no-ops rather than mutating the real working tree.
-    let dx = DispatchCtx
-            { dxConn   = conn
-            , dxDid    = did
-            , dxBranch = "dispatch/" <> did
-            , dxBase   = "test-no-such-branch"
-            }
+    let dx =
+            DispatchCtx
+                { dxConn = conn
+                , dxDid = did
+                , dxBranch = "dispatch/" <> did
+                , dxBase = "test-no-such-branch"
+                }
     res <- handlePostClaude dx fakeConfig timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
     dresOutcome res @?= OFailure
-    assertBool "result notes say timed out"
+    assertBool
+        "result notes say timed out"
         ("timed out" `T.isInfixOf` dresNotes res)
     mDisp <- RD.getDispatch conn did
     case mDisp of
         Nothing -> error "dispatch not found in DB"
-        Just d  -> do
+        Just d -> do
             assertBool "ended_at is set" (isJust (dispatchEndedAt d))
-            assertBool "DB notes say timed out"
+            assertBool
+                "DB notes say timed out"
                 (maybe False ("timed out" `T.isInfixOf`) (dispatchNotes d))
 
 fakeConfig :: Config
-fakeConfig = Config
-    { cfgProject    = ProjectConfig { pcIntegrationBranch = "main" }
-    , cfgCommands   = CommandsConfig { ccBuild = "", ccTest = "" }
-    , cfgDispatch   = DispatchConfig
-        { dcModel                 = "test"
-        , dcEffort                = High
-        , dcTools                 = []
-        , dcAllowedTools          = []
-        , dcScratchDir            = "/tmp"
-        , dcMaxMinutesPerDispatch = 5
-        , dcHeartbeatStaleSeconds = 300
-        , dcLogRetentionRuns      = 1
+fakeConfig =
+    Config
+        { cfgProject = ProjectConfig{pcIntegrationBranch = "main"}
+        , cfgCommands = CommandsConfig{ccBuild = "", ccTest = ""}
+        , cfgDispatch =
+            DispatchConfig
+                { dcModel = "test"
+                , dcEffort = High
+                , dcTools = []
+                , dcAllowedTools = []
+                , dcScratchDir = "/tmp"
+                , dcMaxMinutesPerDispatch = 5
+                , dcHeartbeatStaleSeconds = 300
+                , dcLogRetentionRuns = 1
+                }
+        , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         }
-    , cfgCategories = CategoriesConfig { catDomains = [], catDisciplines = [] }
-    }
 
 configWith :: Int -> Config
-configWith n = fakeConfig
-    { cfgDispatch = (cfgDispatch fakeConfig) { dcMaxMinutesPerDispatch = n } }
+configWith n =
+    fakeConfig
+        { cfgDispatch = (cfgDispatch fakeConfig){dcMaxMinutesPerDispatch = n}
+        }

@@ -1,38 +1,44 @@
-module Icarium.Repo.Task
-    ( NewTask(..)
-    , TaskUpdate(..)
-    , emptyUpdate
-    , insertTask
-    , getTask
-    , getTasksByIds
-    , getTasksByPrefix
-    , resolveTaskId
-    , listTasks
-    , updateTask
-    , deleteTask
-    ) where
+module Icarium.Repo.Task (
+    NewTask (..),
+    TaskUpdate (..),
+    emptyUpdate,
+    insertTask,
+    getTask,
+    getTasksByIds,
+    getTasksByPrefix,
+    resolveTaskId,
+    listTasks,
+    updateTask,
+    deleteTask,
+) where
 
-import           Data.Maybe             (catMaybes, fromMaybe)
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-import           Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), execute,
-                                         query)
+import Data.Maybe (catMaybes, fromMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Database.SQLite.Simple (
+    Connection,
+    Only (..),
+    Query (..),
+    SQLData (..),
+    execute,
+    query,
+ )
 
-import           Icarium.Id             (newId)
-import           Icarium.Types          (Task (..), TaskState (..))
+import Icarium.Id (newId)
+import Icarium.Types (Task (..), TaskState (..))
 
 data NewTask = NewTask
-    { ntTitle    :: Text
-    , ntBody     :: Text
-    , ntState    :: TaskState
+    { ntTitle :: Text
+    , ntBody :: Text
+    , ntState :: TaskState
     , ntPriority :: Maybe Int
     }
 
 data TaskUpdate = TaskUpdate
-    { tuTitle       :: Maybe Text
-    , tuBody        :: Maybe Text
-    , tuState       :: Maybe TaskState
-    , tuPriority    :: Maybe (Maybe Int)   -- Nothing = unchanged, Just Nothing = clear
+    { tuTitle :: Maybe Text
+    , tuBody :: Maybe Text
+    , tuState :: Maybe TaskState
+    , tuPriority :: Maybe (Maybe Int) -- Nothing = unchanged, Just Nothing = clear
     , tuBlockReason :: Maybe (Maybe Text)
     }
 
@@ -44,34 +50,41 @@ taskCols = "id, title, body, state, priority, block_reason, created_at, updated_
 
 insertTask :: Connection -> NewTask -> IO Text
 insertTask conn NewTask{..} = do
-    tid  <- newId
-    execute conn
-        (Query "INSERT INTO tasks (id, title, body, state, priority) \
-               \VALUES (?, ?, ?, ?, ?)")
+    tid <- newId
+    execute
+        conn
+        ( Query
+            "INSERT INTO tasks (id, title, body, state, priority) \
+            \VALUES (?, ?, ?, ?, ?)"
+        )
         (tid, ntTitle, ntBody, ntState, ntPriority)
     pure tid
 
 getTask :: Connection -> Text -> IO (Maybe Task)
 getTask conn tid = do
-    rows <- query conn
-        (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id = ?")
-        (Only tid)
+    rows <-
+        query
+            conn
+            (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id = ?")
+            (Only tid)
     pure $ case rows of
-        (t:_) -> Just t
-        []    -> Nothing
+        (t : _) -> Just t
+        [] -> Nothing
 
 -- | Escape LIKE special characters so they match literally.
 escapeLike :: Text -> Text
 escapeLike = T.concatMap esc
   where
-    esc c | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
-           | otherwise                  = T.singleton c
+    esc c
+        | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
+        | otherwise = T.singleton c
 
 -- | Fetch tasks by exact ids in a single batch query.
 getTasksByIds :: Connection -> [Text] -> IO [Task]
 getTasksByIds _ [] = pure []
 getTasksByIds conn ids =
-    query conn
+    query
+        conn
         (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id IN " <> ph)
         (map SQLText ids)
   where
@@ -80,7 +93,8 @@ getTasksByIds conn ids =
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]
 getTasksByPrefix conn prefix =
-    query conn
+    query
+        conn
         (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id LIKE ? ESCAPE '\\'")
         (Only (escapeLike prefix <> "%"))
 
@@ -90,42 +104,56 @@ resolveTaskId conn input = do
     ts <- getTasksByPrefix conn input
     case ts of
         [t] -> pure (Right (taskId t))
-        []  -> pure (Left $ "task not found: " <> T.unpack input)
-        _   -> pure (Left $ "ambiguous id: " <> T.unpack input
-                          <> " (matches " <> show (length ts) <> " tasks)")
+        [] -> pure (Left $ "task not found: " <> T.unpack input)
+        _ ->
+            pure
+                ( Left $
+                    "ambiguous id: "
+                        <> T.unpack input
+                        <> " (matches "
+                        <> show (length ts)
+                        <> " tasks)"
+                )
 
--- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
--- (state='ready' with all depends_on satisfied). Otherwise pulls from
--- @tasks@ and optionally filters by state client-side. Both @mDomain@
--- and @mDiscipline@ are category-name filters applied at the SQL level.
+{- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
+(state='ready' with all depends_on satisfied). Otherwise pulls from
+@tasks@ and optionally filters by state client-side. Both @mDomain@
+and @mDiscipline@ are category-name filters applied at the SQL level.
+-}
 listTasks :: Connection -> [TaskState] -> Bool -> Maybe Text -> Maybe Text -> IO [Task]
 listTasks conn filterStates readyOnly mDomain mDisc = do
     rows <- query conn (buildQ tbl ord) params
-    pure $ if readyOnly
-        then rows
-        else case filterStates of
-            [] -> rows
-            ss -> filter ((`elem` ss) . taskState) rows
+    pure $
+        if readyOnly
+            then rows
+            else case filterStates of
+                [] -> rows
+                ss -> filter ((`elem` ss) . taskState) rows
   where
-    tbl  = if readyOnly then "ready_tasks" else "tasks"
-    ord  = if readyOnly
-               then "COALESCE(priority, 0) DESC, created_at ASC"
-               else "created_at ASC"
+    tbl = if readyOnly then "ready_tasks" else "tasks"
+    ord =
+        if readyOnly
+            then "COALESCE(priority, 0) DESC, created_at ASC"
+            else "created_at ASC"
     (whereClause, params) = taskCatWhere mDomain mDisc
     buildQ t o = Query $ "SELECT " <> taskCols <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
 
 taskCatWhere :: Maybe Text -> Maybe Text -> (Text, [SQLData])
 taskCatWhere mDomain mDisc =
-    let catSubq axis = "id IN (SELECT task_id FROM task_categories tc"
-                    <> " JOIN categories c ON c.id = tc.category_id"
-                    <> " WHERE c.axis = '" <> axis <> "' AND c.name = ?)"
-        filters = catMaybes
-            [ fmap (\n -> (catSubq "domain",      SQLText n)) mDomain
-            , fmap (\n -> (catSubq "discipline",   SQLText n)) mDisc
-            ]
-    in case filters of
-        [] -> ("", [])
-        fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
+    let catSubq axis =
+            "id IN (SELECT task_id FROM task_categories tc"
+                <> " JOIN categories c ON c.id = tc.category_id"
+                <> " WHERE c.axis = '"
+                <> axis
+                <> "' AND c.name = ?)"
+        filters =
+            catMaybes
+                [ fmap (\n -> (catSubq "domain", SQLText n)) mDomain
+                , fmap (\n -> (catSubq "discipline", SQLText n)) mDisc
+                ]
+     in case filters of
+            [] -> ("", [])
+            fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
 
 -- | Apply a sparse update. Returns True iff a row was affected.
 updateTask :: Connection -> Text -> TaskUpdate -> IO Bool
@@ -133,20 +161,24 @@ updateTask conn tid TaskUpdate{..} = do
     mt <- getTask conn tid
     case mt of
         Nothing -> pure False
-        Just t  -> do
+        Just t -> do
             let newTitle = fromMaybe (taskTitle t) tuTitle
-                newBody  = fromMaybe (taskBody t)  tuBody
+                newBody = fromMaybe (taskBody t) tuBody
                 newState = fromMaybe (taskState t) tuState
-                newPrio  = fromMaybe (taskPriority t)    tuPriority
+                newPrio = fromMaybe (taskPriority t) tuPriority
                 -- Invariant: block_reason is meaningful only for Blocked.
                 -- Clear it on any transition out of Blocked so it doesn't
                 -- linger as stale text on done/in_progress tasks.
-                newBlock = if newState == Blocked
-                           then fromMaybe (taskBlockReason t) tuBlockReason
-                           else Nothing
-            execute conn
-                (Query "UPDATE tasks SET title=?, body=?, state=?, \
-                       \priority=?, block_reason=? WHERE id=?")
+                newBlock =
+                    if newState == Blocked
+                        then fromMaybe (taskBlockReason t) tuBlockReason
+                        else Nothing
+            execute
+                conn
+                ( Query
+                    "UPDATE tasks SET title=?, body=?, state=?, \
+                    \priority=?, block_reason=? WHERE id=?"
+                )
                 (newTitle, newBody, newState, newPrio, newBlock, tid)
             pure True
 
@@ -155,6 +187,6 @@ deleteTask conn tid = do
     mt <- getTask conn tid
     case mt of
         Nothing -> pure False
-        Just _  -> do
+        Just _ -> do
             execute conn (Query "DELETE FROM tasks WHERE id = ?") (Only tid)
             pure True

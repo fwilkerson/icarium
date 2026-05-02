@@ -1,64 +1,72 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
-import           Control.Monad          (forM, forM_, unless, void, when)
-import           Data.Aeson             (FromJSON (..), decode, withObject, (.:?))
-import qualified Data.ByteString.Lazy   as BL
-import           Data.Either            (fromRight)
-import           Data.IORef             (IORef, modifyIORef, newIORef, readIORef)
-import           Data.List              (nub)
-import           Data.Maybe             (fromMaybe, isNothing, listToMaybe, mapMaybe)
-import           Data.Text              (Text)
-import qualified Data.Text              as T
-import qualified Data.Text.Encoding     as TE
-import qualified Data.Text.IO           as TIO
-import           Data.Time              (UTCTime, diffUTCTime, getCurrentTime)
-import           Database.SQLite.Simple (Connection)
-import           Options.Applicative
-import           System.Directory       (doesFileExist)
-import           System.IO              (hPutStrLn, stderr)
-import           System.Posix.Signals   (Handler (..), installHandler, raiseSignal, sigINT)
-import           Text.Printf            (printf)
+import Control.Monad (forM, forM_, unless, void, when)
+import Data.Aeson (FromJSON (..), decode, withObject, (.:?))
+import Data.ByteString.Lazy qualified as BL
+import Data.Either (fromRight)
+import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
+import Data.List (nub)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Text.IO qualified as TIO
+import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Database.SQLite.Simple (Connection)
+import Options.Applicative
+import System.Directory (doesFileExist)
+import System.IO (hPutStrLn, stderr)
+import System.Posix.Signals (Handler (..), installHandler, raiseSignal, sigINT)
+import Text.Printf (printf)
 
-import qualified Icarium.Git            as Git
+import Icarium.Git qualified as Git
 
-import           Icarium.Commands.Util
-import           Icarium.Config         (Config, DispatchConfig (..), cfgDispatch,
-                                         defaultConfigPath, loadConfig)
-import           Icarium.Db             (parseDbTime, withDb)
-import qualified Icarium.Dispatch       as D
-import           Icarium.Heartbeat      (heartbeatStale, pidAlive)
-import qualified Icarium.Render         as Render
-import qualified Icarium.Repo.Dispatch  as RD
-import qualified Icarium.Repo.Edge      as RE
-import qualified Icarium.Repo.Task      as RT
-import           Icarium.Types
+import Icarium.Commands.Util
+import Icarium.Config (
+    Config,
+    DispatchConfig (..),
+    cfgDispatch,
+    defaultConfigPath,
+    loadConfig,
+ )
+import Icarium.Db (parseDbTime, withDb)
+import Icarium.Dispatch qualified as D
+import Icarium.Heartbeat (heartbeatStale, pidAlive)
+import Icarium.Render qualified as Render
+import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Repo.Edge qualified as RE
+import Icarium.Repo.Task qualified as RT
+import Icarium.Types
 
 data Command
-    = Run     RunOpts
-    | List    ListOpts
-    | Show    ShowOpts
-    | Logs    LogsOpts
+    = Run RunOpts
+    | List ListOpts
+    | Show ShowOpts
+    | Logs LogsOpts
     | Recover RecoverOpts
 
 parser :: Parser Command
-parser = subparser
-    ( subcmd "run"
-        "Run one dispatch (with TASK_ID) or drain the ready queue in priority order (no TASK_ID, optionally --max N)."
-        (Run  <$> runP)
-   <> subcmd "list"    "List dispatches (alias: ls)" (List <$> listP)
-   <> subcmd "show"    "Show a single dispatch"   (Show    <$> showP)
-   <> subcmd "logs"    "Print the jsonl event log" (Logs   <$> logsP)
-   <> subcmd "recover"
-        "Reconcile dispatches whose orchestrator died mid-run: mark outcome interrupted, move task to blocked with structured notes."
-        (Recover <$> recoverP)
-    )
+parser =
+    subparser
+        ( subcmd
+            "run"
+            "Run one dispatch (with TASK_ID) or drain the ready queue in priority order (no TASK_ID, optionally --max N)."
+            (Run <$> runP)
+            <> subcmd "list" "List dispatches (alias: ls)" (List <$> listP)
+            <> subcmd "show" "Show a single dispatch" (Show <$> showP)
+            <> subcmd "logs" "Print the jsonl event log" (Logs <$> logsP)
+            <> subcmd
+                "recover"
+                "Reconcile dispatches whose orchestrator died mid-run: mark outcome interrupted, move task to blocked with structured notes."
+                (Recover <$> recoverP)
+        )
 
 run :: FilePath -> Command -> IO ()
 run db = \case
-    Run     o -> runRun     db o
-    List    o -> runList    db o
-    Show    o -> runShow    db o
-    Logs    o -> runLogs    db o
+    Run o -> runRun db o
+    List o -> runList db o
+    Show o -> runShow db o
+    Logs o -> runLogs db o
     Recover o -> runRecover db o
 
 -- =============================================================
@@ -67,112 +75,150 @@ run db = \case
 
 data RunOpts = RunOpts
     { rTaskId :: Maybe Text
-    , rMax    :: Maybe Int
-    , rModel  :: Maybe Text
+    , rMax :: Maybe Int
+    , rModel :: Maybe Text
     , rEffort :: Maybe Effort
-    , rBase   :: Maybe Text
+    , rBase :: Maybe Text
     , rDryRun :: Bool
     }
 
 runP :: Parser RunOpts
-runP = RunOpts
-    <$> optional (T.pack <$> strArgument (metavar "TASK_ID"))
-    <*> optional (option auto (long "max" <> metavar "N"
-           <> help "Cap dispatches in queue mode (ignored with TASK_ID)"))
-    <*> optional (T.pack <$> strOption (long "model"  <> metavar "MODEL"
-           <> help "Override the model for this dispatch"))
-    <*> optional (option effortReader (long "effort" <> metavar "LEVEL"
-                                     <> help "low | medium | high"))
-    <*> optional (T.pack <$> strOption (long "base-branch" <> metavar "NAME"
-           <> help "Override the base branch for git operations"))
-    <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
+runP =
+    RunOpts
+        <$> optional (T.pack <$> strArgument (metavar "TASK_ID"))
+        <*> optional
+            ( option
+                auto
+                ( long "max"
+                    <> metavar "N"
+                    <> help "Cap dispatches in queue mode (ignored with TASK_ID)"
+                )
+            )
+        <*> optional
+            ( T.pack
+                <$> strOption
+                    ( long "model"
+                        <> metavar "MODEL"
+                        <> help "Override the model for this dispatch"
+                    )
+            )
+        <*> optional
+            ( option
+                effortReader
+                ( long "effort"
+                    <> metavar "LEVEL"
+                    <> help "low | medium | high"
+                )
+            )
+        <*> optional
+            ( T.pack
+                <$> strOption
+                    ( long "base-branch"
+                        <> metavar "NAME"
+                        <> help "Override the base branch for git operations"
+                    )
+            )
+        <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
 runRun :: FilePath -> RunOpts -> IO ()
 runRun db o = do
-    cfg <- loadConfig defaultConfigPath >>= \case
-        Left  e  -> fatal 2 ("config parse error:\n" <> e)
-        Right c  -> pure c
+    cfg <-
+        loadConfig defaultConfigPath >>= \case
+            Left e -> fatal 2 ("config parse error:\n" <> e)
+            Right c -> pure c
     case rTaskId o of
         Just rawId ->
             withDb db $ \c -> do
                 tid <- resolveOrFatal (RT.resolveTaskId c rawId)
                 mt <- RT.getTask c tid
                 case mt of
-                    Nothing   -> fatal 1 ("task not found: " <> T.unpack tid)
+                    Nothing -> fatal 1 ("task not found: " <> T.unpack tid)
                     Just task -> do
-                        res <- D.dispatch c D.DispatchRequest
-                            { D.drTask            = task
-                            , D.drConfig          = cfg
-                            , D.drDbPath          = db
-                            , D.drDryRun          = rDryRun o
-                            , D.drModelOverride   = rModel o
-                            , D.drEffortOverride  = rEffort o
-                            , D.drBaseOverride    = rBase  o
-                            }
+                        res <-
+                            D.dispatch
+                                c
+                                D.DispatchRequest
+                                    { D.drTask = task
+                                    , D.drConfig = cfg
+                                    , D.drDbPath = db
+                                    , D.drDryRun = rDryRun o
+                                    , D.drModelOverride = rModel o
+                                    , D.drEffortOverride = rEffort o
+                                    , D.drBaseOverride = rBase o
+                                    }
                         D.applyOutcomeToTask c task res
                         summarize res
         Nothing -> do
             mapM_ (\n -> when (n <= 0) $ fatal 2 "max must be > 0") (rMax o)
             sigCount <- newIORef (0 :: Int)
             let sigHandler = do
-                    modifyIORef sigCount (+1)
+                    modifyIORef sigCount (+ 1)
                     n <- readIORef sigCount
                     when (n >= 2) $ do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
             withDb db $ \conn -> do
-                let ctx = DrainCtx
-                        { dctxDb       = db
-                        , dctxOpts     = o
-                        , dctxCfg      = cfg
-                        , dctxMCap     = rMax o
-                        , dctxSigCount = sigCount
-                        , dctxConn     = conn
-                        }
+                let ctx =
+                        DrainCtx
+                            { dctxDb = db
+                            , dctxOpts = o
+                            , dctxCfg = cfg
+                            , dctxMCap = rMax o
+                            , dctxSigCount = sigCount
+                            , dctxConn = conn
+                            }
                 drainLoop ctx 0
 
 data DrainCtx = DrainCtx
-    { dctxDb       :: FilePath
-    , dctxOpts     :: RunOpts
-    , dctxCfg      :: Config
-    , dctxMCap     :: Maybe Int
+    { dctxDb :: FilePath
+    , dctxOpts :: RunOpts
+    , dctxCfg :: Config
+    , dctxMCap :: Maybe Int
     , dctxSigCount :: IORef Int
-    , dctxConn     :: Connection
+    , dctxConn :: Connection
     }
 
 drainLoop :: DrainCtx -> Int -> IO ()
 drainLoop ctx !i
-    | Just cap <- dctxMCap ctx, i >= cap =
+    | Just cap <- dctxMCap ctx
+    , i >= cap =
         hPutStrLn stderr ("icarium: reached max dispatches (" <> show cap <> "); stopping")
     | otherwise = do
-        let conn = dctxConn     ctx
-            opts = dctxOpts     ctx
-            cfg  = dctxCfg      ctx
-            db   = dctxDb       ctx
+        let conn = dctxConn ctx
+            opts = dctxOpts ctx
+            cfg = dctxCfg ctx
+            db = dctxDb ctx
         ts <- RT.listTasks conn [] True Nothing Nothing
         case ts of
             [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
             (t : _) -> do
                 hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
-                res <- D.dispatch conn D.DispatchRequest
-                    { D.drTask           = t
-                    , D.drConfig         = cfg
-                    , D.drDbPath         = db
-                    , D.drDryRun         = rDryRun opts
-                    , D.drModelOverride  = rModel  opts
-                    , D.drEffortOverride = rEffort opts
-                    , D.drBaseOverride   = rBase   opts
-                    }
+                res <-
+                    D.dispatch
+                        conn
+                        D.DispatchRequest
+                            { D.drTask = t
+                            , D.drConfig = cfg
+                            , D.drDbPath = db
+                            , D.drDryRun = rDryRun opts
+                            , D.drModelOverride = rModel opts
+                            , D.drEffortOverride = rEffort opts
+                            , D.drBaseOverride = rBase opts
+                            }
                 D.applyOutcomeToTask conn t res
                 TIO.hPutStrLn stderr $
-                    "icarium: " <> dispatchOutcomeText (D.dresOutcome res)
-                    <> " \x2014 " <> D.dresNotes res
+                    "icarium: "
+                        <> dispatchOutcomeText (D.dresOutcome res)
+                        <> " \x2014 "
+                        <> D.dresNotes res
                 printSummary res
                 n <- readIORef (dctxSigCount ctx)
                 if n >= 1
-                    then hPutStrLn stderr
-                        "icarium: SIGINT received; stopping after current dispatch"
+                    then
+                        hPutStrLn
+                            stderr
+                            "icarium: SIGINT received; stopping after current dispatch"
                     else drainLoop ctx (i + 1)
 
 -- =============================================================
@@ -180,9 +226,9 @@ drainLoop ctx !i
 -- =============================================================
 
 data LogUsage = LogUsage
-    { luInputTokens  :: Maybe Int
+    { luInputTokens :: Maybe Int
     , luOutputTokens :: Maybe Int
-    , luCacheReads   :: Maybe Int
+    , luCacheReads :: Maybe Int
     }
 
 instance FromJSON LogUsage where
@@ -193,12 +239,12 @@ instance FromJSON LogUsage where
             <*> o .:? "cache_read_input_tokens"
 
 data LogResult = LogResult
-    { lrNumTurns      :: Maybe Int
-    , lrDurationMs    :: Maybe Int
+    { lrNumTurns :: Maybe Int
+    , lrDurationMs :: Maybe Int
     , lrDurationApiMs :: Maybe Int
-    , lrCostUsd       :: Maybe Double
-    , lrUsage         :: Maybe LogUsage
-    , lrResultText    :: Maybe Text
+    , lrCostUsd :: Maybe Double
+    , lrUsage :: Maybe LogUsage
+    , lrResultText :: Maybe Text
     }
 
 instance FromJSON LogResult where
@@ -214,12 +260,13 @@ instance FromJSON LogResult where
 readLogResult :: FilePath -> IO (Maybe LogResult)
 readLogResult path = do
     exists <- doesFileExist path
-    if not exists then pure Nothing
-    else do
-        ls <- T.lines <$> TIO.readFile path
-        let isResult l = "\"type\":\"result\"" `T.isInfixOf` l
-            resultLines = filter isResult ls
-        pure $ listToMaybe $ mapMaybe parseLine (reverse resultLines)
+    if not exists
+        then pure Nothing
+        else do
+            ls <- T.lines <$> TIO.readFile path
+            let isResult l = "\"type\":\"result\"" `T.isInfixOf` l
+                resultLines = filter isResult ls
+            pure $ listToMaybe $ mapMaybe parseLine (reverse resultLines)
   where
     parseLine l = decode (BL.fromStrict (TE.encodeUtf8 l))
 
@@ -227,19 +274,19 @@ gitChangedFiles :: Text -> IO [Text]
 gitChangedFiles baseSha = do
     r <- Git.runGit ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
     case r of
-        Left  _   -> pure []
+        Left _ -> pure []
         Right out -> pure (filter (not . T.null) (T.lines out))
 
 fmtMs :: Int -> Text
 fmtMs ms
     | ms >= 1000 = T.pack (printf "%.1fs" (fromIntegral ms / 1000.0 :: Double))
-    | otherwise  = T.pack (show ms) <> "ms"
+    | otherwise = T.pack (show ms) <> "ms"
 
 trimResult :: Text -> Text
 trimResult t =
-    let ls      = filter (not . T.null) (T.lines t)
-        lastLine = case ls of { [] -> t; _ -> last ls }
-    in if T.length lastLine > 200 then T.take 197 lastLine <> "..." else lastLine
+    let ls = filter (not . T.null) (T.lines t)
+        lastLine = case ls of [] -> t; _ -> last ls
+     in if T.length lastLine > 200 then T.take 197 lastLine <> "..." else lastLine
 
 -- | Print the enriched summary block; does not exit on failure.
 printSummary :: D.DispatchResult -> IO ()
@@ -249,7 +296,7 @@ printSummary r = do
     TIO.putStrLn $ "dispatch: " <> idPart
     TIO.putStrLn $ "outcome:  " <> dispatchOutcomeText (D.dresOutcome r)
     TIO.putStrLn $ "branch:   " <> D.dresBranch r
-    TIO.putStrLn $ "notes:    " <> D.dresNotes  r
+    TIO.putStrLn $ "notes:    " <> D.dresNotes r
     case D.dresLogPath r of
         Nothing -> pure ()
         Just lp -> do
@@ -257,42 +304,47 @@ printSummary r = do
             case mLR of
                 Nothing -> pure ()
                 Just lr -> do
-                    mapM_ TIO.putStrLn
+                    mapM_
+                        TIO.putStrLn
                         [ "turns:    " <> maybe "-" (T.pack . show) (lrNumTurns lr)
-                        , "duration: " <> maybe "-" fmtMs (lrDurationMs lr)
+                        , "duration: "
+                            <> maybe "-" fmtMs (lrDurationMs lr)
                             <> maybe "" (\a -> " (api: " <> fmtMs a <> ")") (lrDurationApiMs lr)
                         , "cost:     " <> maybe "-" (T.pack . printf "$%.4f") (lrCostUsd lr)
                         , "tokens:   " <> fmtTokens (lrUsage lr)
                         ]
                     case lrResultText lr >>= \t -> if T.null t then Nothing else Just t of
                         Nothing -> pure ()
-                        Just t  -> TIO.putStrLn $ "result:   " <> trimResult t
+                        Just t -> TIO.putStrLn $ "result:   " <> trimResult t
     case D.dresBaseSha r of
-        Nothing  -> pure ()
+        Nothing -> pure ()
         Just sha -> do
             files <- gitChangedFiles sha
             case files of
                 [] -> pure ()
-                _  -> do
+                _ -> do
                     let shown = take 10 files
                         extra = length files - length shown
-                        pad   = T.replicate 10 " "
+                        pad = T.replicate 10 " "
                         extraLine = [T.pack (show extra) <> " more" | extra > 0]
-                        allItems  = shown ++ extraLine
+                        allItems = shown ++ extraLine
                     TIO.putStrLn $ "files:    " <> T.intercalate ("\n" <> pad) allItems
   where
-    fmtTokens Nothing  = "-"
+    fmtTokens Nothing = "-"
     fmtTokens (Just u) =
-        "in "    <> maybe "-" (T.pack . show) (luInputTokens  u)
-        <> " / out " <> maybe "-" (T.pack . show) (luOutputTokens u)
-        <> " / cache " <> maybe "-" (T.pack . show) (luCacheReads   u)
+        "in "
+            <> maybe "-" (T.pack . show) (luInputTokens u)
+            <> " / out "
+            <> maybe "-" (T.pack . show) (luOutputTokens u)
+            <> " / cache "
+            <> maybe "-" (T.pack . show) (luCacheReads u)
 
 summarize :: D.DispatchResult -> IO ()
 summarize r = do
     printSummary r
     case D.dresOutcome r of
         OSuccess -> pure ()
-        _        -> fatal 3 "dispatch did not succeed"
+        _ -> fatal 3 "dispatch did not succeed"
 
 -- =============================================================
 -- list
@@ -301,31 +353,44 @@ summarize r = do
 formatDispatchDuration :: UTCTime -> Dispatch -> Text
 formatDispatchDuration now d =
     case parseDbTime (dispatchStartedAt d) of
-        Nothing    -> ""
+        Nothing -> ""
         Just start ->
             let (diff, isOpen) = case dispatchEndedAt d >>= parseDbTime of
                     Just end -> (diffUTCTime end start, False)
-                    Nothing  -> (diffUTCTime now start, True)
-                secs  = max 0 (round (toRational diff) :: Int)
-                body  = Render.fmtSecs secs
-            in if isOpen then body <> " (running)" else body
+                    Nothing -> (diffUTCTime now start, True)
+                secs = max 0 (round (toRational diff) :: Int)
+                body = Render.fmtSecs secs
+             in if isOpen then body <> " (running)" else body
 
 data ListOpts = ListOpts
-    { lTask    :: Maybe Text
+    { lTask :: Maybe Text
     , lOutcome :: Maybe DispatchOutcome
     }
 
 listP :: Parser ListOpts
-listP = ListOpts
-    <$> optional (T.pack <$> strOption (long "task" <> metavar "TASK_ID"
-                                        <> help "Only dispatches for this task"))
-    <*> optional (option outcomeReader (long "outcome" <> metavar "OUTCOME"
-                                        <> help "success | failure | interrupted"))
+listP =
+    ListOpts
+        <$> optional
+            ( T.pack
+                <$> strOption
+                    ( long "task"
+                        <> metavar "TASK_ID"
+                        <> help "Only dispatches for this task"
+                    )
+            )
+        <*> optional
+            ( option
+                outcomeReader
+                ( long "outcome"
+                    <> metavar "OUTCOME"
+                    <> help "success | failure | interrupted"
+                )
+            )
 
 outcomeReader :: ReadM DispatchOutcome
 outcomeReader = eitherReader $ \s ->
     case parseDispatchOutcome (T.pack s) of
-        Just o  -> Right o
+        Just o -> Right o
         Nothing -> Left ("invalid outcome: " <> s)
 
 runList :: FilePath -> ListOpts -> IO ()
@@ -333,21 +398,31 @@ runList db o = withDb db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <- RD.listDispatches c mTaskId
     let filtered = case lOutcome o of
-            Nothing   -> ds
+            Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
-    now      <- getCurrentTime
+    now <- getCurrentTime
     let taskIds = nub (map dispatchTaskId filtered)
-    tasks    <- RT.getTasksByIds c taskIds
+    tasks <- RT.getTasksByIds c taskIds
     let titleMap = [(taskId t, taskTitle t) | t <- tasks]
     knowCounts <- forM filtered $ \d ->
-        length <$> RE.knowledgeDerivedFromDispatch c
-            (dispatchTaskId d) (dispatchStartedAt d) (dispatchEndedAt d)
-    let rows = zipWith (\d kc -> Render.DispatchRow
-                { Render.drDispatch  = d
-                , Render.drTaskTitle = fromMaybe "" (lookup (dispatchTaskId d) titleMap)
-                , Render.drKnowCount = kc
-                , Render.drDuration  = formatDispatchDuration now d
-                }) filtered knowCounts
+        length
+            <$> RE.knowledgeDerivedFromDispatch
+                c
+                (dispatchTaskId d)
+                (dispatchStartedAt d)
+                (dispatchEndedAt d)
+    let rows =
+            zipWith
+                ( \d kc ->
+                    Render.DispatchRow
+                        { Render.drDispatch = d
+                        , Render.drTaskTitle = fromMaybe "" (lookup (dispatchTaskId d) titleMap)
+                        , Render.drKnowCount = kc
+                        , Render.drDuration = formatDispatchDuration now d
+                        }
+                )
+                filtered
+                knowCounts
     utf8 <- detectUtf8
     TIO.putStr (Render.renderDispatchList utf8 rows)
 
@@ -355,11 +430,12 @@ runList db o = withDb db $ \c -> do
 -- show
 -- =============================================================
 
-newtype ShowOpts = ShowOpts { sId :: Text }
+newtype ShowOpts = ShowOpts {sId :: Text}
 
 showP :: Parser ShowOpts
-showP = ShowOpts . T.pack
-    <$> strArgument (metavar "DISPATCH_ID")
+showP =
+    ShowOpts . T.pack
+        <$> strArgument (metavar "DISPATCH_ID")
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
@@ -369,8 +445,12 @@ runShow db o = withDb db $ \c -> do
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
         Just d -> do
             mt <- RT.getTask c (dispatchTaskId d)
-            ks <- RE.knowledgeDerivedFromDispatch c (dispatchTaskId d)
-                    (dispatchStartedAt d) (dispatchEndedAt d)
+            ks <-
+                RE.knowledgeDerivedFromDispatch
+                    c
+                    (dispatchTaskId d)
+                    (dispatchStartedAt d)
+                    (dispatchEndedAt d)
             TIO.putStr (Render.renderDispatch d mt ks)
 
 -- =============================================================
@@ -378,15 +458,22 @@ runShow db o = withDb db $ \c -> do
 -- =============================================================
 
 data LogsOpts = LogsOpts
-    { gId   :: Text
+    { gId :: Text
     , gTail :: Maybe Int
     }
 
 logsP :: Parser LogsOpts
-logsP = LogsOpts . T.pack
-    <$> strArgument (metavar "DISPATCH_ID")
-    <*> optional (option auto (long "tail" <> metavar "N"
-                              <> help "Print only the last N lines"))
+logsP =
+    LogsOpts . T.pack
+        <$> strArgument (metavar "DISPATCH_ID")
+        <*> optional
+            ( option
+                auto
+                ( long "tail"
+                    <> metavar "N"
+                    <> help "Print only the last N lines"
+                )
+            )
 
 runLogs :: FilePath -> LogsOpts -> IO ()
 runLogs db o = withDb db $ \c -> do
@@ -394,9 +481,9 @@ runLogs db o = withDb db $ \c -> do
     md <- RD.getDispatch c did
     case md of
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
-        Just d  -> case dispatchLogPath d of
+        Just d -> case dispatchLogPath d of
             Nothing -> fatal 1 ("no log recorded for dispatch " <> T.unpack did)
-            Just p  -> do
+            Just p -> do
                 let path = T.unpack p
                 exists <- doesFileExist path
                 unless exists $
@@ -405,7 +492,7 @@ runLogs db o = withDb db $ \c -> do
                 let ls = lines contents
                     out = case gTail o of
                         Nothing -> ls
-                        Just n  -> drop (max 0 (length ls - n)) ls
+                        Just n -> drop (max 0 (length ls - n)) ls
                 mapM_ putStrLn out
 
 -- =============================================================
@@ -417,14 +504,16 @@ newtype RecoverOpts = RecoverOpts
     }
 
 recoverP :: Parser RecoverOpts
-recoverP = RecoverOpts
-    <$> optional (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+recoverP =
+    RecoverOpts
+        <$> optional (T.pack <$> strArgument (metavar "DISPATCH_ID"))
 
 runRecover :: FilePath -> RecoverOpts -> IO ()
 runRecover db o = do
-    cfg <- loadConfig defaultConfigPath >>= \case
-        Left  e -> fatal 2 ("config parse error:\n" <> e)
-        Right c -> pure c
+    cfg <-
+        loadConfig defaultConfigPath >>= \case
+            Left e -> fatal 2 ("config parse error:\n" <> e)
+            Right c -> pure c
     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
     withDb db $ \c -> do
         open <- case recDispatchId o of
@@ -434,7 +523,7 @@ runRecover db o = do
                 pure $ case md of
                     Just d | isNothing (dispatchOutcome d) -> [d]
                     _ -> []
-            Nothing  -> RD.listOpenDispatches c
+            Nothing -> RD.listOpenDispatches c
         if null open
             then TIO.putStrLn "no open dispatches"
             else do
@@ -449,24 +538,35 @@ reconcileDispatch c now staleSec d = do
         then pure ()
         else do
             uncommitted <- fmap not Git.isClean
-            lastCommit  <- fmap (fromRight "") (Git.revParse (dispatchBranch d))
-            let notes = T.intercalate "; "
-                    [ "interrupted"
-                    , "alive=" <> boolText alive
-                    , "stale=" <> boolText stale
-                    , "uncommitted=" <> boolText uncommitted
-                    , "last_commit=" <> lastCommit
-                    ]
+            lastCommit <- fmap (fromRight "") (Git.revParse (dispatchBranch d))
+            let notes =
+                    T.intercalate
+                        "; "
+                        [ "interrupted"
+                        , "alive=" <> boolText alive
+                        , "stale=" <> boolText stale
+                        , "uncommitted=" <> boolText uncommitted
+                        , "last_commit=" <> lastCommit
+                        ]
             RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
-            void $ RT.updateTask c (dispatchTaskId d) RT.emptyUpdate
-                { RT.tuState       = Just Blocked
-                , RT.tuBlockReason = Just (Just notes)
-                }
-            TIO.putStrLn $ "dispatch:" <> dispatchId d
-                <> "  task:" <> dispatchTaskId d
-                <> "  branch:" <> dispatchBranch d
-                <> "  " <> notes
+            void $
+                RT.updateTask
+                    c
+                    (dispatchTaskId d)
+                    RT.emptyUpdate
+                        { RT.tuState = Just Blocked
+                        , RT.tuBlockReason = Just (Just notes)
+                        }
+            TIO.putStrLn $
+                "dispatch:"
+                    <> dispatchId d
+                    <> "  task:"
+                    <> dispatchTaskId d
+                    <> "  branch:"
+                    <> dispatchBranch d
+                    <> "  "
+                    <> notes
 
 boolText :: Bool -> Text
-boolText True  = "yes"
+boolText True = "yes"
 boolText False = "no"

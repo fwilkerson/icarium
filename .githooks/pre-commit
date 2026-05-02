@@ -13,9 +13,9 @@ trap 'rm -rf "$tmp"' EXIT
 fail=0
 while IFS= read -r f; do
     git show ":$f" > "$tmp/staged.hs"
-    ./bin/stylish-haskell < "$tmp/staged.hs" > "$tmp/formatted.hs"
+    ./bin/fourmolu --stdin-input-file "$f" < "$tmp/staged.hs" > "$tmp/formatted.hs"
     if ! cmp -s "$tmp/staged.hs" "$tmp/formatted.hs"; then
-        echo "stylish-haskell would change $f; run \`make format\` and re-stage." >&2
+        echo "fourmolu would change $f; run \`make format\` and re-stage." >&2
         fail=1
     fi
 done <<< "$files"
