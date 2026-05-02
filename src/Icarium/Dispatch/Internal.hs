@@ -60,6 +60,20 @@ data DispatchRequest = DispatchRequest
 dispatchBranchName :: Text -> Text
 dispatchBranchName did = "dispatch/" <> did
 
+data ResolvedOpts = ResolvedOpts
+    { roModel :: Text
+    , roEffort :: Effort
+    , roBase :: Text
+    }
+
+resolveDispatchOpts :: DispatchRequest -> ResolvedOpts
+resolveDispatchOpts req =
+    ResolvedOpts
+        { roModel = fromMaybe (dcModel (cfgDispatch (drConfig req))) (drModelOverride req)
+        , roEffort = fromMaybe (dcEffort (cfgDispatch (drConfig req))) (drEffortOverride req)
+        , roBase = fromMaybe (pcIntegrationBranch (cfgProject (drConfig req))) (drBaseOverride req)
+        }
+
 -- =============================================================
 -- Entry
 -- =============================================================
@@ -79,9 +93,7 @@ doDryRun conn req = do
     fakeId <- newId
     let dcfg = cfgDispatch (drConfig req)
         branch = dispatchBranchName fakeId
-        model = effectiveModel req
-        effort = effectiveEffort req
-        base = effectiveBase req
+        opts = resolveDispatchOpts req
         tools = dcTools dcfg
         allowed = dcAllowedTools dcfg
         scratchDir = dcScratchDir dcfg
@@ -89,16 +101,16 @@ doDryRun conn req = do
     TIO.putStrLn "=== DRY RUN ==="
     TIO.putStrLn $ "dispatch id (simulated): " <> fakeId
     TIO.putStrLn $ "task id:                 " <> taskId (drTask req)
-    TIO.putStrLn $ "base branch:             " <> base
+    TIO.putStrLn $ "base branch:             " <> roBase opts
     TIO.putStrLn $ "dispatch branch:         " <> branch
-    TIO.putStrLn $ "model:                   " <> model
-    TIO.putStrLn $ "effort:                  " <> effortText effort
+    TIO.putStrLn $ "model:                   " <> roModel opts
+    TIO.putStrLn $ "effort:                  " <> effortText (roEffort opts)
     TIO.putStrLn $ "tools:                   " <> T.intercalate "," tools
     TIO.putStrLn $ "allowed_tools:           " <> T.intercalate "," allowed
     TIO.putStrLn $ "scratch_dir:             " <> scratchDir
     TIO.putStrLn ""
     TIO.putStrLn "--- claude invocation ---"
-    TIO.putStrLn (renderCmdPreview model effort tools allowed)
+    TIO.putStrLn (renderCmdPreview (roModel opts) (roEffort opts) tools allowed)
     TIO.putStrLn ""
     TIO.putStrLn "--- prompt (via stdin) ---"
     TIO.putStr prompt
@@ -138,9 +150,10 @@ doReal conn req = do
         dcfg = cfgDispatch cfg
         task = drTask req
         dbPath = drDbPath req
-        base = effectiveBase req
-        model = effectiveModel req
-        effort = effectiveEffort req
+        opts = resolveDispatchOpts req
+        base = roBase opts
+        model = roModel opts
+        effort = roEffort opts
 
     checkPreconditions base
     baseSha <- either (ioFail . show) pure =<< Git.revParse base
@@ -237,20 +250,6 @@ buildPrompt conn t = do
     let refIds = map knowledgeId refs
         dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
     pure (renderTaskPrompt t refs dedupedCat deps)
-
-effectiveModel :: DispatchRequest -> Text
-effectiveModel req =
-    fromMaybe (dcModel (cfgDispatch (drConfig req))) (drModelOverride req)
-
-effectiveEffort :: DispatchRequest -> Effort
-effectiveEffort req =
-    fromMaybe (dcEffort (cfgDispatch (drConfig req))) (drEffortOverride req)
-
-effectiveBase :: DispatchRequest -> Text
-effectiveBase req =
-    fromMaybe
-        (pcIntegrationBranch (cfgProject (drConfig req)))
-        (drBaseOverride req)
 
 ioFail :: String -> IO a
 ioFail = ioError . userError
