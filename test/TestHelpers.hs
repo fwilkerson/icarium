@@ -1,5 +1,6 @@
 module TestHelpers (
     withTestDb,
+    withBaseTestDb,
     mkCat,
     mkKnowledge,
     attachKnowledgeCats,
@@ -11,13 +12,22 @@ import Control.Monad (forM_)
 import Data.Text (Text)
 import Database.SQLite.Simple (Connection, close, open)
 
+import Icarium.Db (migrateDb)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Knowledge qualified as RK
 import Icarium.Schema (applySchema)
 import Icarium.Types
 
+-- | In-memory DB at the full current schema (base + all migrations).
 withTestDb :: (Connection -> IO a) -> IO a
 withTestDb act = bracket (open ":memory:") close $ \conn -> do
+    applySchema conn
+    migrateDb conn
+    act conn
+
+-- | In-memory DB at the base schema only (user_version = 1, no migrations).
+withBaseTestDb :: (Connection -> IO a) -> IO a
+withBaseTestDb act = bracket (open ":memory:") close $ \conn -> do
     applySchema conn
     act conn
 

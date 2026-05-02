@@ -12,7 +12,7 @@ module Icarium.Dispatch.Claude (
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (SomeException, bracket, handle, try)
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
 import Data.Text (Text)
@@ -51,7 +51,7 @@ import System.Timeout (timeout)
 
 import Icarium.Config (DispatchConfig (..))
 import Icarium.Db (openDb)
-import Icarium.Dispatch.Tick (TickAction (..), emptyTickState, summariseTick)
+import Icarium.Dispatch.Tick (TickAction (..), TickState (..), emptyTickState, summariseTick)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Types
 
@@ -175,6 +175,14 @@ teeAndHeartbeat dbPath src logH did title = do
                 let ts = formatTime defaultTimeLocale "%H:%M:%S" now
                     (outLines, st', action) = summariseTick ts line st
                 mapM_ (hPutStrLn stderr) outLines
+                let tokensChanged =
+                        tsLastIn st' /= tsLastIn st
+                            || tsLastOut st' /= tsLastOut st
+                            || tsLastCache st' /= tsLastCache st
+                when tokensChanged $
+                    void $
+                        (try :: IO () -> IO (Either SomeException ())) $
+                            RD.updateTokens c d (tsLastIn st') (tsLastOut st') (tsLastCache st')
                 case action of
                     TickContinue -> loop h lh d st' c
                     TickKill reason -> do

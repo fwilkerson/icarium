@@ -309,6 +309,9 @@ data Dispatch = Dispatch
     , dispatchLastCommit :: Maybe Text
     , dispatchNotes :: Maybe Text
     , dispatchLogPath :: Maybe Text
+    , dispatchTokensIn :: Maybe Int
+    , dispatchTokensOut :: Maybe Int
+    , dispatchTokensCacheRead :: Maybe Int
     }
     deriving (Show)
 
@@ -316,6 +319,9 @@ instance FromRow Dispatch where
     fromRow =
         Dispatch
             <$> field
+            <*> field
+            <*> field
+            <*> field
             <*> field
             <*> field
             <*> field

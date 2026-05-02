@@ -58,6 +58,11 @@ tests =
             , testCase "bad SQL rolls back; user_version unchanged" testMigrateBadSqlRollback
             ]
         , testGroup
+            "dispatch token columns"
+            [ testCase "FromRow reads populated token columns" testDispatchTokensPopulated
+            , testCase "FromRow reads NULL token columns as Nothing" testDispatchTokensNull
+            ]
+        , testGroup
             "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
             [ testCase "right on full id" testResolveDispatchFullId
             , testCase "right on unique prefix" testResolveDispatchPrefix
@@ -259,7 +264,7 @@ testStaleRef = withTestDb $ \c -> do
 -- =============================================================
 
 testInitialSchema :: IO ()
-testInitialSchema = withTestDb $ \conn -> do
+testInitialSchema = withBaseTestDb $ \conn -> do
     v <- dbSchemaVersion conn
     v @?= (1 :: Int64)
     tableRows <-
@@ -292,7 +297,7 @@ testKnowledgeCategoriesCascade = withTestDb $ \conn -> do
 -- =============================================================
 
 testMigrateAdvances :: IO ()
-testMigrateAdvances = withTestDb $ \conn -> do
+testMigrateAdvances = withBaseTestDb $ \conn -> do
     v0 <- dbSchemaVersion conn
     v0 @?= 1
     migrateDb conn
@@ -300,12 +305,13 @@ testMigrateAdvances = withTestDb $ \conn -> do
     assertBool "version advanced past 1 after migrateDb" (v1 > 1)
 
 testMigrateBadSqlRollback :: IO ()
-testMigrateBadSqlRollback = withTestDb $ \conn -> do
+testMigrateBadSqlRollback = withBaseTestDb $ \conn -> do
+    v0 <- dbSchemaVersion conn
     let m = mkSqlMigration 99 "THIS IS NOT VALID SQL AT ALL"
     result <- try (migrationUp m conn) :: IO (Either SomeException ())
     assertBool "bad migration should throw" (either (const True) (const False) result)
-    v <- dbSchemaVersion conn
-    v @?= 1
+    v1 <- dbSchemaVersion conn
+    v1 @?= v0
 
 -- =============================================================
 -- resolveDispatchId tests
@@ -841,3 +847,65 @@ testSearchNoMatch = withTestDb $ \c -> do
     _ <- mkKnowledge c "some title" "some body"
     results <- RS.searchEntries c "xyzzy_no_match" Nothing 10
     null results @?= True
+
+-- =============================================================
+-- dispatch token column tests
+-- =============================================================
+
+insertDispatchWithTokens :: Connection -> Text -> Text -> Maybe Int -> Maybe Int -> Maybe Int -> IO ()
+insertDispatchWithTokens c did tid mIn mOut mCache =
+    execute
+        c
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, model, effort, \
+            \ tokens_in, tokens_out, tokens_cache_read) \
+            \VALUES (?,?,?,?,?,?,?,?,?,?)"
+        )
+        ( did
+        , tid
+        , "dispatch/" <> did
+        , "main" :: Text
+        , "0000000000000000000000000000000000000000" :: Text
+        , "claude-sonnet-4-6" :: Text
+        , "medium" :: Text
+        , mIn
+        , mOut
+        , mCache
+        )
+
+testDispatchTokensPopulated :: IO ()
+testDispatchTokensPopulated = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Token task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                }
+    let did = "01DISP0000000000000000001D" :: Text
+    insertDispatchWithTokens c did tid (Just 1234) (Just 567) (Just 89)
+    Just d <- RD.getDispatch c did
+    dispatchTokensIn d @?= Just 1234
+    dispatchTokensOut d @?= Just 567
+    dispatchTokensCacheRead d @?= Just 89
+
+testDispatchTokensNull :: IO ()
+testDispatchTokensNull = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "No token task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                }
+    let did = "01DISP0000000000000000002D" :: Text
+    insertDispatchWithTokens c did tid Nothing Nothing Nothing
+    Just d <- RD.getDispatch c did
+    dispatchTokensIn d @?= Nothing
+    dispatchTokensOut d @?= Nothing
+    dispatchTokensCacheRead d @?= Nothing

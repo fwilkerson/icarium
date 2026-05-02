@@ -7,6 +7,7 @@ module Icarium.Repo.Dispatch (
     listOpenDispatches,
     listDispatches,
     updateHeartbeat,
+    updateTokens,
     setLastCommit,
     setPid,
     updateNotes,
@@ -35,7 +36,7 @@ dispatchCols :: Text
 dispatchCols =
     "id, task_id, branch, base_branch, base_sha, pid, model, effort, \
     \started_at, heartbeat_at, ended_at, outcome, merge_sha, last_commit, \
-    \notes, log_path"
+    \notes, log_path, tokens_in, tokens_out, tokens_cache_read"
 
 {- | Insert a dispatch. The caller supplies the id so that the branch
 name and log path (which both embed the id) can be computed before
@@ -119,6 +120,17 @@ updateHeartbeat conn did =
         conn
         (Query "UPDATE dispatches SET heartbeat_at = datetime('now') WHERE id = ?")
         (Only did)
+
+updateTokens :: Connection -> Text -> Int -> Int -> Int -> IO ()
+updateTokens conn did tokIn tokOut tokCache =
+    execute
+        conn
+        ( Query
+            "UPDATE dispatches \
+            \SET tokens_in = ?, tokens_out = ?, tokens_cache_read = ? \
+            \WHERE id = ?"
+        )
+        (tokIn, tokOut, tokCache, did)
 
 setLastCommit :: Connection -> Text -> Text -> IO ()
 setLastCommit conn did sha =

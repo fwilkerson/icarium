@@ -400,12 +400,27 @@ renderDispatch d mt ks =
         , field "last_commit" (fromMaybe "" (dispatchLastCommit d))
         , field "log_path" (fromMaybe "" (dispatchLogPath d))
         , field "notes" (fromMaybe "" (dispatchNotes d))
-        , ""
-        , "Knowledge added:"
         ]
+            ++ tokensLine
+            ++ [ ""
+               , "Knowledge added:"
+               ]
             ++ knowledgeLines
   where
     field k v = padr 14 (k <> ":") <> " " <> v
+    tokensLine = case (dispatchTokensIn d, dispatchTokensOut d, dispatchTokensCacheRead d) of
+        (Just i, Just o, Just c) ->
+            [ field
+                "tokens"
+                ( "in "
+                    <> T.pack (show i)
+                    <> " / out "
+                    <> T.pack (show o)
+                    <> " / cache_read "
+                    <> T.pack (show c)
+                )
+            ]
+        _ -> []
     knowledgeLines = case ks of
         [] -> ["  (none)"]
         _ -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks

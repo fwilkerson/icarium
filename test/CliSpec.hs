@@ -2,6 +2,7 @@ module CliSpec (tests) where
 
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.List (isInfixOf)
+import Database.SQLite.Simple (Query (..), close, execute, open)
 import System.Directory (makeAbsolute)
 import System.Exit (ExitCode (..))
 import System.IO.Temp (withSystemTempDirectory)
@@ -75,6 +76,8 @@ tests =
         , testCase "search: --kind task excludes knowledge results" testSearchKindTask
         , testCase "search: --no-snippet suppresses indented line" testSearchNoSnippet
         , testCase "search: empty result prints (no matches)" testSearchNoMatches
+        , testCase "dispatch show: tokens line present when values set" testDispatchShowTokensPresent
+        , testCase "dispatch show: tokens line absent when all NULL" testDispatchShowTokensAbsent
         ]
 
 testTaskRoundtrip :: IO ()
@@ -436,3 +439,64 @@ testSearchNoMatches = withTempDb $ \db -> do
     (code, out, _) <- runIcarium db ["search", "xyzzy_nothing_matches_this_99"]
     code @?= ExitSuccess
     assertBool "(no matches) printed" ("(no matches)" `isInfixOf` out)
+
+testDispatchShowTokensPresent :: IO ()
+testDispatchShowTokensPresent = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    (_, addOut, _) <- runIcarium db ["task", "add", "Token task", "--state", "ready"]
+    let tid = head (words addOut)
+        did = "01TOKN0000000000000000001T"
+    conn <- open db
+    execute
+        conn
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, model, effort, \
+            \ tokens_in, tokens_out, tokens_cache_read) \
+            \VALUES (?,?,?,?,?,?,?,?,?,?)"
+        )
+        ( did
+        , tid
+        , "dispatch/" ++ did
+        , "main" :: String
+        , "abc123" :: String
+        , "claude-sonnet-4-6" :: String
+        , "medium" :: String
+        , 1234 :: Int
+        , 567 :: Int
+        , 89 :: Int
+        )
+    close conn
+    (code, out, _) <- runIcarium db ["dispatch", "show", did]
+    code @?= ExitSuccess
+    assertBool "tokens line present" ("tokens:" `isInfixOf` out)
+    assertBool "in count" ("in 1234" `isInfixOf` out)
+    assertBool "out count" ("out 567" `isInfixOf` out)
+    assertBool "cache_read count" ("cache_read 89" `isInfixOf` out)
+
+testDispatchShowTokensAbsent :: IO ()
+testDispatchShowTokensAbsent = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    (_, addOut, _) <- runIcarium db ["task", "add", "No token task", "--state", "ready"]
+    let tid = head (words addOut)
+        did = "01TOKN0000000000000000002T"
+    conn <- open db
+    execute
+        conn
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, model, effort) \
+            \VALUES (?,?,?,?,?,?,?)"
+        )
+        ( did
+        , tid
+        , "dispatch/" ++ did
+        , "main" :: String
+        , "abc123" :: String
+        , "claude-sonnet-4-6" :: String
+        , "medium" :: String
+        )
+    close conn
+    (code, out, _) <- runIcarium db ["dispatch", "show", did]
+    code @?= ExitSuccess
+    assertBool "tokens line absent" (not ("tokens:" `isInfixOf` out))
