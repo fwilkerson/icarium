@@ -36,146 +36,159 @@ api_retry events are seen with no substantive turn between them.
 summariseTick :: String -> BC.ByteString -> TickState -> ([String], TickState, TickAction)
 summariseTick ts bytes st0 =
     let st = st0{tsEventCount = tsEventCount st0 + 1}
+        fallback = ([formatRow ts '?' "unknown" (BC.unpack (BC.take 120 bytes))], st, TickContinue)
      in case decodeStrict bytes :: Maybe Value of
-            Nothing -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st, TickContinue)
-            Just val -> case val of
-                Object obj ->
-                    let (outLines, st') = parseEvent st obj
-                        action
-                            | tsConsecutiveRetries st' >= 3 =
-                                TickKill
-                                    ( "retry-storm: "
-                                        <> T.pack (show (tsConsecutiveRetries st'))
-                                        <> " consecutive api_retry events"
-                                    )
-                            | otherwise = TickContinue
-                     in (outLines, st', action)
-                _ -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st, TickContinue)
+            Nothing -> fallback
+            Just (Object obj) ->
+                let (outLines, st') = parseEvent ts st obj
+                    action
+                        | tsConsecutiveRetries st' >= 3 =
+                            TickKill
+                                ( "retry-storm: "
+                                    <> T.pack (show (tsConsecutiveRetries st'))
+                                    <> " consecutive api_retry events"
+                                )
+                        | otherwise = TickContinue
+                 in (outLines, st', action)
+            Just _ -> fallback
+
+formatRow :: String -> Char -> String -> String -> String
+formatRow ts sym kw body = ts ++ "  " ++ [sym] ++ " " ++ pad kw ++ body
   where
     pad k = k ++ replicate (max 0 (14 - length k)) ' '
-    row sym kw body = ts ++ "  " ++ [sym] ++ " " ++ pad kw ++ body
 
-    parseEvent st obj = case lookStr "type" obj of
-        Just "system" -> handleSystem st obj
-        Just "assistant" -> handleAssistant st obj
-        Just "user" -> handleUser st obj
-        Just "result" -> handleResult st obj
-        Just "rate_limit_event" -> ([], st)
-        _ -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
+parseEvent :: String -> TickState -> Object -> ([String], TickState)
+parseEvent ts st obj = case lookStr "type" obj of
+    Just "system" -> handleSystem ts st obj
+    Just "assistant" -> handleAssistant ts st obj
+    Just "user" -> handleUser ts st obj
+    Just "result" -> handleResult ts st obj
+    Just "rate_limit_event" -> ([], st)
+    _ -> ([formatRow ts '?' "unknown" "unrecognised event type"], st)
 
-    handleSystem st obj = case lookStr "subtype" obj of
-        Just "api_retry" ->
-            let msg = maybe "" T.unpack (lookStr "message" obj)
-                st' = st{tsConsecutiveRetries = tsConsecutiveRetries st + 1}
-             in ([row '!' "api_retry" msg], st')
-        _ ->
-            let model = maybe "?" T.unpack (lookStr "model" obj)
-                sessId = maybe "?" (take 8 . T.unpack) (lookStr "session_id" obj)
-             in ([row '.' "system" ("model=" ++ model ++ " session=" ++ sessId)], st)
+handleSystem :: String -> TickState -> Object -> ([String], TickState)
+handleSystem ts st obj = case lookStr "subtype" obj of
+    Just "api_retry" ->
+        let msg = maybe "" T.unpack (lookStr "message" obj)
+            st' = st{tsConsecutiveRetries = tsConsecutiveRetries st + 1}
+         in ([formatRow ts '!' "api_retry" msg], st')
+    _ ->
+        let model = maybe "?" T.unpack (lookStr "model" obj)
+            sessId = maybe "?" (take 8 . T.unpack) (lookStr "session_id" obj)
+         in ([formatRow ts '.' "system" ("model=" ++ model ++ " session=" ++ sessId)], st)
 
-    handleAssistant st obj =
-        let msg = lookObj "message" obj
-            usageObj = msg >>= lookObj "usage"
-            inToks = usageObj >>= lookInt "input_tokens"
-            outToks = usageObj >>= lookInt "output_tokens"
-            cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
-            st1 =
-                st
-                    { tsLastIn = fromMaybe (tsLastIn st) inToks
-                    , tsLastOut = fromMaybe (tsLastOut st) outToks
-                    , tsLastCache = fromMaybe (tsLastCache st) cacheToks
-                    }
-            contents = msg >>= lookArr "content"
-            eventLine = do
-                xs <- contents
-                c <- case xs of (x : _) -> Just x; [] -> Nothing
-                parseContent c
-            -- substantive assistant content (tool_use/text/thinking) resets the retry counter
-            st2 = case eventLine of
-                Just _ -> st1{tsConsecutiveRetries = 0}
-                Nothing -> st1
-            (usageLines, st3) = checkUsagePeriodic st2
-         in (maybeToList eventLine ++ usageLines, st3)
+handleAssistant :: String -> TickState -> Object -> ([String], TickState)
+handleAssistant ts st obj =
+    let msg = lookObj "message" obj
+        usageObj = msg >>= lookObj "usage"
+        inToks = usageObj >>= lookInt "input_tokens"
+        outToks = usageObj >>= lookInt "output_tokens"
+        cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
+        st1 =
+            st
+                { tsLastIn = fromMaybe (tsLastIn st) inToks
+                , tsLastOut = fromMaybe (tsLastOut st) outToks
+                , tsLastCache = fromMaybe (tsLastCache st) cacheToks
+                }
+        contents = msg >>= lookArr "content"
+        eventLine = do
+            xs <- contents
+            c <- case xs of (x : _) -> Just x; [] -> Nothing
+            parseContent ts c
+        -- substantive assistant content (tool_use/text/thinking) resets the retry counter
+        st2 = case eventLine of
+            Just _ -> st1{tsConsecutiveRetries = 0}
+            Nothing -> st1
+        (usageLines, st3) = checkUsagePeriodic ts st2
+     in (maybeToList eventLine ++ usageLines, st3)
 
-    parseContent (Object c) = case lookStr "type" c of
-        Just "thinking" ->
-            let txt = maybe "" (take 80 . T.unpack) (lookStr "thinking" c)
-             in Just (row '>' "thinking" txt)
-        Just "text" ->
-            let txt = maybe "" (take 80 . T.unpack) (lookStr "text" c)
-             in Just (row '>' "assistant" txt)
-        Just "tool_use" ->
-            let name = maybe "?" T.unpack (lookStr "name" c)
-                inputV = lookObj "input" c
-                summary = summariseToolInput name inputV
-             in Just (row '*' "tool" (name ++ ": " ++ summary))
-        _ -> Nothing
-    parseContent _ = Nothing
+parseContent :: String -> Value -> Maybe String
+parseContent ts (Object c) = case lookStr "type" c of
+    Just "thinking" ->
+        let txt = maybe "" (take 80 . T.unpack) (lookStr "thinking" c)
+         in Just (formatRow ts '>' "thinking" txt)
+    Just "text" ->
+        let txt = maybe "" (take 80 . T.unpack) (lookStr "text" c)
+         in Just (formatRow ts '>' "assistant" txt)
+    Just "tool_use" ->
+        let name = maybe "?" T.unpack (lookStr "name" c)
+            inputV = lookObj "input" c
+            summary = summariseToolInput name inputV
+         in Just (formatRow ts '*' "tool" (name ++ ": " ++ summary))
+    _ -> Nothing
+parseContent _ _ = Nothing
 
-    handleUser st obj =
-        let msg = lookObj "message" obj
-            contents = fromMaybe [] (msg >>= lookArr "content")
-            errorLines = mapMaybe toolResultError contents
-            -- any tool_result (success or error) counts as a substantive user turn
-            st' =
-                if any isToolResult contents
-                    then st{tsConsecutiveRetries = 0}
-                    else st
-         in (errorLines, st')
+handleUser :: String -> TickState -> Object -> ([String], TickState)
+handleUser ts st obj =
+    let msg = lookObj "message" obj
+        contents = fromMaybe [] (msg >>= lookArr "content")
+        errorLines = mapMaybe (toolResultError ts) contents
+        -- any tool_result (success or error) counts as a substantive user turn
+        st' =
+            if any isToolResult contents
+                then st{tsConsecutiveRetries = 0}
+                else st
+     in (errorLines, st')
 
-    isToolResult (Object o) = lookStr "type" o == Just "tool_result"
-    isToolResult _ = False
+isToolResult :: Value -> Bool
+isToolResult (Object o) = lookStr "type" o == Just "tool_result"
+isToolResult _ = False
 
-    toolResultError (Object o)
-        | Just (String "tool_result") <- lookRaw "type" o
-        , Just (Bool True) <- lookRaw "is_error" o =
-            Just (row 'x' "tool_result" (errBody o))
-      where
-        errBody c = case lookRaw "content" c of
-            Just (String t) -> take 80 (T.unpack t)
-            _ -> "error"
-    toolResultError _ = Nothing
+toolResultError :: String -> Value -> Maybe String
+toolResultError ts (Object o)
+    | Just (String "tool_result") <- lookRaw "type" o
+    , Just (Bool True) <- lookRaw "is_error" o =
+        Just (formatRow ts 'x' "tool_result" (errBody o))
+  where
+    errBody c = case lookRaw "content" c of
+        Just (String t) -> take 80 (T.unpack t)
+        _ -> "error"
+toolResultError _ _ = Nothing
 
-    handleResult st obj =
-        let st' = st{tsConsecutiveRetries = 0}
-            subtype = maybe "?" T.unpack (lookStr "subtype" obj)
-            result = maybe "" (take 60 . T.unpack) (lookStr "result" obj)
-            usageObj = lookObj "usage" obj
-            inToks = usageObj >>= lookInt "input_tokens"
-            outToks = usageObj >>= lookInt "output_tokens"
-            cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
-            resultLine = row '+' "result" (subtype ++ ": " ++ result)
-            usageLine = case (inToks, outToks, cacheToks) of
-                (Just i, Just o, Just c) ->
-                    [ row
-                        '='
-                        "usage"
-                        ( "in "
-                            ++ show i
-                            ++ " / out "
-                            ++ show o
-                            ++ " / cache_read "
-                            ++ show c
-                        )
-                    ]
-                _ -> []
-         in (resultLine : usageLine, st')
+handleResult :: String -> TickState -> Object -> ([String], TickState)
+handleResult ts st obj =
+    let st' = st{tsConsecutiveRetries = 0}
+        subtype = maybe "?" T.unpack (lookStr "subtype" obj)
+        result = maybe "" (take 60 . T.unpack) (lookStr "result" obj)
+        usageObj = lookObj "usage" obj
+        inToks = usageObj >>= lookInt "input_tokens"
+        outToks = usageObj >>= lookInt "output_tokens"
+        cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
+        resultLine = formatRow ts '+' "result" (subtype ++ ": " ++ result)
+        usageLine = case (inToks, outToks, cacheToks) of
+            (Just i, Just o, Just c) ->
+                [ formatRow
+                    ts
+                    '='
+                    "usage"
+                    ( "in "
+                        ++ show i
+                        ++ " / out "
+                        ++ show o
+                        ++ " / cache_read "
+                        ++ show c
+                    )
+                ]
+            _ -> []
+     in (resultLine : usageLine, st')
 
-    checkUsagePeriodic st
-        | tsEventCount st >= 20 =
-            let line =
-                    row
-                        '='
-                        "usage"
-                        ( "in "
-                            ++ show (tsLastIn st)
-                            ++ " / out "
-                            ++ show (tsLastOut st)
-                            ++ " / cache_read "
-                            ++ show (tsLastCache st)
-                        )
-             in ([line], st{tsEventCount = 0})
-        | otherwise = ([], st)
+checkUsagePeriodic :: String -> TickState -> ([String], TickState)
+checkUsagePeriodic ts st
+    | tsEventCount st >= 20 =
+        let line =
+                formatRow
+                    ts
+                    '='
+                    "usage"
+                    ( "in "
+                        ++ show (tsLastIn st)
+                        ++ " / out "
+                        ++ show (tsLastOut st)
+                        ++ " / cache_read "
+                        ++ show (tsLastCache st)
+                    )
+         in ([line], st{tsEventCount = 0})
+    | otherwise = ([], st)
 
 summariseToolInput :: String -> Maybe Object -> String
 summariseToolInput "Bash" (Just o) = take 80 $ maybe "?" T.unpack (lookStr "command" o)
