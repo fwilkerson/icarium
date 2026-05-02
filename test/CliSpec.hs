@@ -48,6 +48,11 @@ tests = testGroup "CLI integration"
     , testCase "link --help has corrected argument order example"   testLinkHelpExample
     , testCase "link list emits header row when edges exist"        testLinkListHeader
     , testCase "know add --help and link add --help cross-reference each other" testHelpCrossRef
+    , testCase "task show --body prints only body"                 testTaskShowBody
+    , testCase "task show --prompt works"                          testTaskShowPrompt
+    , testCase "task show --body --prompt exits 2"                 testTaskShowBodyAndPrompt
+    , testCase "know show --body prints only body"                 testKnowShowBody
+    , testCase "task show --body round-trip via update --body-file" testTaskBodyRoundTrip
     ]
 
 testTaskRoundtrip :: IO ()
@@ -188,6 +193,61 @@ testHelpCrossRef = withTempDb $ \db -> do
 
     (_, linkOut, _) <- runIcarium db ["link", "add", "--help"]
     assertBool "link add --help mentions know add --derived-from" ("know add --derived-from" `isInfixOf` linkOut)
+
+testTaskShowBody :: IO ()
+testTaskShowBody = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Body test task", "--body", "hello world body"]
+    let tid = head (words addOut)
+
+    (code, out, _) <- runIcarium db ["task", "show", tid, "--body"]
+    code @?= ExitSuccess
+    out @?= "hello world body"
+
+testTaskShowPrompt :: IO ()
+testTaskShowPrompt = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Prompt test task", "--state", "ready"]
+    let tid = head (words addOut)
+
+    (code, out, _) <- runIcarium db ["task", "show", tid, "--prompt"]
+    code @?= ExitSuccess
+    assertBool "prompt output contains task id" (tid `isInfixOf` out)
+    assertBool "prompt output contains title"   ("Prompt test task" `isInfixOf` out)
+
+testTaskShowBodyAndPrompt :: IO ()
+testTaskShowBodyAndPrompt = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Conflict test"]
+    let tid = head (words addOut)
+
+    (code, _, err) <- runIcarium db ["task", "show", tid, "--body", "--prompt"]
+    code @?= ExitFailure 2
+    assertBool "error mentions mutual exclusion" ("mutually exclusive" `isInfixOf` err)
+
+testKnowShowBody :: IO ()
+testKnowShowBody = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["know", "add", "Body test entry", "--body", "knowledge body text"]
+    let kid = head (words addOut)
+
+    (code, out, _) <- runIcarium db ["know", "show", kid, "--body"]
+    code @?= ExitSuccess
+    out @?= "knowledge body text"
+
+testTaskBodyRoundTrip :: IO ()
+testTaskBodyRoundTrip = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db      = dir <> "/icarium.db"
+        bodyFile = dir <> "/body.txt"
+
+    (_, addOut, _) <- runIcarium db ["task", "add", "Round-trip task", "--body", "original body\nline two"]
+    let tid = head (words addOut)
+
+    -- Extract body to file, re-apply via --body-file, confirm no change.
+    (_, bodyOut, _) <- runIcarium db ["task", "show", tid, "--body"]
+    writeFile bodyFile bodyOut
+
+    (uCode, _, _) <- runIcarium db ["task", "update", tid, "--body-file", bodyFile]
+    uCode @?= ExitSuccess
+
+    (_, bodyOut2, _) <- runIcarium db ["task", "show", tid, "--body"]
+    bodyOut2 @?= bodyOut
 
 minimalIcariumToml :: String
 minimalIcariumToml = unlines

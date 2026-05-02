@@ -181,19 +181,26 @@ buildKnowledgeRows c ks = do
 -- show
 -- =============================================================
 
-newtype ShowOpts = ShowOpts { sId :: Text }
+data ShowOpts = ShowOpts
+    { sId   :: Text
+    , sBody :: Bool
+    }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "KNOWLEDGE_ID")
+    <*> switch (long "body" <> help "Print only the knowledge body and nothing else")
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
     kid <- resolveOrFatal (RK.resolveKnowledgeId c (sId o))
     mk   <- RK.getKnowledge c kid
     k    <- maybe (fatal 1 ("knowledge not found: " <> T.unpack kid)) pure mk
-    cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
-    TIO.putStr (Render.renderKnowledge k cats)
+    if sBody o
+        then TIO.putStr (knowledgeBody k)
+        else do
+            cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
+            TIO.putStr (Render.renderKnowledge k cats)
 
 -- =============================================================
 -- update

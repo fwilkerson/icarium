@@ -167,44 +167,43 @@ buildTaskRows c ts = do
 -- show
 -- =============================================================
 
-data ShowFormat = SFHuman | SFPrompt
-
-showFormatReader :: ReadM ShowFormat
-showFormatReader = eitherReader $ \s -> case s of
-    "human"  -> Right SFHuman
-    "prompt" -> Right SFPrompt
-    _        -> Left ("invalid format: " <> s <> "; expected human or prompt")
-
 data ShowOpts = ShowOpts
     { sId     :: Text
-    , sFormat :: ShowFormat
+    , sPrompt :: Bool
+    , sBody   :: Bool
     }
 
 showP :: Parser ShowOpts
 showP = ShowOpts . T.pack
     <$> strArgument (metavar "TASK_ID")
-    <*> option showFormatReader
-            (  long "format"
-            <> metavar "FORMAT"
-            <> value SFHuman
-            <> help "Output format: human (default) or prompt"
-            )
+    <*> switch (long "prompt" <> help "Render task as an LLM prompt context block")
+    <*> switch (long "body"   <> help "Print only the task body and nothing else")
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = withDb db $ \c -> do
-    tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
-    mt  <- RT.getTask c tid
-    t   <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
-    refs <- RE.referencedKnowledge c (taskId t)
-    deps <- RE.dependencyTasks     c (taskId t)
-    cats <- RC.taskCategoriesFor   c (taskId t)
-    catMatch <- RK.categoryMatchedKnowledge c cats 5
-    let refIds     = map knowledgeId refs
-        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
-    utf8 <- detectUtf8
-    TIO.putStr $ case sFormat o of
-        SFPrompt -> Render.renderTaskPrompt t refs dedupedCat deps
-        SFHuman  -> Render.renderTaskHuman utf8 t refs deps cats
+runShow db o = do
+    when (sPrompt o && sBody o) $
+        fatal 2 "--body and --prompt are mutually exclusive"
+    withDb db $ \c -> do
+        tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
+        mt  <- RT.getTask c tid
+        t   <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
+        if sBody o
+            then TIO.putStr (taskBody t)
+            else if sPrompt o
+                then do
+                    refs <- RE.referencedKnowledge c (taskId t)
+                    deps <- RE.dependencyTasks     c (taskId t)
+                    cats <- RC.taskCategoriesFor   c (taskId t)
+                    catMatch <- RK.categoryMatchedKnowledge c cats 5
+                    let refIds     = map knowledgeId refs
+                        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+                    TIO.putStr (Render.renderTaskPrompt t refs dedupedCat deps)
+                else do
+                    refs <- RE.referencedKnowledge c (taskId t)
+                    deps <- RE.dependencyTasks     c (taskId t)
+                    cats <- RC.taskCategoriesFor   c (taskId t)
+                    utf8 <- detectUtf8
+                    TIO.putStr (Render.renderTaskHuman utf8 t refs deps cats)
 
 -- =============================================================
 -- update
