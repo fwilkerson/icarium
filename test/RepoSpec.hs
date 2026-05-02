@@ -114,6 +114,11 @@ tests =
             , testCase "ICARIUM_TASK_ID set but task missing → empty" testAutoDeriveDepsTaskMissing
             ]
         , testGroup
+            "no_commit column"
+            [ testCase "insertTask with ntNoCommit=True round-trips through getTask" testNoCommitInsert
+            , testCase "tuNoCommit=Just True sets no_commit; Just False clears it" testNoCommitUpdate
+            ]
+        , testGroup
             "updateTask block_reason invariant"
             [ testCase "transition Blocked → Done clears block_reason" testUpdateClearsBlockReasonOnDone
             , testCase "transition Blocked → Ready clears block_reason" testUpdateClearsBlockReasonOnReady
@@ -345,6 +350,7 @@ testResolveDispatchFullId = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     let did = "01AAAA000000000000000000AA" :: Text
     insertTestDispatch c did tid
@@ -361,6 +367,7 @@ testResolveDispatchPrefix = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     let did = "01AAAA000000000000000000AA" :: Text
     insertTestDispatch c did tid
@@ -384,6 +391,7 @@ testResolveDispatchAmbiguous = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     let did1 = "01BBBB000000000000000000AA" :: Text
         did2 = "01BBBB000000000000000000BB" :: Text
@@ -413,6 +421,7 @@ testResolveTaskPrefix = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     r <- RT.resolveTaskId c (T.take 10 tid)
     r @?= Right tid
@@ -479,8 +488,8 @@ insertTestEdge c src =
 
 testResolveEdgePrefix :: IO ()
 testResolveEdgePrefix = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     eid <- insertTestEdge c t1 t2
     r <- RE.resolveEdgeId c (T.take 10 eid)
     r @?= Right eid
@@ -494,9 +503,9 @@ testResolveEdgeMissing = withTestDb $ \c -> do
 
 testResolveEdgeAmbiguous :: IO ()
 testResolveEdgeAmbiguous = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
-    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     let eid1 = "01EEEE000000000000000000AA" :: Text
         eid2 = "01EEEE000000000000000000BB" :: Text
     execute
@@ -518,9 +527,9 @@ testResolveEdgeAmbiguous = withTestDb $ \c -> do
 
 testListEdgesSrcKindFilter :: IO ()
 testListEdgesSrcKindFilter = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
-    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- RK.insertKnowledge c RK.NewKnowledge{RK.nkTitle = "K", RK.nkBody = ""}
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
     _ <- RE.insertEdge c References TaskNode t1 KnowledgeNode kid
@@ -536,7 +545,7 @@ testListEdgesSrcKindFilter = withTestDb $ \c -> do
 
 testResolveNodeTask :: IO ()
 testResolveNodeTask = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     ts <- RT.getTasksByPrefix c (T.take 10 tid)
     ks <- RK.getKnowledgesByPrefix c (T.take 10 tid)
     (length ts, length ks) @?= (1, 0)
@@ -617,6 +626,7 @@ testSyncBlocksInUse = withTestDb $ \conn -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     RC.attachTaskCategory conn tid cid
     let cfg = CategoriesConfig{catDomains = [], catDisciplines = []}
@@ -644,6 +654,7 @@ testAutoDeriveDepsEdgeInserted = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     result <- autoDeriveDeps c [] (Just (T.unpack tid))
     result @?= [(TaskNode, tid)]
@@ -658,6 +669,7 @@ testAutoDeriveDepsExplicitWins = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     otherTid <-
         RT.insertTask
@@ -667,6 +679,7 @@ testAutoDeriveDepsExplicitWins = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     result <- autoDeriveDeps c [otherTid] (Just (T.unpack tid))
     result @?= []
@@ -682,6 +695,44 @@ testAutoDeriveDepsTaskMissing = withTestDb $ \c -> do
     result @?= []
 
 -- =============================================================
+-- no_commit column tests
+-- =============================================================
+
+testNoCommitInsert :: IO ()
+testNoCommitInsert = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Side-effect task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = True
+                }
+    Just t <- RT.getTask c tid
+    taskNoCommit t @?= True
+
+testNoCommitUpdate :: IO ()
+testNoCommitUpdate = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Commit task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    _ <- RT.updateTask c tid RT.emptyUpdate{RT.tuNoCommit = Just True}
+    Just t1 <- RT.getTask c tid
+    taskNoCommit t1 @?= True
+    _ <- RT.updateTask c tid RT.emptyUpdate{RT.tuNoCommit = Just False}
+    Just t2 <- RT.getTask c tid
+    taskNoCommit t2 @?= False
+
+-- =============================================================
 -- updateTask block_reason invariant tests
 -- =============================================================
 
@@ -695,6 +746,7 @@ insertBlockedTask c reason = do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     _ <-
         RT.updateTask
@@ -743,6 +795,7 @@ testTaskUpdateDomainReplaces = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     RC.attachTaskCategory c tid (categoryId domA)
     RC.detachTaskCategoriesByAxis c tid Domain
@@ -761,6 +814,7 @@ testTaskUpdateDomainClears = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     RC.attachTaskCategory c tid (categoryId dom)
     RC.detachTaskCategoriesByAxis c tid Domain
@@ -786,7 +840,7 @@ testKnowUpdateDomainReplaces = withTestDb $ \c -> do
 
 testSearchTitleBeforeBody :: IO ()
 testSearchTitleBeforeBody = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkKnowledge c "unrelated title" "body contains needle here"
     results <- RS.searchEntries c "needle" Nothing 10
     assertBool "two results returned" (length results == 2)
@@ -797,7 +851,7 @@ testSearchTitleBeforeBody = withTestDb $ \c -> do
 
 testSearchCrossKindRank :: IO ()
 testSearchCrossKindRank = withTestDb $ \c -> do
-    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = Ready, RT.ntPriority = Nothing}
+    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkKnowledge c "title has xyzzy" "body"
     results <- RS.searchEntries c "xyzzy" Nothing 10
     assertBool "knowledge title hit before task body hit" (RS.hitId (head results) == kid)
@@ -821,7 +875,7 @@ testSearchEscapeUnderscore = withTestDb $ \c -> do
 
 testSearchKindTask :: IO ()
 testSearchKindTask = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     _ <- mkKnowledge c "needle knowledge" "body"
     results <- RS.searchEntries c "needle" (Just TaskNode) 10
     length results @?= 1
@@ -829,7 +883,7 @@ testSearchKindTask = withTestDb $ \c -> do
 
 testSearchKindKnow :: IO ()
 testSearchKindKnow = withTestDb $ \c -> do
-    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkKnowledge c "needle knowledge" "body"
     results <- RS.searchEntries c "needle" (Just KnowledgeNode) 10
     length results @?= 1
@@ -884,6 +938,7 @@ testDispatchTokensPopulated = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     let did = "01DISP0000000000000000001D" :: Text
     insertDispatchWithTokens c did tid (Just 1234) (Just 567) (Just 89)
@@ -902,6 +957,7 @@ testDispatchTokensNull = withTestDb $ \c -> do
                 , RT.ntBody = ""
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     let did = "01DISP0000000000000000002D" :: Text
     insertDispatchWithTokens c did tid Nothing Nothing Nothing

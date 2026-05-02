@@ -33,6 +33,7 @@ data NewTask = NewTask
     , ntBody :: Text
     , ntState :: TaskState
     , ntPriority :: Maybe Int
+    , ntNoCommit :: Bool
     }
 
 data TaskUpdate = TaskUpdate
@@ -41,13 +42,14 @@ data TaskUpdate = TaskUpdate
     , tuState :: Maybe TaskState
     , tuPriority :: Maybe (Maybe Int) -- Nothing = unchanged, Just Nothing = clear
     , tuBlockReason :: Maybe (Maybe Text)
+    , tuNoCommit :: Maybe Bool
     }
 
 emptyUpdate :: TaskUpdate
-emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
+emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing Nothing
 
 taskCols :: Text
-taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at"
+taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at, no_commit"
 
 insertTask :: Connection -> NewTask -> IO Text
 insertTask conn NewTask{..} = do
@@ -55,11 +57,14 @@ insertTask conn NewTask{..} = do
     execute
         conn
         ( Query
-            "INSERT INTO tasks (id, title, body, state, priority) \
-            \VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO tasks (id, title, body, state, priority, no_commit) \
+            \VALUES (?, ?, ?, ?, ?, ?)"
         )
-        (tid, ntTitle, ntBody, ntState, ntPriority)
+        (tid, ntTitle, ntBody, ntState, ntPriority, boolToInt ntNoCommit)
     pure tid
+  where
+    boolToInt True = 1 :: Int
+    boolToInt False = 0
 
 getTask :: Connection -> Text -> IO (Maybe Task)
 getTask conn tid = do
@@ -149,14 +154,18 @@ updateTask conn tid TaskUpdate{..} = do
                     if newState == Blocked
                         then fromMaybe (taskBlockReason t) tuBlockReason
                         else Nothing
+                newNoCommit = boolToInt (fromMaybe (taskNoCommit t) tuNoCommit)
             execute
                 conn
                 ( Query
                     "UPDATE tasks SET title=?, body=?, state=?, \
-                    \priority=?, block_reason=? WHERE id=?"
+                    \priority=?, block_reason=?, no_commit=? WHERE id=?"
                 )
-                (newTitle, newBody, newState, newPrio, newBlock, tid)
+                (newTitle, newBody, newState, newPrio, newBlock, newNoCommit, tid)
             pure True
+  where
+    boolToInt True = 1 :: Int
+    boolToInt False = 0
 
 deleteTask :: Connection -> Text -> IO Bool
 deleteTask conn tid = do

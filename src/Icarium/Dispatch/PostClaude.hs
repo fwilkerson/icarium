@@ -22,11 +22,12 @@ import Icarium.Types
 handlePostClaude ::
     DispatchCtx ->
     Config ->
+    Bool ->
     ExitCode ->
     Text ->
     FilePath ->
     IO DispatchResult
-handlePostClaude dx cfg exit baseSha logPath = do
+handlePostClaude dx cfg noCommit exit baseSha logPath = do
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
@@ -36,28 +37,41 @@ handlePostClaude dx cfg exit baseSha logPath = do
         cc = cfgCommands cfg
         finish o mSha notes =
             finishWith dx o mSha notes ret (Just logPath) (Just baseSha)
-        step = do
-            case exit of
-                ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
-                ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
-                ExitSuccess -> pure ()
-            porcelain <- liftIO Git.statusPorcelain
-            mBranchSha <- liftIO (Git.revParse branch)
-            mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)
-            liftIO $ case mBranchSha of
-                Right sha -> RD.setLastCommit conn did sha
-                Left _ -> pure ()
-            liftIO (runGate (ccBuild cc)) >>= either throwE pure
-            liftIO (runGate (ccTest cc)) >>= either throwE pure
-            gitStep "checkout base" (Git.checkout base)
-            gitStep "ff-merge" (Git.ffMerge branch)
-            liftIO (void (Git.deleteBranch branch))
-            either (const Nothing) Just <$> liftIO (Git.revParse base)
+        checkExit = case exit of
+            ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
+            ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
+            ExitSuccess -> pure ()
+        step
+            | noCommit = do
+                checkExit
+                porcelain <- liftIO Git.statusPorcelain
+                let porcStripped = T.strip porcelain
+                unless (T.null porcStripped) $
+                    throwE $
+                        "agent left uncommitted changes; refusing to merge\nuncommitted:\n"
+                            <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
+                gitStep "checkout base" (Git.checkout base)
+                liftIO (void (Git.deleteBranch branch))
+                pure Nothing
+            | otherwise = do
+                checkExit
+                porcelain <- liftIO Git.statusPorcelain
+                mBranchSha <- liftIO (Git.revParse branch)
+                mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)
+                liftIO $ case mBranchSha of
+                    Right sha -> RD.setLastCommit conn did sha
+                    Left _ -> pure ()
+                liftIO (runGate (ccBuild cc)) >>= either throwE pure
+                liftIO (runGate (ccTest cc)) >>= either throwE pure
+                gitStep "checkout base" (Git.checkout base)
+                gitStep "ff-merge" (Git.ffMerge branch)
+                liftIO (void (Git.deleteBranch branch))
+                either (const Nothing) Just <$> liftIO (Git.revParse base)
     runExceptT step >>= \case
         Left notes -> do
             checkpointDirtyTree did notes
             finish OFailure Nothing notes
-        Right mSha -> finish OSuccess mSha "merged"
+        Right mSha -> finish OSuccess mSha (if noCommit then "no-commit task" else "merged")
 
 {- | If the working tree is dirty, commit everything to the current branch with
 a wip message. Preserves in-flight work on the dispatch branch so a human

@@ -59,6 +59,7 @@ data AddOpts = AddOpts
     , aDiscipline :: Maybe Text
     , aDependsOn :: [Text]
     , aReferences :: [Text]
+    , aNoCommit :: Bool
     }
 
 addP :: Parser AddOpts
@@ -85,6 +86,7 @@ addP =
         <*> optional (textOption "discipline" "NAME" "Tag with this discipline category")
         <*> many (textOption "depends-on" "TASK_ID" "Add a depends_on edge to TASK_ID")
         <*> many (textOption "references" "KNOWLEDGE_ID" "Add a references edge to KNOWLEDGE_ID")
+        <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
@@ -106,6 +108,7 @@ runAdd db o = withDb db $ \c -> do
                 , RT.ntBody = body
                 , RT.ntState = aState o
                 , RT.ntPriority = aPriority o
+                , RT.ntNoCommit = aNoCommit o
                 }
     forM_ mDomain $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
     forM_ mDisc $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
@@ -234,6 +237,7 @@ data UpdateOpts = UpdateOpts
     , uBlockReason :: Maybe Text
     , uDomain :: Maybe Text
     , uDiscipline :: Maybe Text
+    , uNoCommit :: Maybe Bool
     }
 
 updateP :: Parser UpdateOpts
@@ -262,6 +266,10 @@ updateP =
         <*> optional (textOption "block-reason" "TEXT" "Reason for blocked state (required with --state blocked)")
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
+        <*> optional
+            ( flag' True (long "no-commit" <> help "Mark as side-effect-only (no code commits required)")
+                <|> flag' False (long "commit-required" <> help "Clear no-commit flag (commit required)")
+            )
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do
@@ -288,6 +296,7 @@ runUpdate db o = withDb db $ \c -> do
                 , RT.tuState = uState o
                 , RT.tuPriority = fmap Just (uPriority o)
                 , RT.tuBlockReason = fmap Just (uBlockReason o)
+                , RT.tuNoCommit = uNoCommit o
                 }
     ok <- RT.updateTask c tid upd
     if ok

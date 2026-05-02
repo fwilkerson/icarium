@@ -55,4 +55,5 @@ minTask =
         , taskBlockReason = Nothing
         , taskCreatedAt = "2026-01-01T00:00:00Z"
         , taskUpdatedAt = "2026-01-01T00:00:00Z"
+        , taskNoCommit = False
         }

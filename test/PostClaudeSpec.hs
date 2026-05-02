@@ -13,6 +13,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Config (CategoriesConfig (..), CommandsConfig (..), Config (..), DispatchConfig (..), ProjectConfig (..))
+import Icarium.Db (migrateDb)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), dresOutcome)
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude)
 import Icarium.Repo.Dispatch qualified as RD
@@ -59,6 +60,7 @@ withTestRepo k =
 withTestDb :: (Connection -> IO a) -> IO a
 withTestDb act = bracket (open ":memory:") close $ \conn -> do
     applySchema conn
+    migrateDb conn
     act conn
 
 minCfg :: Config
@@ -125,6 +127,7 @@ testHandlePostClaudeFailureCheckpoints =
                             , RT.ntBody = ""
                             , RT.ntState = Ready
                             , RT.ntPriority = Nothing
+                            , RT.ntNoCommit = False
                             }
                 RD.insertDispatch
                     conn
@@ -146,7 +149,7 @@ testHandlePostClaudeFailureCheckpoints =
                             , dxBranch = branch
                             , dxBase = "main"
                             }
-                res <- handlePostClaude dx minCfg (ExitFailure 1) baseSha "/dev/null"
+                res <- handlePostClaude dx minCfg False (ExitFailure 1) baseSha "/dev/null"
                 -- outcome is failure
                 dresOutcome res @?= OFailure
                 -- dispatch branch still exists

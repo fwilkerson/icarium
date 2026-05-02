@@ -198,6 +198,7 @@ data Task = Task
     , taskBlockReason :: Maybe Text
     , taskCreatedAt :: Text
     , taskUpdatedAt :: Text
+    , taskNoCommit :: Bool
     }
     deriving (Show)
 
@@ -212,6 +213,11 @@ instance FromRow Task where
             <*> field
             <*> field
             <*> field
+            <*> (intToBool <$> field)
+      where
+        intToBool :: Int -> Bool
+        intToBool 0 = False
+        intToBool _ = True
 
 data Knowledge = Knowledge
     { knowledgeId :: Text

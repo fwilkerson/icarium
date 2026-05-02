@@ -76,6 +76,7 @@ testTimeoutOutcome = withTempRepo $ \_repoDir -> withTestDb $ \conn -> do
                 , RT.ntBody = "body"
                 , RT.ntState = Ready
                 , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
                 }
     let did = "01DISPATCH00000000000000000"
     RD.insertDispatch
@@ -98,7 +99,7 @@ testTimeoutOutcome = withTempRepo $ \_repoDir -> withTestDb $ \conn -> do
                 , dxBranch = "dispatch/" <> did
                 , dxBase = "main"
                 }
-    res <- handlePostClaude dx fakeConfig timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
+    res <- handlePostClaude dx fakeConfig False timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
     dresOutcome res @?= OFailure
     assertBool
         "result notes say timed out"

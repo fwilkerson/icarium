@@ -23,7 +23,7 @@ data SearchHit = SearchHit
     }
 
 taskCols :: Text
-taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at"
+taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at, no_commit"
 
 knowCols :: Text
 knowCols = "id, title, body, stale, created_at, updated_at"

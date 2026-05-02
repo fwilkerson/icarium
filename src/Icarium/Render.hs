@@ -55,6 +55,7 @@ renderTaskHuman utf8 t refs deps cats =
         , priorityLine t
         ]
             <> blockReasonLines t
+            <> noCommitLine t
             <> [ "created:   " <> taskCreatedAt t
                , "updated:   " <> taskUpdatedAt t
                ]
@@ -76,6 +77,11 @@ blockReasonLines :: Task -> [Text]
 blockReasonLines t = case taskBlockReason t of
     Just r | not (T.null r) -> ["block_reason: " <> r]
     _ -> []
+
+noCommitLine :: Task -> [Text]
+noCommitLine t
+    | taskNoCommit t = ["no-commit:   yes"]
+    | otherwise = []
 
 {- | Combined links tree replacing the old flat dep/ref sections.
 

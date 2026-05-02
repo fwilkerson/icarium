@@ -1,0 +1,2 @@
+ALTER TABLE tasks ADD COLUMN no_commit INTEGER NOT NULL DEFAULT 0
+    CHECK (no_commit IN (0, 1));

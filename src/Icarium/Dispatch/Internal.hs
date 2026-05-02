@@ -208,7 +208,7 @@ doReal conn req = do
                         , rcLogPath = logPath
                         }
             exit <- runClaudeStreaming ctx dcfg
-            handlePostClaude dx cfg exit baseSha logPath
+            handlePostClaude dx cfg (taskNoCommit task) exit baseSha logPath
 
 checkPreconditions :: Text -> IO ()
 checkPreconditions base = do

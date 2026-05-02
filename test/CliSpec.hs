@@ -78,6 +78,8 @@ tests =
         , testCase "search: empty result prints (no matches)" testSearchNoMatches
         , testCase "dispatch show: tokens line present when values set" testDispatchShowTokensPresent
         , testCase "dispatch show: tokens line absent when all NULL" testDispatchShowTokensAbsent
+        , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
+        , testCase "task update --no-commit and --commit-required toggle flag" testTaskNoCommitUpdate
         ]
 
 testTaskRoundtrip :: IO ()
@@ -500,3 +502,37 @@ testDispatchShowTokensAbsent = withSystemTempDirectory "icarium-test" $ \dir -> 
     (code, out, _) <- runIcarium db ["dispatch", "show", did]
     code @?= ExitSuccess
     assertBool "tokens line absent" (not ("tokens:" `isInfixOf` out))
+
+testTaskNoCommitAddShow :: IO ()
+testTaskNoCommitAddShow = withTempDb $ \db -> do
+    (addCode, addOut, _) <- runIcarium db ["task", "add", "Side-effect task", "--no-commit"]
+    addCode @?= ExitSuccess
+    let tid = head (words addOut)
+
+    (showCode, showOut, _) <- runIcarium db ["task", "show", tid]
+    showCode @?= ExitSuccess
+    assertBool "no-commit shown in task show" ("no-commit" `isInfixOf` showOut)
+    assertBool "no-commit value is yes" ("yes" `isInfixOf` showOut)
+
+    (addCode2, addOut2, _) <- runIcarium db ["task", "add", "Regular task"]
+    addCode2 @?= ExitSuccess
+    let tid2 = head (words addOut2)
+
+    (showCode2, showOut2, _) <- runIcarium db ["task", "show", tid2]
+    showCode2 @?= ExitSuccess
+    assertBool "no-commit absent for regular task" (not ("no-commit" `isInfixOf` showOut2))
+
+testTaskNoCommitUpdate :: IO ()
+testTaskNoCommitUpdate = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Update flag task"]
+    let tid = head (words addOut)
+
+    (uCode, _, _) <- runIcarium db ["task", "update", tid, "--no-commit"]
+    uCode @?= ExitSuccess
+    (_, showOut, _) <- runIcarium db ["task", "show", tid]
+    assertBool "no-commit set after --no-commit" ("no-commit" `isInfixOf` showOut)
+
+    (uCode2, _, _) <- runIcarium db ["task", "update", tid, "--commit-required"]
+    uCode2 @?= ExitSuccess
+    (_, showOut2, _) <- runIcarium db ["task", "show", tid]
+    assertBool "no-commit cleared after --commit-required" (not ("no-commit" `isInfixOf` showOut2))
