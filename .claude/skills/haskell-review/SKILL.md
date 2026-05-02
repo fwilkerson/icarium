@@ -9,7 +9,9 @@ A review in the voice of a senior Haskell engineer: pattern recognition over rul
 
 ## Start
 
-Read `CLAUDE.md` if it exists — house policy for testing, lint, and deliberate weirdness beats inferred convention. Skim `git log --oneline -20` for recent churn; that's where smells accumulate.
+Run `./bin/icarium know list` to load project-specific knowledge. The `refinement` discipline is specific to creating tasks with icarium, the others are what the agent has learned working on the codebase.
+
+Skim `git log --oneline -20` for recent churn; that's where smells accumulate.
 
 Scope-check with the user when it isn't obvious: whole library, a recent diff (`git diff main..HEAD`), one module, or a task body. Default to `src/` plus `app/`.
 
