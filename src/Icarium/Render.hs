@@ -15,6 +15,8 @@ module Icarium.Render (
     DispatchRow (..),
     renderDispatchList,
     fmtSecs,
+    SearchHitRow (..),
+    renderSearchList,
 ) where
 
 import Data.List (sortBy)
@@ -22,6 +24,7 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 
+import Icarium.Repo.Search (SearchHit (..))
 import Icarium.Types
 
 -- =============================================================
@@ -451,6 +454,89 @@ fmtSecs s
             <> "h "
             <> T.pack (show ((s `mod` 3600) `div` 60))
             <> "m"
+
+-- =============================================================
+-- Search rendering
+-- =============================================================
+
+data SearchHitRow = SearchHitRow
+    { shrHit :: SearchHit
+    , shrCats :: [Category]
+    }
+
+{- | Render search results. Each hit shows kind letter, id, title, cats,
+status badge; body-match hits get an indented snippet line underneath.
+
+@useUnicode@: Unicode ellipsis in truncated titles.
+@isTty@: ANSI bold for match highlight; otherwise @**...**@.
+@noSnippet@: suppress the snippet line entirely.
+@q@: the original query string (used for snippet highlight).
+-}
+renderSearchList :: Bool -> Bool -> Bool -> Text -> [SearchHitRow] -> Text
+renderSearchList _ _ _ _ [] = "(no matches)\n"
+renderSearchList useUnicode isTty noSnippet q rows =
+    T.unlines $ concatMap renderRow rows
+  where
+    titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . hitTitle . shrHit) rows))
+    catWidth = maxLen 3 (map (T.length . formatCats . shrCats) rows)
+
+    snippetIndent = T.replicate 17 " "
+
+    renderRow sr =
+        let h = shrHit sr
+            kindPart = "  " <> kindLetter (hitKind h) <> "  "
+            idPart = padr 10 (T.take 10 (hitId h)) <> "  "
+            titPart = padr titleWidth (truncateTitle useUnicode titleWidth (hitTitle h))
+            catPart = padr catWidth (formatCats (shrCats sr))
+            badge = searchBadge h
+            badgePart = if T.null badge then "" else "  " <> badge
+            mainLine = kindPart <> idPart <> titPart <> "  " <> catPart <> badgePart
+            snippetLine
+                | noSnippet = []
+                | hitTitleMatch h = []
+                | otherwise =
+                    let snip = extractSnippet isTty q (hitBody h)
+                     in [snippetIndent <> snip | not (T.null snip)]
+         in mainLine : snippetLine
+
+kindLetter :: NodeKind -> Text
+kindLetter TaskNode = "T"
+kindLetter KnowledgeNode = "K"
+
+searchBadge :: SearchHit -> Text
+searchBadge h = case hitKind h of
+    TaskNode -> case hitState h of
+        Just s -> "[" <> stateBadgeText s <> "]"
+        Nothing -> ""
+    KnowledgeNode -> if hitStale h then "[stale]" else ""
+
+extractSnippet :: Bool -> Text -> Text -> Text
+extractSnippet _ _ "" = ""
+extractSnippet isTty q body =
+    let qLower = T.toLower q
+        bodyLower = T.toLower body
+        (before, rest) = T.breakOn qLower bodyLower
+     in if T.null rest
+            then ""
+            else
+                let pos = T.length before
+                    qLen = T.length q
+                    half = 40 :: Int
+                    start = max 0 (pos - half)
+                    end = min (T.length body) (pos + qLen + half)
+                    winLen = end - start
+                    snippet = T.take winLen (T.drop start body)
+                    prefix = if start > 0 then "..." else ""
+                    suffix = if end < T.length body then "..." else ""
+                    inSnippet = pos - start
+                    (preMatch, afterSnippet) = T.splitAt inSnippet snippet
+                    matchText = T.take qLen afterSnippet
+                    postMatch = T.drop qLen afterSnippet
+                 in prefix <> preMatch <> bold isTty matchText <> postMatch <> suffix
+
+bold :: Bool -> Text -> Text
+bold True t = "\ESC[1m" <> t <> "\ESC[0m"
+bold False t = "**" <> t <> "**"
 
 -- =============================================================
 -- Utilities

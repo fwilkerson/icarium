@@ -41,6 +41,7 @@ library
                       Icarium.Repo.Edge
                       Icarium.Repo.Category
                       Icarium.Repo.Dispatch
+                      Icarium.Repo.Search
                       Icarium.Commands.Util
                       Icarium.Commands.Init
                       Icarium.Commands.Doctor
@@ -49,6 +50,7 @@ library
                       Icarium.Commands.Link
                       Icarium.Commands.Category
                       Icarium.Commands.Dispatch
+                      Icarium.Commands.Search
     build-depends:    base          >= 4.18 && < 5,
                       text,
                       bytestring,

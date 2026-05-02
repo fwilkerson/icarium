@@ -6,6 +6,7 @@ import Icarium.Commands.Doctor qualified as Doctor
 import Icarium.Commands.Init qualified as Init
 import Icarium.Commands.Know qualified as Know
 import Icarium.Commands.Link qualified as Link
+import Icarium.Commands.Search qualified as Search
 import Icarium.Commands.Task qualified as Task
 import Icarium.Db (defaultDbPath)
 import Options.Applicative
@@ -19,6 +20,7 @@ data Command
     | CmdLink Link.Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
+    | CmdSearch Search.Options
 
 data Args = Args
     { argsDb :: FilePath
@@ -46,12 +48,23 @@ lsToList [] = []
 {- | If argv ends with a noun group (no subcommand given), append `--help`
 so the user gets the full help with available commands instead of just
 a "Missing: COMMAND" usage line.
+
+Guards against false-positive: if the preceding token starts with `--`,
+the noun is an option value (e.g. `search query --kind task`), not a
+bare subcommand.
 -}
 helpForBareNoun :: [String] -> [String]
 helpForBareNoun [] = []
 helpForBareNoun args
-    | last args `elem` nounGroups = args ++ ["--help"]
+    | last args `elem` nounGroups
+    , not (lastPrecededByFlag args) =
+        args ++ ["--help"]
     | otherwise = args
+  where
+    lastPrecededByFlag xs = case reverse xs of
+        (_ : prev : _) -> "--" `isPrefixOf` prev
+        _ -> False
+    isPrefixOf pfx s = take (length pfx) s == pfx
 
 runCmd :: FilePath -> Command -> IO ()
 runCmd db (CmdInit o) = Init.run db o
@@ -61,6 +74,7 @@ runCmd db (CmdKnow c) = Know.run db c
 runCmd db (CmdLink c) = Link.run db c
 runCmd db (CmdCategory c) = Category.run db c
 runCmd db (CmdDispatch c) = Dispatch.run db c
+runCmd db (CmdSearch o) = Search.run db o
 
 parser :: ParserInfo Args
 parser =
@@ -127,5 +141,11 @@ cmdP =
                 ( info
                     (CmdDispatch <$> Dispatch.parser <**> helper)
                     (progDesc "Manage dispatches (run, list, show, logs, recover). Example: icarium dispatch run --max 5")
+                )
+            <> command
+                "search"
+                ( info
+                    (CmdSearch <$> Search.parser <**> helper)
+                    (progDesc "Search tasks and knowledge by title and body. Example: icarium search fts5")
                 )
         )

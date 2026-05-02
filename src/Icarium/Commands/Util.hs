@@ -26,6 +26,7 @@ module Icarium.Commands.Util (
     -- * Small helpers
     subcmd,
     detectUtf8,
+    detectTty,
     textOption,
 ) where
 
@@ -39,7 +40,7 @@ import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Knowledge qualified as RK
@@ -117,6 +118,9 @@ resolveBody (BodyFile p) = TIO.readFile p
 -- | Shorthand for a subcommand with helper automatically attached.
 subcmd :: String -> String -> Parser a -> Mod CommandFields a
 subcmd n desc p = command n (info (p <**> helper) (progDesc desc))
+
+detectTty :: IO Bool
+detectTty = hIsTerminalDevice stdout
 
 -- | Detect whether the terminal locale is UTF-8 capable.
 detectUtf8 :: IO Bool

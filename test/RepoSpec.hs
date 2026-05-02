@@ -23,6 +23,7 @@ import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Knowledge qualified as RK
+import Icarium.Repo.Search qualified as RS
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -118,6 +119,17 @@ tests =
             [ testCase "task update --domain replaces existing domain" testTaskUpdateDomainReplaces
             , testCase "task update --domain empty string clears domain" testTaskUpdateDomainClears
             , testCase "know update --domain replaces not appends" testKnowUpdateDomainReplaces
+            ]
+        , testGroup
+            "searchEntries"
+            [ testCase "title hit ranks before body hit" testSearchTitleBeforeBody
+            , testCase "title hit from knowledge outranks body hit from task" testSearchCrossKindRank
+            , testCase "escapeLike: query containing % matches literally" testSearchEscapePercent
+            , testCase "escapeLike: query containing _ matches literally" testSearchEscapeUnderscore
+            , testCase "--kind task excludes knowledge hits" testSearchKindTask
+            , testCase "--kind know excludes task hits" testSearchKindKnow
+            , testCase "limit caps result count" testSearchLimit
+            , testCase "no match returns empty list" testSearchNoMatch
             ]
         ]
 
@@ -761,3 +773,71 @@ testKnowUpdateDomainReplaces = withTestDb $ \c -> do
     let doms = filter (\x -> categoryAxis x == Domain) cats
     length doms @?= 1
     map categoryName doms @?= ["domB"]
+
+-- =============================================================
+-- searchEntries tests
+-- =============================================================
+
+testSearchTitleBeforeBody :: IO ()
+testSearchTitleBeforeBody = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    kid <- mkKnowledge c "unrelated title" "body contains needle here"
+    results <- RS.searchEntries c "needle" Nothing 10
+    assertBool "two results returned" (length results == 2)
+    RS.hitId (head results) @?= tid
+    RS.hitTitleMatch (head results) @?= True
+    RS.hitId (results !! 1) @?= kid
+    RS.hitTitleMatch (results !! 1) @?= False
+
+testSearchCrossKindRank :: IO ()
+testSearchCrossKindRank = withTestDb $ \c -> do
+    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = Ready, RT.ntPriority = Nothing}
+    kid <- mkKnowledge c "title has xyzzy" "body"
+    results <- RS.searchEntries c "xyzzy" Nothing 10
+    assertBool "knowledge title hit before task body hit" (RS.hitId (head results) == kid)
+    RS.hitTitleMatch (head results) @?= True
+
+testSearchEscapePercent :: IO ()
+testSearchEscapePercent = withTestDb $ \c -> do
+    kid <- mkKnowledge c "100% correct" "body"
+    _ <- mkKnowledge c "unrelated" "body"
+    results <- RS.searchEntries c "100%" Nothing 10
+    length results @?= 1
+    RS.hitId (head results) @?= kid
+
+testSearchEscapeUnderscore :: IO ()
+testSearchEscapeUnderscore = withTestDb $ \c -> do
+    kid <- mkKnowledge c "snake_case naming" "body"
+    _ <- mkKnowledge c "unrelated" "body"
+    results <- RS.searchEntries c "snake_case" Nothing 10
+    length results @?= 1
+    RS.hitId (head results) @?= kid
+
+testSearchKindTask :: IO ()
+testSearchKindTask = withTestDb $ \c -> do
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    _ <- mkKnowledge c "needle knowledge" "body"
+    results <- RS.searchEntries c "needle" (Just TaskNode) 10
+    length results @?= 1
+    RS.hitId (head results) @?= tid
+
+testSearchKindKnow :: IO ()
+testSearchKindKnow = withTestDb $ \c -> do
+    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing}
+    kid <- mkKnowledge c "needle knowledge" "body"
+    results <- RS.searchEntries c "needle" (Just KnowledgeNode) 10
+    length results @?= 1
+    RS.hitId (head results) @?= kid
+
+testSearchLimit :: IO ()
+testSearchLimit = withTestDb $ \c -> do
+    forM_ [(1 :: Int) .. 5] $ \i ->
+        void $ mkKnowledge c ("needle entry " <> T.pack (show i)) "body"
+    results <- RS.searchEntries c "needle" Nothing 3
+    length results @?= 3
+
+testSearchNoMatch :: IO ()
+testSearchNoMatch = withTestDb $ \c -> do
+    _ <- mkKnowledge c "some title" "some body"
+    results <- RS.searchEntries c "xyzzy_no_match" Nothing 10
+    null results @?= True

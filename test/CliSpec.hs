@@ -70,6 +70,11 @@ tests =
           testCase "task --state ready errors with usage message" testBareTaskWithFlag
         , -- --help shows list once, not ls
           testCase "task --help shows list but not ls" testTaskHelpNoLs
+        , testCase "search: title-match and body-match both surface" testSearchBothKinds
+        , testCase "search: title hit on knowledge outranks body hit on task" testSearchCrossKindRank
+        , testCase "search: --kind task excludes knowledge results" testSearchKindTask
+        , testCase "search: --no-snippet suppresses indented line" testSearchNoSnippet
+        , testCase "search: empty result prints (no matches)" testSearchNoMatches
         ]
 
 testTaskRoundtrip :: IO ()
@@ -385,3 +390,49 @@ staleIcariumToml =
         , "domains     = [\"core\"]"
         , "disciplines = [\"development\"]"
         ]
+
+-- =============================================================
+-- search tests
+-- =============================================================
+
+testSearchBothKinds :: IO ()
+testSearchBothKinds = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["task", "add", "mytoken in title task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["know", "add", "unrelated knowledge", "--body", "body contains mytoken here"]
+    (code, out, _) <- runIcarium db ["search", "mytoken"]
+    code @?= ExitSuccess
+    assertBool "title match surfaces" ("mytoken in title task" `isInfixOf` out)
+    assertBool "body match surfaces" ("unrelated knowledge" `isInfixOf` out)
+
+testSearchCrossKindRank :: IO ()
+testSearchCrossKindRank = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["task", "add", "no match here", "--body", "body has xyzzy123", "--state", "ready"]
+    (_, kOut, _) <- runIcarium db ["know", "add", "xyzzy123 in title knowledge"]
+    let kid = take 10 (head (words kOut))
+    (code, out, _) <- runIcarium db ["search", "xyzzy123"]
+    code @?= ExitSuccess
+    let outLines = lines out
+    assertBool "knowledge title hit appears first" (kid `isInfixOf` head outLines)
+
+testSearchKindTask :: IO ()
+testSearchKindTask = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["task", "add", "needle task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["know", "add", "needle knowledge"]
+    (code, out, _) <- runIcarium db ["search", "needle", "--kind", "task"]
+    code @?= ExitSuccess
+    assertBool "task result present" ("needle task" `isInfixOf` out)
+    assertBool "knowledge result absent" (not ("needle knowledge" `isInfixOf` out))
+
+testSearchNoSnippet :: IO ()
+testSearchNoSnippet = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["know", "add", "some title", "--body", "the body has needle123 inside it"]
+    (code, out, _) <- runIcarium db ["search", "needle123", "--no-snippet"]
+    code @?= ExitSuccess
+    assertBool "title line present" ("some title" `isInfixOf` out)
+    assertBool "snippet line absent" (not ("needle123" `isInfixOf` unlines (tail (lines out))))
+
+testSearchNoMatches :: IO ()
+testSearchNoMatches = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["search", "xyzzy_nothing_matches_this_99"]
+    code @?= ExitSuccess
+    assertBool "(no matches) printed" ("(no matches)" `isInfixOf` out)
