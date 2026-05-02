@@ -14,13 +14,9 @@ import Icarium.Config (
     ProjectConfig (..),
     validateConfig,
  )
-import Icarium.Dispatch.Internal (
-    DispatchCtx (..),
-    DispatchResult (..),
-    handlePostClaude,
-    raceTimeout,
-    timeoutSentinel,
- )
+import Icarium.Dispatch.Claude (raceTimeout, timeoutSentinel)
+import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult (..))
+import Icarium.Dispatch.PostClaude (handlePostClaude)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types (

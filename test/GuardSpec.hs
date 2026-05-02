@@ -4,7 +4,7 @@ import Data.Text (Text)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
-import Icarium.Dispatch.Internal (postClaudeGuard)
+import Icarium.Dispatch.PostClaude (postClaudeGuard)
 
 tests :: TestTree
 tests =

@@ -8,6 +8,6 @@ module Icarium.Dispatch (
 import Icarium.Dispatch.Internal (
     DispatchRequest (..),
     DispatchResult (..),
-    applyOutcomeToTask,
     dispatch,
  )
+import Icarium.Dispatch.Outcome (applyOutcomeToTask)

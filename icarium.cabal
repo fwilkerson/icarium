@@ -28,6 +28,9 @@ library
                       Icarium.Git
                       Icarium.Dispatch
                       Icarium.Dispatch.Internal
+                      Icarium.Dispatch.Claude
+                      Icarium.Dispatch.PostClaude
+                      Icarium.Dispatch.Outcome
                       Icarium.Dispatch.Tick
                       Icarium.Heartbeat
                       Icarium.Repo.Internal
