@@ -9,6 +9,8 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Query (..), query)
 
 import Icarium.Repo.Internal (escapeLike)
+import Icarium.Repo.Knowledge (knowCols)
+import Icarium.Repo.Task (taskCols)
 import Icarium.Types
 
 data SearchHit = SearchHit
@@ -21,12 +23,6 @@ data SearchHit = SearchHit
     , hitState :: Maybe TaskState
     , hitStale :: Bool
     }
-
-taskCols :: Text
-taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at, no_commit"
-
-knowCols :: Text
-knowCols = "id, title, body, stale, created_at, updated_at"
 
 {- | Search tasks and knowledge for @q@. Results ranked: title hits first,
 then updated_at DESC. @mKind@ narrows to one table; @Nothing@ = both.

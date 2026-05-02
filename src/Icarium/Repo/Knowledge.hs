@@ -2,6 +2,8 @@ module Icarium.Repo.Knowledge (
     NewKnowledge (..),
     KnowledgeUpdate (..),
     emptyUpdate,
+    knowCols,
+    knowColsQualified,
     insertKnowledge,
     getKnowledge,
     getKnowledgesByPrefix,
@@ -42,8 +44,14 @@ data KnowledgeUpdate = KnowledgeUpdate
 emptyUpdate :: KnowledgeUpdate
 emptyUpdate = KnowledgeUpdate Nothing Nothing Nothing
 
+knowledgeColumnNames :: [Text]
+knowledgeColumnNames = ["id", "title", "body", "stale", "created_at", "updated_at"]
+
 knowCols :: Text
-knowCols = "id, title, body, stale, created_at, updated_at"
+knowCols = T.intercalate ", " knowledgeColumnNames
+
+knowColsQualified :: Text -> Text
+knowColsQualified alias = T.intercalate ", " (map (\c -> alias <> "." <> c) knowledgeColumnNames)
 
 insertKnowledge :: Connection -> NewKnowledge -> IO Text
 insertKnowledge conn NewKnowledge{..} = do

@@ -25,6 +25,8 @@ import Database.SQLite.Simple (
 
 import Icarium.Id (newId)
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
+import Icarium.Repo.Knowledge (knowColsQualified)
+import Icarium.Repo.Task (taskColsQualified)
 import Icarium.Types (
     Edge (..),
     EdgeKind (..),
@@ -113,14 +115,15 @@ referencedKnowledge :: Connection -> Text -> IO [Knowledge]
 referencedKnowledge conn tid =
     query
         conn
-        ( Query
-            "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
-            \FROM edges e \
-            \JOIN knowledge k ON k.id = e.dst_id \
-            \WHERE e.kind = 'references' \
-            \  AND e.src_kind = 'task' AND e.src_id = ? \
-            \  AND e.dst_kind = 'knowledge' \
-            \ORDER BY e.created_at ASC"
+        ( Query $
+            "SELECT "
+                <> knowColsQualified "k"
+                <> " FROM edges e \
+                   \JOIN knowledge k ON k.id = e.dst_id \
+                   \WHERE e.kind = 'references' \
+                   \  AND e.src_kind = 'task' AND e.src_id = ? \
+                   \  AND e.dst_kind = 'knowledge' \
+                   \ORDER BY e.created_at ASC"
         )
         (Only tid)
 
@@ -129,15 +132,15 @@ dependencyTasks :: Connection -> Text -> IO [Task]
 dependencyTasks conn tid =
     query
         conn
-        ( Query
-            "SELECT t.id, t.title, t.body, t.state, t.priority, \
-            \       t.block_reason, t.created_at, t.updated_at, t.no_commit \
-            \FROM edges e \
-            \JOIN tasks t ON t.id = e.dst_id \
-            \WHERE e.kind = 'depends_on' \
-            \  AND e.src_kind = 'task' AND e.src_id = ? \
-            \  AND e.dst_kind = 'task' \
-            \ORDER BY e.created_at ASC"
+        ( Query $
+            "SELECT "
+                <> taskColsQualified "t"
+                <> " FROM edges e \
+                   \JOIN tasks t ON t.id = e.dst_id \
+                   \WHERE e.kind = 'depends_on' \
+                   \  AND e.src_kind = 'task' AND e.src_id = ? \
+                   \  AND e.dst_kind = 'task' \
+                   \ORDER BY e.created_at ASC"
         )
         (Only tid)
 
@@ -197,13 +200,14 @@ knowledgeDerivedFromDispatch conn tid startedAt mEndedAt =
         Just _ -> " AND k.created_at <= ?"
     q =
         Query $
-            "SELECT k.id, k.title, k.body, k.stale, k.created_at, k.updated_at \
-            \FROM edges e \
-            \JOIN knowledge k ON k.id = e.src_id \
-            \WHERE e.kind = 'derived_from' \
-            \  AND e.src_kind = 'knowledge' \
-            \  AND e.dst_kind = 'task' AND e.dst_id = ? \
-            \  AND k.created_at >= ?"
+            "SELECT "
+                <> knowColsQualified "k"
+                <> " FROM edges e \
+                   \JOIN knowledge k ON k.id = e.src_id \
+                   \WHERE e.kind = 'derived_from' \
+                   \  AND e.src_kind = 'knowledge' \
+                   \  AND e.dst_kind = 'task' AND e.dst_id = ? \
+                   \  AND k.created_at >= ?"
                 <> endClause
                 <> " ORDER BY k.created_at ASC"
     params = case mEndedAt of

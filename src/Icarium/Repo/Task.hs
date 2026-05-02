@@ -2,6 +2,8 @@ module Icarium.Repo.Task (
     NewTask (..),
     TaskUpdate (..),
     emptyUpdate,
+    taskCols,
+    taskColsQualified,
     insertTask,
     getTask,
     getTasksByIds,
@@ -48,8 +50,14 @@ data TaskUpdate = TaskUpdate
 emptyUpdate :: TaskUpdate
 emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing Nothing
 
+taskColumnNames :: [Text]
+taskColumnNames = ["id", "title", "body", "state", "priority", "block_reason", "created_at", "updated_at", "no_commit"]
+
 taskCols :: Text
-taskCols = "id, title, body, state, priority, block_reason, created_at, updated_at, no_commit"
+taskCols = T.intercalate ", " taskColumnNames
+
+taskColsQualified :: Text -> Text
+taskColsQualified alias = T.intercalate ", " (map (\c -> alias <> "." <> c) taskColumnNames)
 
 insertTask :: Connection -> NewTask -> IO Text
 insertTask conn NewTask{..} = do
