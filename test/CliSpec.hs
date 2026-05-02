@@ -264,33 +264,38 @@ testTaskBodyRoundTrip = withSystemTempDirectory "icarium-test" $ \dir -> do
 
 testBareTaskHelp :: IO ()
 testBareTaskHelp = withTempDb $ \db -> do
-    (code, out, err) <- runIcarium db ["task"]
-    assertBool "bare task exits non-zero" (code /= ExitSuccess)
-    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+    (code, out, _) <- runIcarium db ["task"]
+    code @?= ExitSuccess
+    assertBool "bare task shows full help"   ("Available commands:" `isInfixOf` out)
+    assertBool "bare task help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testBareKnowHelp :: IO ()
 testBareKnowHelp = withTempDb $ \db -> do
-    (code, out, err) <- runIcarium db ["know"]
-    assertBool "bare know exits non-zero" (code /= ExitSuccess)
-    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+    (code, out, _) <- runIcarium db ["know"]
+    code @?= ExitSuccess
+    assertBool "bare know shows full help"   ("Available commands:" `isInfixOf` out)
+    assertBool "bare know help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testBareDispatchHelp :: IO ()
 testBareDispatchHelp = withTempDb $ \db -> do
-    (code, out, err) <- runIcarium db ["dispatch"]
-    assertBool "bare dispatch exits non-zero" (code /= ExitSuccess)
-    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+    (code, out, _) <- runIcarium db ["dispatch"]
+    code @?= ExitSuccess
+    assertBool "bare dispatch shows full help"   ("Available commands:" `isInfixOf` out)
+    assertBool "bare dispatch help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testBareLinkHelp :: IO ()
 testBareLinkHelp = withTempDb $ \db -> do
-    (code, out, err) <- runIcarium db ["link"]
-    assertBool "bare link exits non-zero" (code /= ExitSuccess)
-    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+    (code, out, _) <- runIcarium db ["link"]
+    code @?= ExitSuccess
+    assertBool "bare link shows full help"   ("Available commands:" `isInfixOf` out)
+    assertBool "bare link help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testBareCategoryHelp :: IO ()
 testBareCategoryHelp = withTempDb $ \db -> do
-    (code, out, err) <- runIcarium db ["category"]
-    assertBool "bare category exits non-zero" (code /= ExitSuccess)
-    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+    (code, out, _) <- runIcarium db ["category"]
+    code @?= ExitSuccess
+    assertBool "bare category shows full help"   ("Available commands:" `isInfixOf` out)
+    assertBool "bare category help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testTaskLsAlias :: IO ()
 testTaskLsAlias = withTempDb $ \db -> do

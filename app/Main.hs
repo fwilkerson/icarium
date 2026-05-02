@@ -27,10 +27,7 @@ data Args = Args
 
 main :: IO ()
 main = do
-    -- Rewrite `ls` to `list` immediately after a noun group so `task ls`,
-    -- `know ls`, etc. work without registering ls in each subparser (which
-    -- would cause it to appear in --help).
-    argv <- lsToList <$> getArgs
+    argv <- helpForBareNoun . lsToList <$> getArgs
     args <- handleParseResult (execParserPure defaultPrefs parser argv)
     runCmd (argsDb args) (argsCmd args)
 
@@ -38,10 +35,21 @@ nounGroups :: [String]
 nounGroups = ["task", "know", "dispatch", "link", "category"]
 
 -- | Rewrite `ls` to `list` when it directly follows a noun group name.
+-- Lets `task ls`, `know ls`, etc. work without registering `ls` in each
+-- subparser (which would cause it to show up in `--help`).
 lsToList :: [String] -> [String]
 lsToList (n : "ls" : rest) | n `elem` nounGroups = n : "list" : rest
 lsToList (a : rest)                               = a : lsToList rest
 lsToList []                                       = []
+
+-- | If argv ends with a noun group (no subcommand given), append `--help`
+-- so the user gets the full help with available commands instead of just
+-- a "Missing: COMMAND" usage line.
+helpForBareNoun :: [String] -> [String]
+helpForBareNoun []   = []
+helpForBareNoun args
+    | last args `elem` nounGroups = args ++ ["--help"]
+    | otherwise                   = args
 
 runCmd :: FilePath -> Command -> IO ()
 runCmd db (CmdInit o)     = Init.run db o

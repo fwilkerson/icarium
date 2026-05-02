@@ -30,7 +30,7 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "list" "List categories"  (List <$> listP)
+    ( subcmd "list" "List categories (alias: ls)" (List <$> listP)
    <> subcmd "sync"
         "Reconcile icarium.toml [categories] → DB. Use --prune to delete DB-only categories."
         (Sync <$> syncP)
