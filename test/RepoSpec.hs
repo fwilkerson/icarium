@@ -94,6 +94,10 @@ tests =
             [ testCase "src + kind filter returns only matching rows" testListEdgesSrcKindFilter
             ]
         , testGroup
+            "dependencyTasks"
+            [ testCase "selects all Task columns (regression: missing no_commit)" testDependencyTasksReturnsAllColumns
+            ]
+        , testGroup
             "resolveNode (PREFIX_RESOLUTION: link add src/dst, link list --from/--to, know add --derived-from)"
             [ testCase "resolves task prefix" testResolveNodeTask
             , testCase "resolves knowledge prefix" testResolveNodeKnowledge
@@ -538,6 +542,14 @@ testListEdgesSrcKindFilter = withTestDb $ \c -> do
     length es @?= 1
     edgeSrcId (head es) @?= t1
     edgeKind (head es) @?= DependsOn
+
+testDependencyTasksReturnsAllColumns :: IO ()
+testDependencyTasksReturnsAllColumns = withTestDb $ \c -> do
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = True}
+    _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
+    deps <- RE.dependencyTasks c t1
+    map taskNoCommit deps @?= [True]
 
 -- =============================================================
 -- resolveNode tests

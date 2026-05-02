@@ -131,7 +131,7 @@ dependencyTasks conn tid =
         conn
         ( Query
             "SELECT t.id, t.title, t.body, t.state, t.priority, \
-            \       t.block_reason, t.created_at, t.updated_at \
+            \       t.block_reason, t.created_at, t.updated_at, t.no_commit \
             \FROM edges e \
             \JOIN tasks t ON t.id = e.dst_id \
             \WHERE e.kind = 'depends_on' \
