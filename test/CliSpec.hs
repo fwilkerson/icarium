@@ -53,6 +53,19 @@ tests = testGroup "CLI integration"
     , testCase "task show --body --prompt exits 2"                 testTaskShowBodyAndPrompt
     , testCase "know show --body prints only body"                 testKnowShowBody
     , testCase "task show --body round-trip via update --body-file" testTaskBodyRoundTrip
+    -- bare noun group prints help, not list
+    , testCase "bare task prints help and exits non-zero"          testBareTaskHelp
+    , testCase "bare know prints help and exits non-zero"          testBareKnowHelp
+    , testCase "bare dispatch prints help and exits non-zero"      testBareDispatchHelp
+    , testCase "bare link prints help and exits non-zero"          testBareLinkHelp
+    , testCase "bare category prints help and exits non-zero"      testBareCategoryHelp
+    -- ls alias
+    , testCase "task ls and task list produce identical output"    testTaskLsAlias
+    , testCase "task ls --state ready works"                       testTaskLsStateFlag
+    -- old bare-with-flag form errors
+    , testCase "task --state ready errors with usage message"      testBareTaskWithFlag
+    -- --help shows list once, not ls
+    , testCase "task --help shows list but not ls"                 testTaskHelpNoLs
     ]
 
 testTaskRoundtrip :: IO ()
@@ -248,6 +261,66 @@ testTaskBodyRoundTrip = withSystemTempDirectory "icarium-test" $ \dir -> do
 
     (_, bodyOut2, _) <- runIcarium db ["task", "show", tid, "--body"]
     bodyOut2 @?= bodyOut
+
+testBareTaskHelp :: IO ()
+testBareTaskHelp = withTempDb $ \db -> do
+    (code, out, err) <- runIcarium db ["task"]
+    assertBool "bare task exits non-zero" (code /= ExitSuccess)
+    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+
+testBareKnowHelp :: IO ()
+testBareKnowHelp = withTempDb $ \db -> do
+    (code, out, err) <- runIcarium db ["know"]
+    assertBool "bare know exits non-zero" (code /= ExitSuccess)
+    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+
+testBareDispatchHelp :: IO ()
+testBareDispatchHelp = withTempDb $ \db -> do
+    (code, out, err) <- runIcarium db ["dispatch"]
+    assertBool "bare dispatch exits non-zero" (code /= ExitSuccess)
+    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+
+testBareLinkHelp :: IO ()
+testBareLinkHelp = withTempDb $ \db -> do
+    (code, out, err) <- runIcarium db ["link"]
+    assertBool "bare link exits non-zero" (code /= ExitSuccess)
+    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+
+testBareCategoryHelp :: IO ()
+testBareCategoryHelp = withTempDb $ \db -> do
+    (code, out, err) <- runIcarium db ["category"]
+    assertBool "bare category exits non-zero" (code /= ExitSuccess)
+    assertBool "output mentions COMMAND" ("COMMAND" `isInfixOf` (out <> err))
+
+testTaskLsAlias :: IO ()
+testTaskLsAlias = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["task", "add", "Ls alias task", "--state", "ready"]
+    (_, listOut, _) <- runIcarium db ["task", "list"]
+    (lsCode, lsOut, _) <- runIcarium db ["task", "ls"]
+    lsCode @?= ExitSuccess
+    lsOut @?= listOut
+
+testTaskLsStateFlag :: IO ()
+testTaskLsStateFlag = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["task", "add", "Ready task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["task", "add", "Planned task", "--state", "planned"]
+    (code, out, _) <- runIcarium db ["task", "ls", "--state", "ready"]
+    code @?= ExitSuccess
+    assertBool "ls --state ready shows ready task"   ("Ready task"   `isInfixOf` out)
+    assertBool "ls --state ready hides planned task" (not ("Planned task" `isInfixOf` out))
+
+testBareTaskWithFlag :: IO ()
+testBareTaskWithFlag = withTempDb $ \db -> do
+    (code, _, err) <- runIcarium db ["task", "--state", "ready"]
+    assertBool "bare task --state exits non-zero" (code /= ExitSuccess)
+    assertBool "error output non-empty" (not (null err))
+
+testTaskHelpNoLs :: IO ()
+testTaskHelpNoLs = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["task", "--help"]
+    code @?= ExitSuccess
+    assertBool "help shows list"   ("list" `isInfixOf` out)
+    assertBool "help hides ls"     (not ("  ls" `isInfixOf` out))
 
 minimalIcariumToml :: String
 minimalIcariumToml = unlines

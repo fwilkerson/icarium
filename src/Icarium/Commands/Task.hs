@@ -28,15 +28,13 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"      "Add a task"                                 (Add     <$> addP)
-   <> subcmd "list"     "List tasks (alias: ls)"                     (List    <$> listP)
-   <> subcmd "ls"       "List tasks (alias: list)"                   (List    <$> listP)
-   <> subcmd "show"     "Show a task"                                (Show    <$> showP)
-   <> subcmd "update"   "Update a task"                              (Update  <$> updateP)
-   <> subcmd "rm"       "Delete a task"                              (Rm      <$> rmP)
-   <> subcmd "next"     "Print next ready task id; exit 1 if empty"  (Next    <$> nextP)
+    ( subcmd "add"    "Add a task"                                (Add    <$> addP)
+   <> subcmd "list"   "List tasks"                                (List   <$> listP)
+   <> subcmd "show"   "Show a task"                               (Show   <$> showP)
+   <> subcmd "update" "Update a task"                             (Update <$> updateP)
+   <> subcmd "rm"     "Delete a task"                             (Rm     <$> rmP)
+   <> subcmd "next"   "Print next ready task id; exit 1 if empty" (Next   <$> nextP)
     )
-    <|> (List <$> listP)
 
 run :: FilePath -> Command -> IO ()
 run db = \case

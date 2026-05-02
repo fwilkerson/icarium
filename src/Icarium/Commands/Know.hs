@@ -28,14 +28,12 @@ data Command
 
 parser :: Parser Command
 parser = subparser
-    ( subcmd "add"      "Add a knowledge entry"              (Add     <$> addP)
-   <> subcmd "list"     "List knowledge entries (alias: ls)" (List    <$> listP)
-   <> subcmd "ls"       "List knowledge entries (alias: list)" (List  <$> listP)
-   <> subcmd "show"     "Show a knowledge entry"             (Show    <$> showP)
-   <> subcmd "update"   "Update a knowledge entry"           (Update  <$> updateP)
-   <> subcmd "rm"       "Delete a knowledge entry"           (Rm      <$> rmP)
+    ( subcmd "add"    "Add a knowledge entry"    (Add    <$> addP)
+   <> subcmd "list"   "List knowledge entries"   (List   <$> listP)
+   <> subcmd "show"   "Show a knowledge entry"   (Show   <$> showP)
+   <> subcmd "update" "Update a knowledge entry" (Update <$> updateP)
+   <> subcmd "rm"     "Delete a knowledge entry" (Rm     <$> rmP)
     )
-    <|> (List <$> listP)
 
 run :: FilePath -> Command -> IO ()
 run db = \case

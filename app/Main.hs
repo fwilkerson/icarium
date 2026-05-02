@@ -9,6 +9,7 @@ import qualified Icarium.Commands.Link     as Link
 import qualified Icarium.Commands.Task     as Task
 import           Icarium.Db                (defaultDbPath)
 import           Options.Applicative
+import           System.Environment        (getArgs)
 
 data Command
     = CmdInit     Init.Options
@@ -26,8 +27,21 @@ data Args = Args
 
 main :: IO ()
 main = do
-    args <- execParser parser
+    -- Rewrite `ls` to `list` immediately after a noun group so `task ls`,
+    -- `know ls`, etc. work without registering ls in each subparser (which
+    -- would cause it to appear in --help).
+    argv <- lsToList <$> getArgs
+    args <- handleParseResult (execParserPure defaultPrefs parser argv)
     runCmd (argsDb args) (argsCmd args)
+
+nounGroups :: [String]
+nounGroups = ["task", "know", "dispatch", "link", "category"]
+
+-- | Rewrite `ls` to `list` when it directly follows a noun group name.
+lsToList :: [String] -> [String]
+lsToList (n : "ls" : rest) | n `elem` nounGroups = n : "list" : rest
+lsToList (a : rest)                               = a : lsToList rest
+lsToList []                                       = []
 
 runCmd :: FilePath -> Command -> IO ()
 runCmd db (CmdInit o)     = Init.run db o
@@ -62,17 +76,17 @@ cmdP = subparser
               (progDesc "Verify config, DB file, schema version, claude and git binaries, and orphaned dispatches."))
    <> command "task"
         (info (CmdTask <$> Task.parser <**> helper)
-              (progDesc "Manage tasks (list is the default). Example: icarium task add \"Refactor X\" --domain cli --discipline haskell"))
+              (progDesc "Manage tasks. Example: icarium task list --state ready"))
    <> command "know"
         (info (CmdKnow <$> Know.parser <**> helper)
-              (progDesc "Manage knowledge entries (list is the default). Example: icarium know --discipline planning"))
+              (progDesc "Manage knowledge entries. Example: icarium know list --discipline planning"))
    <> command "link"
         (info (CmdLink <$> Link.parser <**> helper)
-              (progDesc "Manage typed edges between nodes (list is the default). Example: icarium link add TASK_A depends-on TASK_B"))
+              (progDesc "Manage typed edges between nodes (add, list, rm). Example: icarium link add TASK_A depends-on TASK_B"))
    <> command "category"
         (info (CmdCategory <$> Category.parser <**> helper)
-              (progDesc "Manage category vocabulary (list is the default). Example: icarium category --axis domain"))
+              (progDesc "Manage category vocabulary. Example: icarium category list --axis domain"))
    <> command "dispatch"
         (info (CmdDispatch <$> Dispatch.parser <**> helper)
-              (progDesc "Manage dispatches (run, show, logs, recover; bare = list). Example: icarium dispatch run --max 5"))
+              (progDesc "Manage dispatches (run, list, show, logs, recover). Example: icarium dispatch run --max 5"))
     )
