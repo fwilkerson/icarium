@@ -25,6 +25,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Internal (escapeLike)
 import Icarium.Types (Category (..), CategoryAxis (..), Knowledge (..))
 
 data NewKnowledge = NewKnowledge
@@ -63,14 +64,6 @@ getKnowledge conn kid = do
     pure $ case rows of
         (k : _) -> Just k
         [] -> Nothing
-
--- | Escape LIKE special characters so they match literally.
-escapeLike :: Text -> Text
-escapeLike = T.concatMap esc
-  where
-    esc c
-        | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
-        | otherwise = T.singleton c
 
 -- | Knowledge entries whose ULID starts with @prefix@.
 getKnowledgesByPrefix :: Connection -> Text -> IO [Knowledge]

@@ -24,6 +24,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Internal (escapeLike)
 import Icarium.Types (
     Edge (..),
     EdgeKind (..),
@@ -98,13 +99,6 @@ deleteEdge conn eid = do
         _ -> do
             execute conn (Query "DELETE FROM edges WHERE id = ?") (Only eid)
             pure True
-
-escapeLike :: Text -> Text
-escapeLike = T.concatMap esc
-  where
-    esc c
-        | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
-        | otherwise = T.singleton c
 
 -- | Edges whose ULID starts with @prefix@.
 getEdgesByPrefix :: Connection -> Text -> IO [Edge]

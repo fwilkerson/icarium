@@ -17,6 +17,7 @@ import Data.Text (Text, unpack)
 import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
+import Icarium.Repo.Internal (escapeLike)
 import Icarium.Types (Dispatch (..), DispatchOutcome, Effort)
 
 data NewDispatch = NewDispatch
@@ -71,13 +72,6 @@ getDispatch conn did = do
     pure $ case rows of
         (d : _) -> Just d
         [] -> Nothing
-
-escapeLike :: Text -> Text
-escapeLike = T.concatMap esc
-  where
-    esc c
-        | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
-        | otherwise = T.singleton c
 
 -- | Dispatches whose ULID starts with @prefix@.
 getDispatchesByPrefix :: Connection -> Text -> IO [Dispatch]

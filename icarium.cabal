@@ -30,6 +30,7 @@ library
                       Icarium.Dispatch.Internal
                       Icarium.Dispatch.Tick
                       Icarium.Heartbeat
+                      Icarium.Repo.Internal
                       Icarium.Repo.Task
                       Icarium.Repo.Knowledge
                       Icarium.Repo.Edge

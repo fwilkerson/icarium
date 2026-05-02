@@ -25,6 +25,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Internal (escapeLike)
 import Icarium.Types (Task (..), TaskState (..))
 
 data NewTask = NewTask
@@ -70,14 +71,6 @@ getTask conn tid = do
     pure $ case rows of
         (t : _) -> Just t
         [] -> Nothing
-
--- | Escape LIKE special characters so they match literally.
-escapeLike :: Text -> Text
-escapeLike = T.concatMap esc
-  where
-    esc c
-        | c `elem` ['%', '_', '\\'] = T.pack ['\\', c]
-        | otherwise = T.singleton c
 
 -- | Fetch tasks by exact ids in a single batch query.
 getTasksByIds :: Connection -> [Text] -> IO [Task]
