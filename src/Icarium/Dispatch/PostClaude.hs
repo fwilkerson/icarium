@@ -4,9 +4,9 @@ module Icarium.Dispatch.PostClaude (
     runGate,
 ) where
 
-import Control.Monad (void)
+import Control.Monad (void, (>=>))
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (runExceptT, throwE)
+import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit (ExitCode (..))
@@ -48,17 +48,18 @@ handlePostClaude dx cfg exit baseSha logPath = do
                 Left _ -> pure ()
             liftIO (runGate (ccBuild cc)) >>= either throwE pure
             liftIO (runGate (ccTest cc)) >>= either throwE pure
-            liftIO (Git.checkout base) >>= \case
-                Left err -> throwE ("checkout base: " <> T.pack (show err))
-                Right () -> pure ()
-            liftIO (Git.ffMerge branch) >>= \case
-                Left err -> throwE ("ff-merge: " <> T.pack (show err))
-                Right () -> pure ()
+            gitStep "checkout base" (Git.checkout base)
+            gitStep "ff-merge" (Git.ffMerge branch)
             liftIO (void (Git.deleteBranch branch))
             either (const Nothing) Just <$> liftIO (Git.revParse base)
     runExceptT step >>= \case
         Left notes -> finish OFailure Nothing notes
         Right mSha -> finish OSuccess mSha "merged"
+
+gitStep :: (Show e) => Text -> IO (Either e a) -> ExceptT Text IO a
+gitStep label = liftIO >=> either (throwE . tag) pure
+  where
+    tag e = label <> ": " <> T.pack (show e)
 
 {- | Pure guard logic for the post-claude checks. Returns Just an error
 message if a guard fires, Nothing if both pass.
