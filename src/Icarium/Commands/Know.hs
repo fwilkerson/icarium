@@ -83,17 +83,7 @@ runAdd db o = withDb db $ \c -> do
     -- ICARIUM_TASK_ID is set, copy that axis's categories from the task.
     inheritedCats <-
         if isNothing (aDomain o) || isNothing (aDiscipline o)
-            then case mTaskId of
-                Nothing -> pure []
-                Just tid -> do
-                    allCats <- RC.taskCategoriesFor c (T.pack tid)
-                    pure $
-                        filter
-                            ( \cat ->
-                                (isNothing (aDomain o) && categoryAxis cat == Domain)
-                                    || (isNothing (aDiscipline o) && categoryAxis cat == Discipline)
-                            )
-                            allCats
+            then maybe (pure []) (loadInherited c) mTaskId
             else pure []
 
     -- Auto-derive from ICARIUM_TASK_ID when no --derived-from was given.
@@ -115,6 +105,16 @@ runAdd db o = withDb db $ \c -> do
             void $ RE.insertEdge c Supersedes KnowledgeNode kid KnowledgeNode target
         Nothing -> pure ()
     TIO.putStrLn kid
+  where
+    loadInherited conn tid = do
+        allCats <- RC.taskCategoriesFor conn (T.pack tid)
+        pure $
+            filter
+                ( \cat ->
+                    (isNothing (aDomain o) && categoryAxis cat == Domain)
+                        || (isNothing (aDiscipline o) && categoryAxis cat == Discipline)
+                )
+                allCats
 
 {- | If no explicit --derived-from was supplied and ICARIUM_TASK_ID is set,
 returns a singleton edge pointing at the dispatched task.
