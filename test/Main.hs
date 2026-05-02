@@ -6,6 +6,7 @@ import CliSpec qualified
 import GuardSpec qualified
 import HeartbeatSpec qualified
 import LogResultSpec qualified
+import PostClaudeSpec qualified
 import RenderSpec qualified
 import RepoSpec qualified
 import TickSpec qualified
@@ -21,6 +22,7 @@ main =
             , GuardSpec.tests
             , HeartbeatSpec.tests
             , LogResultSpec.tests
+            , PostClaudeSpec.tests
             , RenderSpec.tests
             , RepoSpec.tests
             , TimeoutSpec.tests

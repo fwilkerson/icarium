@@ -9,6 +9,7 @@ module Icarium.Repo.Dispatch (
     updateHeartbeat,
     setLastCommit,
     setPid,
+    updateNotes,
     finishDispatch,
     logPathsOutsideRetention,
 ) where
@@ -132,6 +133,13 @@ setPid conn did pid =
         conn
         (Query "UPDATE dispatches SET pid = ? WHERE id = ?")
         (pid, did)
+
+updateNotes :: Connection -> Text -> Text -> IO ()
+updateNotes conn did notes =
+    execute
+        conn
+        (Query "UPDATE dispatches SET notes = ? WHERE id = ?")
+        (notes, did)
 
 {- | Log paths for dispatches outside the N most recent by started_at DESC.
 Only returns paths that are non-NULL in the DB.

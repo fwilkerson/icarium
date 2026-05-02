@@ -49,7 +49,7 @@ import System.Timeout (timeout)
 
 import Icarium.Config (DispatchConfig (..))
 import Icarium.Db (openDb)
-import Icarium.Dispatch.Tick (emptyTickState, summariseTick)
+import Icarium.Dispatch.Tick (TickAction (..), emptyTickState, summariseTick)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Types
 
@@ -171,9 +171,30 @@ teeAndHeartbeat dbPath src logH did title = do
                 RD.updateHeartbeat c d
                 now <- getCurrentTime
                 let ts = formatTime defaultTimeLocale "%H:%M:%S" now
-                    (outLines, st') = summariseTick ts line st
+                    (outLines, st', action) = summariseTick ts line st
                 mapM_ (hPutStrLn stderr) outLines
-                loop h lh d st' c
+                case action of
+                    TickContinue -> loop h lh d st' c
+                    TickKill reason -> do
+                        hPutStrLn stderr ("icarium: watchdog: " ++ T.unpack reason)
+                        void $
+                            (try :: IO () -> IO (Either SomeException ())) $
+                                RD.updateNotes c d reason
+                        mDispatch <- RD.getDispatch c d
+                        case mDispatch >>= dispatchPid of
+                            Just pid ->
+                                void $ forkIO $ killGroupGracefully (CPid (fromIntegral pid))
+                            Nothing -> pure ()
+                        drainLoop h lh
+
+    drainLoop h lh = do
+        eof <- hIsEOF h
+        if eof
+            then pure ()
+            else do
+                line <- BC.hGetLine h
+                BC.hPutStrLn lh line
+                drainLoop h lh
 
 withLogHandle :: FilePath -> (Handle -> IO a) -> IO a
 withLogHandle path act =

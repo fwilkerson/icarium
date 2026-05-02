@@ -1,10 +1,11 @@
 module Icarium.Dispatch.PostClaude (
     handlePostClaude,
+    checkpointDirtyTree,
     postClaudeGuard,
     runGate,
 ) where
 
-import Control.Monad (void, (>=>))
+import Control.Monad (unless, void, (>=>))
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
 import Data.Text (Text)
@@ -53,8 +54,22 @@ handlePostClaude dx cfg exit baseSha logPath = do
             liftIO (void (Git.deleteBranch branch))
             either (const Nothing) Just <$> liftIO (Git.revParse base)
     runExceptT step >>= \case
-        Left notes -> finish OFailure Nothing notes
+        Left notes -> do
+            checkpointDirtyTree did notes
+            finish OFailure Nothing notes
         Right mSha -> finish OSuccess mSha "merged"
+
+{- | If the working tree is dirty, commit everything to the current branch with
+a wip message. Preserves in-flight work on the dispatch branch so a human
+can inspect it after a failure.
+-}
+checkpointDirtyTree :: Text -> Text -> IO ()
+checkpointDirtyTree did note = do
+    porcelain <- Git.statusPorcelain
+    unless (T.null (T.strip porcelain)) $ do
+        let shortNote = T.take 60 (T.takeWhile (/= '\n') note)
+            msg = "wip: dispatch " <> did <> " (failed: " <> shortNote <> ")"
+        void $ Git.commitAll msg
 
 gitStep :: (Show e) => Text -> IO (Either e a) -> ExceptT Text IO a
 gitStep label = liftIO >=> either (throwE . tag) pure

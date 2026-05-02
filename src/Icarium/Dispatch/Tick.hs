@@ -2,6 +2,7 @@
 -- No I/O. Tested in isolation; consumed by Icarium.Dispatch.teeAndHeartbeat.
 module Icarium.Dispatch.Tick (
     TickState (..),
+    TickAction (..),
     emptyTickState,
     summariseTick,
 ) where
@@ -19,22 +20,37 @@ data TickState = TickState
     , tsLastIn :: !Int
     , tsLastOut :: !Int
     , tsLastCache :: !Int
+    , tsConsecutiveRetries :: !Int
     }
 
-emptyTickState :: TickState
-emptyTickState = TickState 0 0 0 0
+data TickAction = TickContinue | TickKill Text deriving (Show, Eq)
 
-{- | Parse one JSONL line and return lines to emit on stderr.
-Increments the event counter and prints a usage summary every 20 events.
+emptyTickState :: TickState
+emptyTickState = TickState 0 0 0 0 0
+
+{- | Parse one JSONL line and return lines to emit on stderr plus a
+watchdog action. Increments the event counter and prints a usage
+summary every 20 events. Returns 'TickKill' when 3 consecutive
+api_retry events are seen with no substantive turn between them.
 -}
-summariseTick :: String -> BC.ByteString -> TickState -> ([String], TickState)
+summariseTick :: String -> BC.ByteString -> TickState -> ([String], TickState, TickAction)
 summariseTick ts bytes st0 =
     let st = st0{tsEventCount = tsEventCount st0 + 1}
      in case decodeStrict bytes :: Maybe Value of
-            Nothing -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
+            Nothing -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st, TickContinue)
             Just val -> case val of
-                Object obj -> parseEvent st obj
-                _ -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
+                Object obj ->
+                    let (outLines, st') = parseEvent st obj
+                        action
+                            | tsConsecutiveRetries st' >= 3 =
+                                TickKill
+                                    ( "retry-storm: "
+                                        <> T.pack (show (tsConsecutiveRetries st'))
+                                        <> " consecutive api_retry events"
+                                    )
+                            | otherwise = TickContinue
+                     in (outLines, st', action)
+                _ -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st, TickContinue)
   where
     pad k = k ++ replicate (max 0 (14 - length k)) ' '
     row sym kw body = ts ++ "  " ++ [sym] ++ " " ++ pad kw ++ body
@@ -47,10 +63,15 @@ summariseTick ts bytes st0 =
         Just "rate_limit_event" -> ([], st)
         _ -> ([row '?' "unknown" (BC.unpack (BC.take 120 bytes))], st)
 
-    handleSystem st obj =
-        let model = maybe "?" T.unpack (lookStr "model" obj)
-            sessId = maybe "?" (take 8 . T.unpack) (lookStr "session_id" obj)
-         in ([row '.' "system" ("model=" ++ model ++ " session=" ++ sessId)], st)
+    handleSystem st obj = case lookStr "subtype" obj of
+        Just "api_retry" ->
+            let msg = maybe "" T.unpack (lookStr "message" obj)
+                st' = st{tsConsecutiveRetries = tsConsecutiveRetries st + 1}
+             in ([row '!' "api_retry" msg], st')
+        _ ->
+            let model = maybe "?" T.unpack (lookStr "model" obj)
+                sessId = maybe "?" (take 8 . T.unpack) (lookStr "session_id" obj)
+             in ([row '.' "system" ("model=" ++ model ++ " session=" ++ sessId)], st)
 
     handleAssistant st obj =
         let msg = lookObj "message" obj
@@ -69,8 +90,12 @@ summariseTick ts bytes st0 =
                 xs <- contents
                 c <- case xs of (x : _) -> Just x; [] -> Nothing
                 parseContent c
-            (usageLines, st2) = checkUsagePeriodic st1
-         in (maybeToList eventLine ++ usageLines, st2)
+            -- substantive assistant content (tool_use/text/thinking) resets the retry counter
+            st2 = case eventLine of
+                Just _ -> st1{tsConsecutiveRetries = 0}
+                Nothing -> st1
+            (usageLines, st3) = checkUsagePeriodic st2
+         in (maybeToList eventLine ++ usageLines, st3)
 
     parseContent (Object c) = case lookStr "type" c of
         Just "thinking" ->
@@ -90,7 +115,16 @@ summariseTick ts bytes st0 =
     handleUser st obj =
         let msg = lookObj "message" obj
             contents = fromMaybe [] (msg >>= lookArr "content")
-         in (mapMaybe toolResultError contents, st)
+            errorLines = mapMaybe toolResultError contents
+            -- any tool_result (success or error) counts as a substantive user turn
+            st' =
+                if any isToolResult contents
+                    then st{tsConsecutiveRetries = 0}
+                    else st
+         in (errorLines, st')
+
+    isToolResult (Object o) = lookStr "type" o == Just "tool_result"
+    isToolResult _ = False
 
     toolResultError (Object o)
         | Just (String "tool_result") <- lookRaw "type" o
@@ -103,7 +137,8 @@ summariseTick ts bytes st0 =
     toolResultError _ = Nothing
 
     handleResult st obj =
-        let subtype = maybe "?" T.unpack (lookStr "subtype" obj)
+        let st' = st{tsConsecutiveRetries = 0}
+            subtype = maybe "?" T.unpack (lookStr "subtype" obj)
             result = maybe "" (take 60 . T.unpack) (lookStr "result" obj)
             usageObj = lookObj "usage" obj
             inToks = usageObj >>= lookInt "input_tokens"
@@ -124,7 +159,7 @@ summariseTick ts bytes st0 =
                         )
                     ]
                 _ -> []
-         in (resultLine : usageLine, st)
+         in (resultLine : usageLine, st')
 
     checkUsagePeriodic st
         | tsEventCount st >= 20 =

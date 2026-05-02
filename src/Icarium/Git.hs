@@ -11,6 +11,7 @@ module Icarium.Git (
     stashUntracked,
     deleteBranch,
     changedFiles,
+    commitAll,
 ) where
 
 import Control.Monad (void)
@@ -104,6 +105,14 @@ deleteBranch name =
     void
         <$> runGit
             ["branch", "-d", T.unpack name]
+
+-- | Stage all changes and create a commit with the given message.
+commitAll :: Text -> IO (Either GitError ())
+commitAll msg = do
+    r <- runGit ["add", "-A"]
+    case r of
+        Left e -> pure (Left e)
+        Right _ -> void <$> runGit ["commit", "-m", T.unpack msg]
 
 -- | Files changed between the given base SHA and HEAD; returns [] on git error.
 changedFiles :: Text -> IO [Text]
