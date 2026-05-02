@@ -213,11 +213,7 @@ instance FromRow Task where
             <*> field
             <*> field
             <*> field
-            <*> (intToBool <$> field)
-      where
-        intToBool :: Int -> Bool
-        intToBool 0 = False
-        intToBool _ = True
+            <*> field
 
 data Knowledge = Knowledge
     { knowledgeId :: Text
@@ -235,13 +231,9 @@ instance FromRow Knowledge where
             <$> field
             <*> field
             <*> field
-            <*> (intToBool <$> field)
             <*> field
             <*> field
-      where
-        intToBool :: Int -> Bool
-        intToBool 0 = False
-        intToBool _ = True
+            <*> field
 
 data Edge = Edge
     { edgeId :: Text

@@ -68,11 +68,8 @@ insertTask conn NewTask{..} = do
             "INSERT INTO tasks (id, title, body, state, priority, no_commit) \
             \VALUES (?, ?, ?, ?, ?, ?)"
         )
-        (tid, ntTitle, ntBody, ntState, ntPriority, boolToInt ntNoCommit)
+        (tid, ntTitle, ntBody, ntState, ntPriority, ntNoCommit)
     pure tid
-  where
-    boolToInt True = 1 :: Int
-    boolToInt False = 0
 
 getTask :: Connection -> Text -> IO (Maybe Task)
 getTask conn tid = do
@@ -162,7 +159,7 @@ updateTask conn tid TaskUpdate{..} = do
                     if newState == Blocked
                         then fromMaybe (taskBlockReason t) tuBlockReason
                         else Nothing
-                newNoCommit = boolToInt (fromMaybe (taskNoCommit t) tuNoCommit)
+                newNoCommit = fromMaybe (taskNoCommit t) tuNoCommit
             execute
                 conn
                 ( Query
@@ -171,9 +168,6 @@ updateTask conn tid TaskUpdate{..} = do
                 )
                 (newTitle, newBody, newState, newPrio, newBlock, newNoCommit, tid)
             pure True
-  where
-    boolToInt True = 1 :: Int
-    boolToInt False = 0
 
 deleteTask :: Connection -> Text -> IO Bool
 deleteTask conn tid = do
