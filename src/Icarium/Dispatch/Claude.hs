@@ -137,10 +137,7 @@ runClaudeStreaming ctx dcfg = do
         withProcessWait pcfg $ \p -> do
             -- Record the child PID so recovery can detect a dead process.
             mPid <- getPid p
-            case mPid of
-                Just pid -> bracket (openDb dbPath) close $ \c ->
-                    RD.setPid c did (fromIntegral pid)
-                Nothing -> pure ()
+            mapM_ (\pid -> bracket (openDb dbPath) close $ \c -> RD.setPid c did (fromIntegral pid)) mPid
             _ <- forkIO (teeAndHeartbeat dbPath (getStdout p) logH did (taskTitle task))
             result <- raceTimeout maxUsecs (waitExitCode p)
             case result of
