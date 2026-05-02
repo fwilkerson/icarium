@@ -28,6 +28,7 @@ tests =
         [ testCase "checkpointDirtyTree commits dirty tree with wip message" testCheckpointDirtyTree
         , testCase "checkpointDirtyTree is no-op on clean tree" testCheckpointCleanTree
         , testCase "handlePostClaude failure leaves wip commit on dispatch branch" testHandlePostClaudeFailureCheckpoints
+        , testCase "handlePostClaude no-commit success with agent commits is failure; branch retained" testNoCommitAgentCommittedAnyway
         ]
 
 -- | Run git in a specific directory; return raw stdout bytes as String.
@@ -158,3 +159,60 @@ testHandlePostClaudeFailureCheckpoints =
                 -- a wip commit is on the dispatch branch
                 logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
                 assertBool "wip commit on dispatch branch" ("wip: dispatch" `isInfixOf` logOut)
+
+{- | Regression: a --no-commit task whose agent committed anyway must be
+treated as failure, with the dispatch branch retained for inspection. The
+prior behavior silently swallowed the (failed) `git branch -d` and reported
+success, orphaning the agent's commits.
+-}
+testNoCommitAgentCommittedAnyway :: IO ()
+testNoCommitAgentCommittedAnyway =
+    withTestRepo $ \dir ->
+        withTestDb $ \conn ->
+            withCurrentDirectory dir $ do
+                let did = "01TESTNCBRANCH0000000000AA" :: Text
+                    branch = "dispatch/" <> did
+                -- agent commits on the dispatch branch despite no-commit flag
+                gitIn_ dir ["checkout", "-b", T.unpack branch]
+                writeFile (dir <> "/agent-commit.hs") "module A where"
+                gitIn_ dir ["add", "agent-commit.hs"]
+                gitIn_ dir ["commit", "-m", "agent: should not have committed"]
+                baseShaRaw <- gitIn dir ["rev-parse", "main"]
+                let baseSha = T.pack (takeWhile (/= '"') (dropWhile (== '"') baseShaRaw))
+                tid <-
+                    RT.insertTask
+                        conn
+                        RT.NewTask
+                            { RT.ntTitle = "No-commit task"
+                            , RT.ntBody = ""
+                            , RT.ntState = Ready
+                            , RT.ntPriority = Nothing
+                            , RT.ntNoCommit = True
+                            }
+                RD.insertDispatch
+                    conn
+                    did
+                    RD.NewDispatch
+                        { RD.ndTaskId = tid
+                        , RD.ndBranch = branch
+                        , RD.ndBaseBranch = "main"
+                        , RD.ndBaseSha = baseSha
+                        , RD.ndModel = "claude-sonnet-4-6"
+                        , RD.ndEffort = Medium
+                        , RD.ndLogPath = Nothing
+                        , RD.ndPid = Nothing
+                        }
+                let dx =
+                        DispatchCtx
+                            { dxConn = conn
+                            , dxDid = did
+                            , dxBranch = branch
+                            , dxBase = "main"
+                            }
+                -- agent exited cleanly, tree is clean — but the branch has commits
+                res <- handlePostClaude dx minCfg True ExitSuccess baseSha "/dev/null"
+                dresOutcome res @?= OFailure
+                branchList <- gitIn dir ["branch", "--list", T.unpack branch]
+                assertBool "dispatch branch retained" (T.unpack branch `isInfixOf` branchList)
+                logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
+                assertBool "agent's commit still on branch" ("should not have committed" `isInfixOf` logOut)

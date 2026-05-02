@@ -50,6 +50,15 @@ handlePostClaude dx cfg noCommit exit baseSha logPath = do
                     throwE $
                         "agent left uncommitted changes; refusing to merge\nuncommitted:\n"
                             <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
+                -- A no-commit task must not produce commits. If the agent
+                -- committed anyway, refuse and leave the branch behind so
+                -- the operator can inspect the unintended work.
+                mBranchSha <- liftIO (Git.revParse branch)
+                case mBranchSha of
+                    Right sha
+                        | sha /= baseSha ->
+                            throwE "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
+                    _ -> pure ()
                 gitStep "checkout base" (Git.checkout base)
                 liftIO (void (Git.deleteBranch branch))
                 pure Nothing
