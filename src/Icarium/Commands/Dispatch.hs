@@ -1,15 +1,12 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
 import Control.Monad (forM, forM_, unless, void, when)
-import Data.Aeson (FromJSON (..), decode, withObject, (.:?))
-import Data.ByteString.Lazy qualified as BL
 import Data.Either (fromRight)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.List (nub)
-import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Database.SQLite.Simple (Connection)
@@ -19,6 +16,13 @@ import System.IO (hPutStrLn, stderr)
 import System.Posix.Signals (Handler (..), installHandler, raiseSignal, sigINT)
 import Text.Printf (printf)
 
+import Icarium.Dispatch.LogResult (
+    LogResult (..),
+    LogUsage (..),
+    fmtMs,
+    readLogResult,
+    trimResult,
+ )
 import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
@@ -207,73 +211,6 @@ drainLoop ctx !i
                             "icarium: SIGINT received; stopping after current dispatch"
                     else drainLoop ctx (i + 1)
 
--- =============================================================
--- Log parsing
--- =============================================================
-
-data LogUsage = LogUsage
-    { luInputTokens :: Maybe Int
-    , luOutputTokens :: Maybe Int
-    , luCacheReads :: Maybe Int
-    }
-
-instance FromJSON LogUsage where
-    parseJSON = withObject "LogUsage" $ \o ->
-        LogUsage
-            <$> o .:? "input_tokens"
-            <*> o .:? "output_tokens"
-            <*> o .:? "cache_read_input_tokens"
-
-data LogResult = LogResult
-    { lrNumTurns :: Maybe Int
-    , lrDurationMs :: Maybe Int
-    , lrDurationApiMs :: Maybe Int
-    , lrCostUsd :: Maybe Double
-    , lrUsage :: Maybe LogUsage
-    , lrResultText :: Maybe Text
-    }
-
-instance FromJSON LogResult where
-    parseJSON = withObject "LogResult" $ \o ->
-        LogResult
-            <$> o .:? "num_turns"
-            <*> o .:? "duration_ms"
-            <*> o .:? "duration_api_ms"
-            <*> o .:? "total_cost_usd"
-            <*> o .:? "usage"
-            <*> o .:? "result"
-
-readLogResult :: FilePath -> IO (Maybe LogResult)
-readLogResult path = do
-    exists <- doesFileExist path
-    if not exists
-        then pure Nothing
-        else do
-            ls <- T.lines <$> TIO.readFile path
-            let isResult l = "\"type\":\"result\"" `T.isInfixOf` l
-                resultLines = filter isResult ls
-            pure $ listToMaybe $ mapMaybe parseLine (reverse resultLines)
-  where
-    parseLine l = decode (BL.fromStrict (TE.encodeUtf8 l))
-
-gitChangedFiles :: Text -> IO [Text]
-gitChangedFiles baseSha = do
-    r <- Git.runGit ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
-    case r of
-        Left _ -> pure []
-        Right out -> pure (filter (not . T.null) (T.lines out))
-
-fmtMs :: Int -> Text
-fmtMs ms
-    | ms >= 1000 = T.pack (printf "%.1fs" (fromIntegral ms / 1000.0 :: Double))
-    | otherwise = T.pack (show ms) <> "ms"
-
-trimResult :: Text -> Text
-trimResult t =
-    let ls = filter (not . T.null) (T.lines t)
-        lastLine = case ls of [] -> t; _ -> last ls
-     in if T.length lastLine > 200 then T.take 197 lastLine <> "..." else lastLine
-
 -- | Print the enriched summary block; does not exit on failure.
 printSummary :: D.DispatchResult -> IO ()
 printSummary r = do
@@ -305,7 +242,7 @@ printSummary r = do
     case D.dresBaseSha r of
         Nothing -> pure ()
         Just sha -> do
-            files <- gitChangedFiles sha
+            files <- Git.changedFiles sha
             case files of
                 [] -> pure ()
                 _ -> do

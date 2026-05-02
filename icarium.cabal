@@ -29,6 +29,7 @@ library
                       Icarium.Dispatch
                       Icarium.Dispatch.Internal
                       Icarium.Dispatch.Claude
+                      Icarium.Dispatch.LogResult
                       Icarium.Dispatch.PostClaude
                       Icarium.Dispatch.Outcome
                       Icarium.Dispatch.Tick
@@ -80,6 +81,7 @@ test-suite icarium-test
     other-modules:    CliSpec
                       GuardSpec
                       HeartbeatSpec
+                      LogResultSpec
                       RenderSpec
                       RepoSpec
                       TestHelpers

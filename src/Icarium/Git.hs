@@ -10,6 +10,7 @@ module Icarium.Git (
     ffMerge,
     stashUntracked,
     deleteBranch,
+    changedFiles,
 ) where
 
 import Control.Monad (void)
@@ -103,3 +104,11 @@ deleteBranch name =
     void
         <$> runGit
             ["branch", "-d", T.unpack name]
+
+-- | Files changed between the given base SHA and HEAD; returns [] on git error.
+changedFiles :: Text -> IO [Text]
+changedFiles baseSha = do
+    r <- runGit ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
+    case r of
+        Left _ -> pure []
+        Right out -> pure (filter (not . T.null) (T.lines out))
