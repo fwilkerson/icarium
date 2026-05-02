@@ -1,5 +1,6 @@
 module RepoSpec (tests) where
 
+import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, void)
 import Data.Int (Int64)
 import Data.Text (Text)
@@ -14,8 +15,9 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Icarium.Commands.Category (SyncReport (..), syncCategories)
 import Icarium.Commands.Know (autoDeriveDeps)
 import Icarium.Config (CategoriesConfig (..), defaultConfigText, loadConfig)
-import Icarium.Db (dbSchemaVersion)
+import Icarium.Db (dbSchemaVersion, migrateDb)
 import Icarium.Id (newId)
+import Icarium.Migrations (Migration (..), mkSqlMigration)
 import Icarium.Render (renderTaskPrompt)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Dispatch qualified as RD
@@ -48,6 +50,11 @@ tests =
             "schema"
             [ testCase "applying embedded schema produces user_version = 1 with expected tables" testInitialSchema
             , testCase "deleting a knowledge entry cascades to knowledge_categories rows" testKnowledgeCategoriesCascade
+            ]
+        , testGroup
+            "migrations"
+            [ testCase "v1 DB advances to latest version after migrateDb" testMigrateAdvances
+            , testCase "bad SQL rolls back; user_version unchanged" testMigrateBadSqlRollback
             ]
         , testGroup
             "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
@@ -267,6 +274,26 @@ testKnowledgeCategoriesCascade = withTestDb $ \conn -> do
     execute conn (Query "DELETE FROM knowledge WHERE id = ?") (Only kid)
     post <- query_ conn "SELECT knowledge_id FROM knowledge_categories" :: IO [Only Text]
     length post @?= 0
+
+-- =============================================================
+-- Migration tests
+-- =============================================================
+
+testMigrateAdvances :: IO ()
+testMigrateAdvances = withTestDb $ \conn -> do
+    v0 <- dbSchemaVersion conn
+    v0 @?= 1
+    migrateDb conn
+    v1 <- dbSchemaVersion conn
+    assertBool "version advanced past 1 after migrateDb" (v1 > 1)
+
+testMigrateBadSqlRollback :: IO ()
+testMigrateBadSqlRollback = withTestDb $ \conn -> do
+    let m = mkSqlMigration 99 "THIS IS NOT VALID SQL AT ALL"
+    result <- try (migrationUp m conn) :: IO (Either SomeException ())
+    assertBool "bad migration should throw" (either (const True) (const False) result)
+    v <- dbSchemaVersion conn
+    v @?= 1
 
 -- =============================================================
 -- resolveDispatchId tests

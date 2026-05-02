@@ -6,6 +6,7 @@ author:             frank
 maintainer:         frank.w1lk3rs0n@gmail.com
 build-type:         Simple
 extra-source-files: spec/schema.sql
+                    spec/migrations/*.sql
 
 common lang
     default-language:   GHC2021
