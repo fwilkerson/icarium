@@ -15,7 +15,8 @@ bin = "./bin/icarium"
 
 runIcarium :: FilePath -> [String] -> IO (ExitCode, String, String)
 runIcarium db args = do
-    (code, outBs, errBs) <- readProcess (proc bin (["--db", db] ++ args))
+    absBin <- makeAbsolute bin
+    (code, outBs, errBs) <- readProcess (proc absBin (["--db", db] ++ args))
     pure (code, BLC.unpack outBs, BLC.unpack errBs)
 
 {- | Run icarium with a custom working directory so config loading picks

@@ -81,6 +81,7 @@ test-suite icarium-test
     type:             exitcode-stdio-1.0
     hs-source-dirs:   test
     main-is:          Main.hs
+    ghc-options:      -threaded -with-rtsopts=-N
     other-modules:    CliSpec
                       GuardSpec
                       HeartbeatSpec
