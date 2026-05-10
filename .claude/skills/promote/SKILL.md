@@ -23,17 +23,22 @@ The bar for `ready` is *would a competent contributor with this body know what t
 
 Default toward ready for reversible changes. The agent is meant to emulate a dev who knows the domain and acts on context, not a junior who escalates every choice.
 
-## When to flag instead of promote
+## Reading the shape of the change
 
-Some changes are not cheap to drop. Flag (do not promote) when the task implies any of:
+Some changes are cheap to drop on a branch. Others propagate — a schema migration, a public API or CLI surface change, an architectural shift across modules, a removal of capability downstream code may depend on. The categorical fact "this is a schema migration" or "this changes a public API" is *not* the flag signal. The signal is whether the design pass for that propagation has happened.
 
-- Schema migration or other persistent data shape change
-- Public API or CLI surface change with downstream callers
-- Architectural shift that propagates across modules
-- Removal of capability others may depend on
-- The body itself contains "decide between X and Y"
+For a propagating change, ask:
 
-Flagging means: leave `state=planned`, add a brief `## Open questions` entry naming what needs a design call, surface it in the close summary. Do not silently leave the task in limbo.
+- **Are the touch points enumerated?** Files, modules, callers, data shapes, protocol versions — whatever the change reaches.
+- **Are the load-bearing decisions locked?** Names, value mappings, ordering, cutover behavior — the calls a competent contributor would otherwise have to make and might guess wrong on.
+- **Is the migration or rollout sketched?** How does old → new transition? What happens to in-flight state? Is there a rollback path that's actually a path?
+- **Are downstream effects named — even just to say "no downstream callers"?**
+
+If yes to all: the change is propagating but the design is done. Promote — the dispatched agent is executing a plan, not making product calls.
+
+If any answer is no: flag. Cost of being too cautious is one round-trip with the human; cost of being too aggressive is a poorly-designed change that has to be unwound.
+
+The body itself sometimes signals incompleteness — phrases like "decide between X and Y", "TBD", or "we should figure out…" mean the design pass is unfinished regardless of category. Flag those.
 
 ## The checklist
 
@@ -47,7 +52,24 @@ Walk through these. Necessary, not sufficient — judgment fills the rest.
 6. **Domain and discipline tagged.** Drives which knowledge entries reach the dispatched agent.
 7. **Out-of-scope is named, not hand-waved.** The safety valve when scope is ambiguous.
 
-If everything holds and the change is reversible: `icarium task update <id> --state ready`.
+If everything holds: `icarium task update <id> --state ready`.
+
+## When you flag
+
+Leave `state=planned`. Surface the unanswered questions — the goal is a design pass, not silent limbo. Two ways to surface, by session shape:
+
+- **Interactive (default):** ask the human directly via `AskUserQuestion` with a short proposal and the trade-offs you see. Faster, no body churn, the conversation captures the resolution.
+- **Headless or hand-off:** write a brief `## Open questions` section into the task body so the questions travel with the task. Use when you can't get a synchronous answer — not as the default.
+
+## After the human answers
+
+Once a parked question has an answer, the design is complete enough to promote. Follow-ups, in order:
+
+1. **Lock the decisions into the body.** Fold answers into Outcome / Why or add a short locked-decisions block. The body should read as if the design call were always settled — future agents shouldn't have to reconstruct the conversation.
+2. **Split if the answer revealed a sub-task.** If the resolution introduces separable work (e.g. "do the migration interactively, dispatch the doc sweep"), create the follow-up with `--depends-on` and scope this task down to match.
+3. **Promote.** Run `icarium task update <id> --state ready`.
+
+Keep this light. Capture the resolution and adjust scope; don't over-document.
 
 ## Batch mode
 
