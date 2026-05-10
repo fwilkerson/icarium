@@ -81,6 +81,7 @@ tests =
         , testCase "dispatch show: tokens line absent when all NULL" testDispatchShowTokensAbsent
         , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
         , testCase "task update --no-commit and --commit-required toggle flag" testTaskNoCommitUpdate
+        , testCase "dispatch quarantine: blocked upstream excludes dependent from ready queue" testDispatchQuarantine
         ]
 
 testTaskRoundtrip :: IO ()
@@ -537,3 +538,42 @@ testTaskNoCommitUpdate = withTempDb $ \db -> do
     uCode2 @?= ExitSuccess
     (_, showOut2, _) <- runIcarium db ["task", "show", tid]
     assertBool "no-commit cleared after --commit-required" (not ("no-commit" `isInfixOf` showOut2))
+
+{- | Quarantine contract: a failed dispatch sets its task to 'blocked'.
+The ready_tasks view (used by dispatch run and task next) excludes any
+task whose depends_on target is not 'done', so the dependent is silently
+quarantined until the upstream is resolved. Independent tasks keep
+draining normally.
+
+We simulate a failed dispatch by blocking task A directly; the view
+doesn't care how it got there.
+-}
+testDispatchQuarantine :: IO ()
+testDispatchQuarantine = withTempDb $ \db -> do
+    -- A: will be blocked (simulating a failed dispatch)
+    (_, aOut, _) <- runIcarium db ["task", "add", "Upstream task A", "--state", "ready"]
+    let aId = head (words aOut)
+
+    -- B: depends on A; must be quarantined when A is blocked
+    (_, bOut, _) <- runIcarium db ["task", "add", "Dependent task B", "--state", "ready", "--depends-on", aId]
+    let bId = head (words bOut)
+
+    -- C: independent; must still be drainable after A is blocked
+    (_, cOut, _) <- runIcarium db ["task", "add", "Independent task C", "--state", "ready"]
+    let cId = head (words cOut)
+
+    -- Simulate a dispatch failure: mark A blocked with a reason
+    (uCode, _, _) <- runIcarium db ["task", "update", aId, "--state", "blocked", "--block-reason", "simulated dispatch failure"]
+    uCode @?= ExitSuccess
+
+    -- ready queue (task list --ready / task next) must exclude B but include C
+    (lCode, lOut, _) <- runIcarium db ["task", "list", "--ready"]
+    lCode @?= ExitSuccess
+    assertBool "dependent B absent from ready queue" (not ("Dependent task B" `isInfixOf` lOut))
+    assertBool "independent C present in ready queue" ("Independent task C" `isInfixOf` lOut)
+
+    -- task next returns C's full id (the head of what drain would pick), not B's
+    (nCode, nOut, _) <- runIcarium db ["task", "next"]
+    nCode @?= ExitSuccess
+    assertBool "task next picks C, not B" (cId `isInfixOf` nOut)
+    assertBool "task next does not pick B" (not (bId `isInfixOf` nOut))

@@ -54,6 +54,14 @@ domains     = ["cli", "dispatch", "storage", "workflow"]
 disciplines = ["haskell", "ops", "refinement"]
 ```
 
+## Drain semantics
+
+`dispatch run` (no task ID) drains the ready queue in priority order. "Ready" is stricter than `state='ready'`: the `ready_tasks` view also requires every `depends_on` upstream to be `state='done'`. In-progress or blocked upstreams are not satisfied.
+
+**Failure quarantine.** When a dispatch fails, the failed task is automatically moved to `state='blocked'`. Because `blocked` is not `done`, any task that depends on it is excluded from the ready queue — quarantined without any explicit action. Independent tasks (no blocked upstream) keep draining normally.
+
+To release a quarantined task, resolve the upstream failure and move it back to `ready` (or mark it `done` if completed out-of-band). `dispatch run <TASK_ID>` overrides the quarantine because the human explicitly named the task — the ready queue check is skipped when a task ID is given directly.
+
 ## Development
 
 ### Build
