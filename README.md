@@ -35,7 +35,7 @@ effort = "high"
 tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
-  "Bash(./bin/icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
+  "Bash(icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
 ]
 
 scratch_dir = ".icarium/scratch"
@@ -60,7 +60,7 @@ disciplines = ["haskell", "ops", "refinement"]
 
 ```sh
 make build   # cabal build all
-make install # copy binary to ./bin/icarium
+make install # copy binary to bin/ (add to PATH via direnv)
 make test    # cabal test all
 ```
 

@@ -4,7 +4,7 @@ Tests should cover the **interface and larger functional units**. Get nuanced on
 
 **Three tiers, in priority order:**
 
-1. **CLI integration tests** (highest value). Invoke `./bin/icarium` as a subprocess against a temp DB, assert on stdout/stderr/exit code. These are the contract we ship — they catch real regressions (broken flags, missing output, schema mismatches) and they're cheap to write.
+1. **CLI integration tests** (highest value). Invoke `icarium` as a subprocess against a temp DB, assert on stdout/stderr/exit code. These are the contract we ship — they catch real regressions (broken flags, missing output, schema mismatches) and they're cheap to write.
 2. **Repo tests.** Small, real-sqlite tests for each `Icarium.Repo.*` module. Cover the SQL surface where bugs actually hide.
 3. **Pure-function tests.** For `parseEdgeKind`, `postClaudeGuard`, JSONL event parsing, etc. Tiny, fast, worth it because the inputs are easy to enumerate.
 
@@ -24,3 +24,7 @@ For multi-step `IO` where any step can fail: use `ExceptT Text IO` rather than n
 ## Lint and format
 
 Lint hints are design feedback, not mechanical fixes. When `hlint` flags something, the first response is to consider whether the code shape itself is wrong — refactor to make the smell go away naturally. Mechanical auto-fix and adding `ignore:` entries both bypass that step. An ignore is correct only when the rule fundamentally conflicts with a deliberate house style.
+
+## Fresh clone setup
+
+Install [direnv](https://direnv.net/) and run `direnv allow` at the repo root. The committed `.envrc` adds `bin/` to `PATH`, so bare `icarium` resolves to the local build artifact after `make install`.
