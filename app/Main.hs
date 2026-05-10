@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Data.Version (showVersion)
 import Icarium.Commands.Category qualified as Category
 import Icarium.Commands.Dispatch qualified as Dispatch
 import Icarium.Commands.Doctor qualified as Doctor
@@ -10,6 +11,7 @@ import Icarium.Commands.Search qualified as Search
 import Icarium.Commands.Task qualified as Task
 import Icarium.Db (defaultDbPath)
 import Options.Applicative
+import Paths_icarium (version)
 import System.Environment (getArgs)
 
 data Command
@@ -76,10 +78,16 @@ runCmd db (CmdCategory c) = Category.run db c
 runCmd db (CmdDispatch c) = Dispatch.run db c
 runCmd db (CmdSearch o) = Search.run db o
 
+versionP :: Parser (a -> a)
+versionP =
+    infoOption
+        ("icarium " <> showVersion version)
+        (long "version" <> short 'V' <> help "Print version and exit")
+
 parser :: ParserInfo Args
 parser =
     info
-        (argsP <**> helper)
+        (argsP <**> helper <**> versionP)
         ( fullDesc
             <> progDesc "Task/knowledge/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id."
             <> header "icarium"

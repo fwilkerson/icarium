@@ -1,7 +1,7 @@
 module CliSpec (tests) where
 
 import Data.ByteString.Lazy.Char8 qualified as BLC
-import Data.List (isInfixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import Database.SQLite.Simple (Query (..), close, execute, open)
 import System.Directory (makeAbsolute)
 import System.Exit (ExitCode (..))
@@ -37,11 +37,19 @@ withTempDb :: (FilePath -> IO a) -> IO a
 withTempDb k = withSystemTempDirectory "icarium-test" $ \dir ->
     k (dir <> "/icarium.db")
 
+runIcariumBare :: [String] -> IO (ExitCode, String, String)
+runIcariumBare args = do
+    absBin <- makeAbsolute bin
+    (code, outBs, errBs) <- readProcess (proc absBin args)
+    pure (code, BLC.unpack outBs, BLC.unpack errBs)
+
 tests :: TestTree
 tests =
     testGroup
         "CLI integration"
-        [ testCase "task add/list/show roundtrip" testTaskRoundtrip
+        [ testCase "--version prints icarium <semver> and exits 0" testVersion
+        , testCase "-V short form works" testVersionShort
+        , testCase "task add/list/show roundtrip" testTaskRoundtrip
         , testCase "task update --state changes state" testTaskUpdateState
         , testCase "dispatch list on empty DB exits 0" testDispatchListEmpty
         , testCase "task next exits 1 on empty queue" testTaskNextEmpty
@@ -83,6 +91,18 @@ tests =
         , testCase "task update --no-commit and --commit-required toggle flag" testTaskNoCommitUpdate
         , testCase "dispatch quarantine: blocked upstream excludes dependent from ready queue" testDispatchQuarantine
         ]
+
+testVersion :: IO ()
+testVersion = do
+    (code, out, _) <- runIcariumBare ["--version"]
+    code @?= ExitSuccess
+    assertBool "output starts with 'icarium '" ("icarium " `isPrefixOf` out)
+
+testVersionShort :: IO ()
+testVersionShort = do
+    (code, out, _) <- runIcariumBare ["-V"]
+    code @?= ExitSuccess
+    assertBool "short form output starts with 'icarium '" ("icarium " `isPrefixOf` out)
 
 testTaskRoundtrip :: IO ()
 testTaskRoundtrip = withTempDb $ \db -> do

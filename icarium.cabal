@@ -72,6 +72,8 @@ executable icarium
     import:           lang
     hs-source-dirs:   app
     main-is:          Main.hs
+    autogen-modules:  Paths_icarium
+    other-modules:    Paths_icarium
     build-depends:    base,
                       icarium,
                       optparse-applicative
