@@ -13,6 +13,8 @@ You are one of the agents who will execute these tasks. The body you produce is 
 
 Run `icarium know list --discipline refinement` and read the entries that look relevant. The pipeline-vision and promotion-philosophy entries are load-bearing if present.
 
+For each task you prep, also scan `icarium know list --domain <task-domain>` for prior context that bears on the change. Refinement-discipline knowledge tells you *how* to prep; domain knowledge often tells you *what's already been decided* about the area you're prepping in.
+
 If the user did not name a task or scope, ask. One question, not a survey.
 
 ## Three buckets
@@ -33,7 +35,7 @@ If unsure: ask the user.
 4. **Resolve what context can resolve.** Read prior knowledge entries, ADRs, prior tasks. Most decisions follow from established context once you actually look — that is what context is for.
 5. **Park genuine ambiguity under `## Open questions`.** A real ambiguity is one the existing context cannot answer. Phrase each as a concrete question with options and a recommendation. Do not park decisions you could make from context.
 6. **Update the body.** Reads like a brief: outcome, why, acceptance, out-of-scope, references. No "originally we said…" archaeology — the next agent has no context for that.
-7. **Do not flip state.** That is `/promote`'s job.
+7. **State move: `idea` → `planned` if the body comes out dispatchable; otherwise leave state alone.** A `planned` task stays `planned` (re-shape pass). An `idea` task with surviving open questions also stays `idea` — it isn't ready for the gate yet. The `planned → ready` flip belongs to `/promote`.
 
 ## Body shape
 
