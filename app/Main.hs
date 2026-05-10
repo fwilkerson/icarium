@@ -56,7 +56,7 @@ the noun is an option value (e.g. `search query --kind task`), not a
 bare subcommand.
 -}
 helpForBareNoun :: [String] -> [String]
-helpForBareNoun [] = []
+helpForBareNoun [] = ["--help"]
 helpForBareNoun args
     | last args `elem` nounGroups
     , not (lastPrecededByFlag args) =

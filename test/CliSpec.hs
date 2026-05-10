@@ -67,6 +67,8 @@ tests =
         , testCase "task show --body --prompt exits 2" testTaskShowBodyAndPrompt
         , testCase "know show --body prints only body" testKnowShowBody
         , testCase "task show --body round-trip via update --body-file" testTaskBodyRoundTrip
+        , -- bare icarium (no args) prints full help
+          testCase "bare icarium prints help and exits 0" testBareIcariumHelp
         , -- bare noun group prints help, not list
           testCase "bare task prints help and exits non-zero" testBareTaskHelp
         , testCase "bare know prints help and exits non-zero" testBareKnowHelp
@@ -301,6 +303,13 @@ testTaskBodyRoundTrip = withSystemTempDirectory "icarium-test" $ \dir -> do
 
     (_, bodyOut2, _) <- runIcarium db ["task", "show", tid, "--body"]
     bodyOut2 @?= bodyOut
+
+testBareIcariumHelp :: IO ()
+testBareIcariumHelp = do
+    (code, out, _) <- runIcariumBare []
+    code @?= ExitSuccess
+    assertBool "bare icarium shows Available commands" ("Available commands:" `isInfixOf` out)
+    assertBool "bare icarium lists task subcommand" ("task" `isInfixOf` out)
 
 testBareTaskHelp :: IO ()
 testBareTaskHelp = withTempDb $ \db -> do
