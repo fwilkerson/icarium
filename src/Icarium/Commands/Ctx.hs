@@ -14,7 +14,7 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Context qualified as RK
+import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -89,22 +89,22 @@ runAdd db o = withDb db $ \c -> do
     -- Auto-derive from ICARIUM_TASK_ID when no --derived-from was given.
     autoDerived <- autoDeriveDeps c (aDerivedFrom o) mTaskId
 
-    kid <-
-        RK.insertContext
+    cxid <-
+        RCx.insertContext
             c
-            RK.NewContext
-                { RK.ncTitle = aTitle o
-                , RK.ncBody = body
+            RCx.NewContext
+                { RCx.ncTitle = aTitle o
+                , RCx.ncBody = body
                 }
     forM_ (catMaybes [mDomain, mDisc] <> inheritedCats) $ \cat ->
-        RC.attachContextCategory c kid (categoryId cat)
+        RC.attachContextCategory c cxid (categoryId cat)
     forM_ (derived <> autoDerived) $ \(nkind, nid) ->
-        void $ RE.insertEdge c DerivedFrom ContextNode kid nkind nid
+        void $ RE.insertEdge c DerivedFrom ContextNode cxid nkind nid
     case mSupersedesId of
         Just target ->
-            void $ RE.insertEdge c Supersedes ContextNode kid ContextNode target
+            void $ RE.insertEdge c Supersedes ContextNode cxid ContextNode target
         Nothing -> pure ()
-    TIO.putStrLn kid
+    TIO.putStrLn cxid
   where
     loadInherited conn tid = do
         allCats <- RC.taskCategoriesFor conn (T.pack tid)
@@ -172,23 +172,23 @@ runList db o = withDb db $ \c -> do
             | lStale o = Just True -- stale only
             | lAll o = Nothing -- show all
             | otherwise = Just False -- hide stale (default)
-    ks <- RK.listContexts c staleFilter (lDomain o) (lDiscipline o)
-    rows <- buildContextRows c ks
+    cxs <- RCx.listContexts c staleFilter (lDomain o) (lDiscipline o)
+    rows <- buildContextRows c cxs
     utf8 <- detectUtf8
     TIO.putStr (Render.renderContextList utf8 rows)
 
 buildContextRows :: Connection -> [Context] -> IO [Render.ContextRow]
-buildContextRows c ks = do
-    let ids = map contextId ks
+buildContextRows c cxs = do
+    let ids = map contextId cxs
     catsBatch <- RC.contextCategoriesBatch c ids
     countsBatch <- RE.contextInboundCounts c ids
     pure
         [ Render.ContextRow
-            { Render.crContext = k
-            , Render.crCats = fromMaybe [] (lookup (contextId k) catsBatch)
-            , Render.crLinked = fromMaybe 0 (lookup (contextId k) countsBatch)
+            { Render.crContext = cx
+            , Render.crCats = fromMaybe [] (lookup (contextId cx) catsBatch)
+            , Render.crLinked = fromMaybe 0 (lookup (contextId cx) countsBatch)
             }
-        | k <- ks
+        | cx <- cxs
         ]
 
 -- =============================================================
@@ -208,14 +208,14 @@ showP =
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
-    kid <- resolveOrFatal (RK.resolveContextId c (sId o))
-    mk <- RK.getContext c kid
-    k <- maybe (fatal 1 ("context not found: " <> T.unpack kid)) pure mk
+    cxid <- resolveOrFatal (RCx.resolveContextId c (sId o))
+    mcx <- RCx.getContext c cxid
+    cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
     if sBody o
-        then TIO.putStr (contextBody k)
+        then TIO.putStr (contextBody cx)
         else do
-            cats <- RC.contextCategoriesFor c (contextId k)
-            TIO.putStr (Render.renderContext k cats)
+            cats <- RC.contextCategoriesFor c (contextId cx)
+            TIO.putStr (Render.renderContext cx cats)
 
 -- =============================================================
 -- update
@@ -248,7 +248,7 @@ staleFlag =
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do
-    kid <- resolveOrFatal (RK.resolveContextId c (uId o))
+    cxid <- resolveOrFatal (RCx.resolveContextId c (uId o))
     body <- case uBody o of
         BodyNone -> pure Nothing
         b -> Just <$> resolveBody b
@@ -256,22 +256,22 @@ runUpdate db o = withDb db $ \c -> do
     mDomCat <- resolveAxisFlag c Domain (uDomain o)
     mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
     let upd =
-            RK.emptyUpdate
-                { RK.cuTitle = uTitle o
-                , RK.cuBody = body
-                , RK.cuStale = uStale o
+            RCx.emptyUpdate
+                { RCx.cuTitle = uTitle o
+                , RCx.cuBody = body
+                , RCx.cuStale = uStale o
                 }
-    ok <- RK.updateContext c kid upd
+    ok <- RCx.updateContext c cxid upd
     if ok
         then do
             -- Apply replacements: detach all of that axis, then attach new one if given.
             forM_ mDomCat $ \mCat -> do
-                RC.detachContextCategoriesByAxis c kid Domain
-                forM_ mCat $ \cat -> RC.attachContextCategory c kid (categoryId cat)
+                RC.detachContextCategoriesByAxis c cxid Domain
+                forM_ mCat $ \cat -> RC.attachContextCategory c cxid (categoryId cat)
             forM_ mDiscCat $ \mCat -> do
-                RC.detachContextCategoriesByAxis c kid Discipline
-                forM_ mCat $ \cat -> RC.attachContextCategory c kid (categoryId cat)
-            TIO.putStrLn ("updated " <> kid)
+                RC.detachContextCategoriesByAxis c cxid Discipline
+                forM_ mCat $ \cat -> RC.attachContextCategory c cxid (categoryId cat)
+            TIO.putStrLn ("updated " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (uId o))
 
 -- =============================================================
@@ -285,8 +285,8 @@ rmP = RmOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
 runRm db o = withDb db $ \c -> do
-    kid <- resolveOrFatal (RK.resolveContextId c (rId o))
-    ok <- RK.deleteContext c kid
+    cxid <- resolveOrFatal (RCx.resolveContextId c (rId o))
+    ok <- RCx.deleteContext c cxid
     if ok
-        then TIO.putStrLn ("deleted " <> kid)
+        then TIO.putStrLn ("deleted " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (rId o))

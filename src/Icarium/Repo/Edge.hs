@@ -117,9 +117,9 @@ referencedContexts conn tid =
         conn
         ( Query $
             "SELECT "
-                <> ctxColsQualified "k"
+                <> ctxColsQualified "cx"
                 <> " FROM edges e \
-                   \JOIN context k ON k.id = e.dst_id \
+                   \JOIN context cx ON cx.id = e.dst_id \
                    \WHERE e.kind = 'references' \
                    \  AND e.src_kind = 'task' AND e.src_id = ? \
                    \  AND e.dst_kind = 'context' \
@@ -197,19 +197,19 @@ contextDerivedFromDispatch conn tid startedAt mEndedAt =
   where
     endClause = case mEndedAt of
         Nothing -> ""
-        Just _ -> " AND k.created_at <= ?"
+        Just _ -> " AND cx.created_at <= ?"
     q =
         Query $
             "SELECT "
-                <> ctxColsQualified "k"
+                <> ctxColsQualified "cx"
                 <> " FROM edges e \
-                   \JOIN context k ON k.id = e.src_id \
+                   \JOIN context cx ON cx.id = e.src_id \
                    \WHERE e.kind = 'derived_from' \
                    \  AND e.src_kind = 'context' \
                    \  AND e.dst_kind = 'task' AND e.dst_id = ? \
-                   \  AND k.created_at >= ?"
+                   \  AND cx.created_at >= ?"
                 <> endClause
-                <> " ORDER BY k.created_at ASC"
+                <> " ORDER BY cx.created_at ASC"
     params = case mEndedAt of
         Nothing -> [SQLText tid, SQLText startedAt]
         Just ea -> [SQLText tid, SQLText startedAt, SQLText ea]

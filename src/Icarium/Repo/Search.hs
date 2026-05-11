@@ -168,14 +168,14 @@ searchContexts conn pq = do
   where
     (whereClause, params) = buildWhere "title" "body" pq
     sql = Query $ "SELECT " <> ctxCols <> " FROM context WHERE " <> whereClause
-    toHit k =
+    toHit cx =
         SearchHit
-            { hitId = contextId k
+            { hitId = contextId cx
             , hitKind = ContextNode
-            , hitTitle = contextTitle k
-            , hitBody = contextBody k
-            , hitUpdatedAt = contextUpdatedAt k
-            , hitTitleMatch = matchesTitle pq (contextTitle k)
+            , hitTitle = contextTitle cx
+            , hitBody = contextBody cx
+            , hitUpdatedAt = contextUpdatedAt cx
+            , hitTitleMatch = matchesTitle pq (contextTitle cx)
             , hitState = Nothing
-            , hitStale = contextStale k
+            , hitStale = contextStale cx
             }

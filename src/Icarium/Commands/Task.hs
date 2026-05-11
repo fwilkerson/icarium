@@ -13,7 +13,7 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Context qualified as RK
+import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -213,9 +213,9 @@ runShow db o = do
                         refs <- RE.referencedContexts c (taskId t)
                         deps <- RE.dependencyTasks c (taskId t)
                         cats <- RC.taskCategoriesFor c (taskId t)
-                        catMatch <- RK.categoryMatchedContexts c cats 5
+                        catMatch <- RCx.categoryMatchedContexts c cats 5
                         let refIds = map contextId refs
-                            dedupedCat = filter (\k -> contextId k `notElem` refIds) catMatch
+                            dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
                         TIO.putStr (Render.renderTaskPrompt t refs dedupedCat deps)
                     else do
                         refs <- RE.referencedContexts c (taskId t)

@@ -43,7 +43,7 @@ import System.Exit (ExitCode (..), exitWith)
 import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
 import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Context qualified as RK
+import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -144,18 +144,18 @@ requireTask c input = do
 
 requireContext :: Connection -> Text -> IO Text
 requireContext c input = do
-    r <- RK.resolveContextId c input
+    r <- RCx.resolveContextId c input
     case r of
-        Right kid -> pure kid
+        Right cxid -> pure cxid
         Left err -> fatal 2 err
 
 resolveNode :: Connection -> Text -> IO (NodeKind, Text)
 resolveNode c input = do
     ts <- RT.getTasksByPrefix c input
-    ks <- RK.getContextsByPrefix c input
-    case (ts, ks) of
+    cxs <- RCx.getContextsByPrefix c input
+    case (ts, cxs) of
         ([t], []) -> pure (TaskNode, taskId t)
-        ([], [k]) -> pure (ContextNode, contextId k)
+        ([], [cx]) -> pure (ContextNode, contextId cx)
         ([], []) -> fatal 2 ("unknown node: " <> T.unpack input)
         _ -> fatal 2 ("ambiguous id: " <> T.unpack input)
 
