@@ -37,9 +37,9 @@ import Icarium.Git qualified as Git
 import Icarium.Id (newId)
 import Icarium.Render (renderTaskPrompt)
 import Icarium.Repo.Category qualified as RC
+import Icarium.Repo.Context qualified as RK
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Edge qualified as RE
-import Icarium.Repo.Knowledge qualified as RK
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -243,12 +243,12 @@ checkPreconditions base = do
 
 buildPrompt :: Connection -> Task -> IO Text
 buildPrompt conn t = do
-    refs <- RE.referencedKnowledge conn (taskId t)
+    refs <- RE.referencedContexts conn (taskId t)
     cats <- RC.taskCategoriesFor conn (taskId t)
-    catMatch <- RK.categoryMatchedKnowledge conn cats 5
+    catMatch <- RK.categoryMatchedContexts conn cats 5
     deps <- RE.dependencyTasks conn (taskId t)
-    let refIds = map knowledgeId refs
-        dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+    let refIds = map contextId refs
+        dedupedCat = filter (\k -> contextId k `notElem` refIds) catMatch
     pure (renderTaskPrompt t refs dedupedCat deps)
 
 ioFail :: String -> IO a

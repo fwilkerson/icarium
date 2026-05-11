@@ -320,9 +320,9 @@ runList db o = withDb db $ \c -> do
     let taskIds = nub (map dispatchTaskId filtered)
     tasks <- RT.getTasksByIds c taskIds
     let titleMap = [(taskId t, taskTitle t) | t <- tasks]
-    knowCounts <- forM filtered $ \d ->
+    ctxCounts <- forM filtered $ \d ->
         length
-            <$> RE.knowledgeDerivedFromDispatch
+            <$> RE.contextDerivedFromDispatch
                 c
                 (dispatchTaskId d)
                 (dispatchStartedAt d)
@@ -333,12 +333,12 @@ runList db o = withDb db $ \c -> do
                     Render.DispatchRow
                         { Render.drDispatch = d
                         , Render.drTaskTitle = fromMaybe "" (lookup (dispatchTaskId d) titleMap)
-                        , Render.drKnowCount = kc
+                        , Render.drCtxCount = kc
                         , Render.drDuration = formatDispatchDuration now d
                         }
                 )
                 filtered
-                knowCounts
+                ctxCounts
     utf8 <- detectUtf8
     TIO.putStr (Render.renderDispatchList utf8 rows)
 
@@ -362,7 +362,7 @@ runShow db o = withDb db $ \c -> do
         Just d -> do
             mt <- RT.getTask c (dispatchTaskId d)
             ks <-
-                RE.knowledgeDerivedFromDispatch
+                RE.contextDerivedFromDispatch
                     c
                     (dispatchTaskId d)
                     (dispatchStartedAt d)

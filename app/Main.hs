@@ -2,10 +2,10 @@ module Main (main) where
 
 import Data.Version (showVersion)
 import Icarium.Commands.Category qualified as Category
+import Icarium.Commands.Ctx qualified as Ctx
 import Icarium.Commands.Dispatch qualified as Dispatch
 import Icarium.Commands.Doctor qualified as Doctor
 import Icarium.Commands.Init qualified as Init
-import Icarium.Commands.Know qualified as Know
 import Icarium.Commands.Link qualified as Link
 import Icarium.Commands.Search qualified as Search
 import Icarium.Commands.Task qualified as Task
@@ -18,7 +18,7 @@ data Command
     = CmdInit Init.Options
     | CmdDoctor Doctor.Options
     | CmdTask Task.Command
-    | CmdKnow Know.Command
+    | CmdCtx Ctx.Command
     | CmdLink Link.Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
@@ -36,10 +36,10 @@ main = do
     runCmd (argsDb args) (argsCmd args)
 
 nounGroups :: [String]
-nounGroups = ["task", "know", "dispatch", "link", "category"]
+nounGroups = ["task", "ctx", "dispatch", "link", "category"]
 
 {- | Rewrite `ls` to `list` when it directly follows a noun group name.
-Lets `task ls`, `know ls`, etc. work without registering `ls` in each
+Lets `task ls`, `ctx ls`, etc. work without registering `ls` in each
 subparser (which would cause it to show up in `--help`).
 -}
 lsToList :: [String] -> [String]
@@ -72,7 +72,7 @@ runCmd :: FilePath -> Command -> IO ()
 runCmd db (CmdInit o) = Init.run db o
 runCmd db (CmdDoctor o) = Doctor.run db o
 runCmd db (CmdTask c) = Task.run db c
-runCmd db (CmdKnow c) = Know.run db c
+runCmd db (CmdCtx c) = Ctx.run db c
 runCmd db (CmdLink c) = Link.run db c
 runCmd db (CmdCategory c) = Category.run db c
 runCmd db (CmdDispatch c) = Dispatch.run db c
@@ -89,7 +89,7 @@ parser =
     info
         (argsP <**> helper <**> versionP)
         ( fullDesc
-            <> progDesc "Task/knowledge/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id."
+            <> progDesc "Task/context/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id."
             <> header "icarium"
         )
 
@@ -127,10 +127,10 @@ cmdP =
                     (progDesc "Manage tasks. Example: icarium task list --state ready")
                 )
             <> command
-                "know"
+                "ctx"
                 ( info
-                    (CmdKnow <$> Know.parser <**> helper)
-                    (progDesc "Manage knowledge entries. Example: icarium know list --discipline planning")
+                    (CmdCtx <$> Ctx.parser <**> helper)
+                    (progDesc "Manage context entries. Example: icarium ctx list --discipline planning")
                 )
             <> command
                 "link"
@@ -154,6 +154,6 @@ cmdP =
                 "search"
                 ( info
                     (CmdSearch <$> Search.parser <**> helper)
-                    (progDesc "Search tasks and knowledge by title and body. Example: icarium search fts5")
+                    (progDesc "Search tasks and context by title and body. Example: icarium search fts5")
                 )
         )

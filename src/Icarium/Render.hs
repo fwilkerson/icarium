@@ -4,9 +4,9 @@ module Icarium.Render (
     TaskRow (..),
     renderTaskList,
     mkBar,
-    renderKnowledge,
-    KnowledgeRow (..),
-    renderKnowledgeList,
+    renderContext,
+    ContextRow (..),
+    renderContextList,
     formatLinkedCount,
     renderEdgeLine,
     renderCategory,
@@ -46,7 +46,7 @@ data TaskRow = TaskRow
 
 @utf8@: True → Unicode tree glyphs; False → ASCII fallback.
 -}
-renderTaskHuman :: Bool -> Task -> [Knowledge] -> [Task] -> [Category] -> Text
+renderTaskHuman :: Bool -> Task -> [Context] -> [Task] -> [Category] -> Text
 renderTaskHuman utf8 t refs deps cats =
     T.unlines $
         [ "id:        " <> taskId t
@@ -88,16 +88,16 @@ noCommitLine t
 All depends-on edges first (sorted by target id ASC), then references.
 Last edge gets └─ (or \- in ASCII mode); others get ├─ (or +-).
 -}
-linksSection :: Bool -> Task -> [Task] -> [Knowledge] -> [Text]
+linksSection :: Bool -> Task -> [Task] -> [Context] -> [Text]
 linksSection _ _ [] [] = ["## Links", "", "(none)", ""]
 linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
   where
     rootLine = T.take 10 (taskId t) <> "  " <> taskTitle t
 
     sortedDeps = sortBy (\a b -> compare (taskId a) (taskId b)) deps
-    sortedRefs = sortBy (\a b -> compare (knowledgeId a) (knowledgeId b)) refs
+    sortedRefs = sortBy (\a b -> compare (contextId a) (contextId b)) refs
 
-    allEdges :: [Either Task Knowledge]
+    allEdges :: [Either Task Context]
     allEdges = map Left sortedDeps <> map Right sortedRefs
     n = length allEdges
 
@@ -109,11 +109,11 @@ linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
     mkEdge i e =
         let g = if i == n - 1 then lastG else branchG
             kindStr = either (const "depends-on") (const "references") e
-            idStr = either (T.take 10 . taskId) (T.take 10 . knowledgeId) e
-            titStr = either taskTitle knowledgeTitle e
+            idStr = either (T.take 10 . taskId) (T.take 10 . contextId) e
+            titStr = either taskTitle contextTitle e
             suffix = case e of
                 Left dep -> "  [" <> taskStateText (taskState dep) <> "]"
-                Right ref -> if knowledgeStale ref then "  [STALE]" else ""
+                Right ref -> if contextStale ref then "  [STALE]" else ""
          in g <> " " <> padr kindWidth kindStr <> "  " <> idStr <> "  " <> titStr <> suffix
 
     edgeLines = zipWith mkEdge [0 ..] allEdges
@@ -123,7 +123,7 @@ Sharing this with @task show --prompt@ keeps the two in lockstep.
 @refs@ = explicit references (always rendered); @catMatched@ = auto-pulled
 by category (rendered under a separate hedged section, omitted if empty).
 -}
-renderTaskPrompt :: Task -> [Knowledge] -> [Knowledge] -> [Task] -> Text
+renderTaskPrompt :: Task -> [Context] -> [Context] -> [Task] -> Text
 renderTaskPrompt t refs catMatched deps =
     T.unlines $
         [ "# Task " <> taskId t
@@ -146,34 +146,34 @@ promptDeps ds =
         : map (\d -> "- " <> taskId d <> "  " <> taskTitle d) ds
         ++ [""]
 
-promptRefs :: [Knowledge] -> [Text]
+promptRefs :: [Context] -> [Text]
 promptRefs [] = []
 promptRefs ks =
-    "## Referenced knowledge"
+    "## Referenced context"
         : ""
         : concatMap
             ( \k ->
-                [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
+                [ "### " <> contextTitle k <> " (" <> contextId k <> ")"
                 , ""
-                , knowledgeBody k
+                , contextBody k
                 , ""
                 ]
             )
             ks
 
-promptRelated :: [Knowledge] -> [Text]
+promptRelated :: [Context] -> [Text]
 promptRelated [] = []
 promptRelated ks =
-    [ "## Related knowledge"
+    [ "## Related context"
     , ""
     , "These entries share categories with this task. They may not all apply directly — use judgment."
     , ""
     ]
         <> concatMap
             ( \k ->
-                [ "### " <> knowledgeTitle k <> " (" <> knowledgeId k <> ")"
+                [ "### " <> contextTitle k <> " (" <> contextId k <> ")"
                 , ""
-                , knowledgeBody k
+                , contextBody k
                 , ""
                 ]
             )
@@ -185,10 +185,10 @@ workingAgreement t =
     , ""
     , "You are a headless dispatch working on this task. Guardrails:"
     , ""
-    , "- All task/knowledge mutation MUST go through the `icarium` CLI."
+    , "- All task/context mutation MUST go through the `icarium` CLI."
     , "- If blocked:  `icarium task update " <> taskId t <> " --state blocked --block-reason '<why>'`"
-    , "- Record anything you learn that future tasks should know as knowledge:"
-    , "    `icarium know add '<title>' --body-file -`"
+    , "- Record anything you learn that future tasks would benefit from as a context entry:"
+    , "    `icarium ctx add '<title>' --body-file -`"
     , "- Commit your code before exiting; the program marks the task done after the gates pass and the FF-merge succeeds."
     , "- Test artifacts (snapshots, fixtures, scratch files) MUST go in `$ICARIUM_SCRATCH_DIR`,"
     , "  never in the working tree. The post-claude gate refuses to merge when the tree is dirty."
@@ -300,29 +300,29 @@ formatEdgeCounts d r =
             <> ["refs:" <> T.pack (show r) | r > 0]
 
 -- =============================================================
--- Knowledge rendering
+-- Context rendering
 -- =============================================================
 
-renderKnowledge :: Knowledge -> [Category] -> Text
-renderKnowledge k cats =
+renderContext :: Context -> [Category] -> Text
+renderContext k cats =
     T.unlines $
-        [ "id:       " <> knowledgeId k
-        , "title:    " <> knowledgeTitle k
-        , "stale:    " <> (if knowledgeStale k then "yes" else "no")
-        , "created:  " <> knowledgeCreatedAt k
-        , "updated:  " <> knowledgeUpdatedAt k
+        [ "id:       " <> contextId k
+        , "title:    " <> contextTitle k
+        , "stale:    " <> (if contextStale k then "yes" else "no")
+        , "created:  " <> contextCreatedAt k
+        , "updated:  " <> contextUpdatedAt k
         ]
             <> categoriesBlock cats
             <> [ ""
                , "## Body"
                , ""
-               , if T.null (knowledgeBody k) then "(no body)" else knowledgeBody k
+               , if T.null (contextBody k) then "(no body)" else contextBody k
                ]
 
-data KnowledgeRow = KnowledgeRow
-    { krKnowledge :: Knowledge
-    , krCats :: [Category]
-    , krLinked :: Int
+data ContextRow = ContextRow
+    { crContext :: Context
+    , crCats :: [Category]
+    , crLinked :: Int
     }
 
 -- | Format a linked-count badge. Empty string when count is 0.
@@ -330,21 +330,21 @@ formatLinkedCount :: Int -> Text
 formatLinkedCount 0 = ""
 formatLinkedCount n = "[linked:" <> T.pack (show n) <> "]"
 
-renderKnowledgeList :: Bool -> [KnowledgeRow] -> Text
-renderKnowledgeList _ [] = "(no knowledge)\n"
-renderKnowledgeList utf8 rows = T.unlines $ map row rows
+renderContextList :: Bool -> [ContextRow] -> Text
+renderContextList _ [] = "(no context)\n"
+renderContextList utf8 rows = T.unlines $ map row rows
   where
-    titleWidth = min recommendedTitleMax (maxLen recommendedTitleMax (map (T.length . knowledgeTitle . krKnowledge) rows))
-    catWidth = maxLen 3 (map (T.length . formatCats . krCats) rows)
+    titleWidth = min recommendedTitleMax (maxLen recommendedTitleMax (map (T.length . contextTitle . crContext) rows))
+    catWidth = maxLen 3 (map (T.length . formatCats . crCats) rows)
 
-    row kr =
-        let k = krKnowledge kr
-            idPart = "  " <> T.take 10 (knowledgeId k)
-            titPart = padr titleWidth (truncateTitle utf8 titleWidth (knowledgeTitle k))
-            catPart = padr catWidth (formatCats (krCats kr))
-            linked = formatLinkedCount (krLinked kr)
+    row cr =
+        let k = crContext cr
+            idPart = "  " <> T.take 10 (contextId k)
+            titPart = padr titleWidth (truncateTitle utf8 titleWidth (contextTitle k))
+            catPart = padr catWidth (formatCats (crCats cr))
+            linked = formatLinkedCount (crLinked cr)
             linkedPart = if T.null linked then "" else "  " <> linked
-            stalePart = if knowledgeStale k then "  [stale]" else ""
+            stalePart = if contextStale k then "  [stale]" else ""
          in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> stalePart
 
 renderEdgeLine :: Edge -> Text
@@ -386,7 +386,7 @@ categoriesBlock cats =
 -- Dispatch rendering
 -- =============================================================
 
-renderDispatch :: Dispatch -> Maybe Task -> [Knowledge] -> Text
+renderDispatch :: Dispatch -> Maybe Task -> [Context] -> Text
 renderDispatch d mt ks =
     T.unlines $
         [ field "id" (dispatchId d)
@@ -409,9 +409,9 @@ renderDispatch d mt ks =
         ]
             ++ tokensLine
             ++ [ ""
-               , "Knowledge added:"
+               , "Context added:"
                ]
-            ++ knowledgeLines
+            ++ contextLines
   where
     field k v = padr 14 (k <> ":") <> " " <> v
     tokensLine = case (dispatchTokensIn d, dispatchTokensOut d, dispatchTokensCacheRead d) of
@@ -427,14 +427,14 @@ renderDispatch d mt ks =
                 )
             ]
         _ -> []
-    knowledgeLines = case ks of
+    contextLines = case ks of
         [] -> ["  (none)"]
-        _ -> map (\k -> "  " <> T.take 10 (knowledgeId k) <> "  " <> knowledgeTitle k) ks
+        _ -> map (\k -> "  " <> T.take 10 (contextId k) <> "  " <> contextTitle k) ks
 
 data DispatchRow = DispatchRow
     { drDispatch :: Dispatch
     , drTaskTitle :: Text
-    , drKnowCount :: Int
+    , drCtxCount :: Int
     , drDuration :: Text
     }
 
@@ -444,10 +444,10 @@ renderDispatchList utf8 rows = T.unlines $ map renderRow rows
   where
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . drTaskTitle) rows))
     durWidth = maxLen 2 (map (T.length . drDuration) rows)
-    knowWidth = maxLen 0 (map (T.length . fmtKnow . drKnowCount) rows)
+    ctxWidth = maxLen 0 (map (T.length . fmtCtx . drCtxCount) rows)
 
-    fmtKnow 0 = ""
-    fmtKnow n = "[know:" <> T.pack (show n) <> "]"
+    fmtCtx 0 = ""
+    fmtCtx n = "[ctx:" <> T.pack (show n) <> "]"
 
     renderRow dr =
         let d = drDispatch dr
@@ -455,10 +455,10 @@ renderDispatchList utf8 rows = T.unlines $ map renderRow rows
             tidPart = padr 10 (T.take 10 (dispatchTaskId d))
             titPart = padr titleWidth (truncateTitle utf8 titleWidth (drTaskTitle dr))
             durPart = padr durWidth (drDuration dr)
-            know = fmtKnow (drKnowCount dr)
-            knowPart = if knowWidth == 0 then "" else "  " <> padr knowWidth know
+            ctx = fmtCtx (drCtxCount dr)
+            ctxPart = if ctxWidth == 0 then "" else "  " <> padr ctxWidth ctx
             badge = outcomeBadge (dispatchOutcome d)
-         in didPart <> "   " <> tidPart <> "  " <> titPart <> "  " <> durPart <> knowPart <> "  " <> badge
+         in didPart <> "   " <> tidPart <> "  " <> titPart <> "  " <> durPart <> ctxPart <> "  " <> badge
 
 outcomeBadge :: Maybe DispatchOutcome -> Text
 outcomeBadge Nothing = "[open]"
@@ -522,14 +522,14 @@ renderSearchList useUnicode isTty noSnippet q rows =
 
 kindLetter :: NodeKind -> Text
 kindLetter TaskNode = "T"
-kindLetter KnowledgeNode = "K"
+kindLetter ContextNode = "C"
 
 searchBadge :: SearchHit -> Text
 searchBadge h = case hitKind h of
     TaskNode -> case hitState h of
         Just s -> "[" <> stateBadgeText s <> "]"
         Nothing -> ""
-    KnowledgeNode -> if hitStale h then "[stale]" else ""
+    ContextNode -> if hitStale h then "[stale]" else ""
 
 extractSnippet :: Bool -> Text -> Text -> Text
 extractSnippet _ _ "" = ""

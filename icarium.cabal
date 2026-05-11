@@ -1,7 +1,7 @@
 cabal-version:      3.0
 name:               icarium
 version:            0.1.2
-synopsis:           Task/knowledge/dispatch tool for headless-agent workflows
+synopsis:           Task/context/dispatch tool for headless-agent workflows
 author:             frank
 maintainer:         frank.w1lk3rs0n@gmail.com
 build-type:         Simple
@@ -37,7 +37,7 @@ library
                       Icarium.Heartbeat
                       Icarium.Repo.Internal
                       Icarium.Repo.Task
-                      Icarium.Repo.Knowledge
+                      Icarium.Repo.Context
                       Icarium.Repo.Edge
                       Icarium.Repo.Category
                       Icarium.Repo.Dispatch
@@ -46,7 +46,7 @@ library
                       Icarium.Commands.Init
                       Icarium.Commands.Doctor
                       Icarium.Commands.Task
-                      Icarium.Commands.Know
+                      Icarium.Commands.Ctx
                       Icarium.Commands.Link
                       Icarium.Commands.Category
                       Icarium.Commands.Dispatch

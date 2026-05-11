@@ -13,16 +13,16 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Commands.Category (SyncReport (..), syncCategories)
-import Icarium.Commands.Know (autoDeriveDeps)
+import Icarium.Commands.Ctx (autoDeriveDeps)
 import Icarium.Config (CategoriesConfig (..), defaultConfigText, loadConfig)
 import Icarium.Db (dbSchemaVersion, migrateDb)
 import Icarium.Id (newId)
 import Icarium.Migrations (Migration (..), mkSqlMigration)
 import Icarium.Render (renderTaskPrompt)
 import Icarium.Repo.Category qualified as RC
+import Icarium.Repo.Context qualified as RK
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Edge qualified as RE
-import Icarium.Repo.Knowledge qualified as RK
 import Icarium.Repo.Search qualified as RS
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -38,9 +38,9 @@ tests =
         , testCase "parseTaskStateDb DB form" $ parseTaskStateDb "in_progress" @?= Just InProgress
         , testCase "loadConfig succeeds on default template" loadConfigTest
         , testGroup
-            "categoryMatchedKnowledge"
-            [ testCase "both-axis match appears under Related knowledge" testBothAxisMatch
-            , testCase "stale knowledge excluded from auto-pull" testStaleExcluded
+            "categoryMatchedContexts"
+            [ testCase "both-axis match appears under Related context" testBothAxisMatch
+            , testCase "stale context excluded from auto-pull" testStaleExcluded
             , testCase "zero categories yields empty result" testNoCats
             , testCase "explicit ref deduped from auto-pull" testDedup
             , testCase "cap at 5, ordered most-recent-first" testCap
@@ -50,7 +50,7 @@ tests =
         , testGroup
             "schema"
             [ testCase "applying embedded schema produces user_version = 1 with expected tables" testInitialSchema
-            , testCase "deleting a knowledge entry cascades to knowledge_categories rows" testKnowledgeCategoriesCascade
+            , testCase "deleting a context entry cascades to context_categories rows" testContextCategoriesCascade
             ]
         , testGroup
             "migrations"
@@ -78,10 +78,10 @@ tests =
             , testCase "left on ambiguous" testResolveTaskAmbiguous
             ]
         , testGroup
-            "resolveKnowledgeId (PREFIX_RESOLUTION: know show/update/rm, know add --supersedes, task add --references)"
-            [ testCase "right on unique prefix" testResolveKnowledgePrefix
-            , testCase "left on missing" testResolveKnowledgeMissing
-            , testCase "left on ambiguous" testResolveKnowledgeAmbiguous
+            "resolveContextId (PREFIX_RESOLUTION: ctx show/update/rm, ctx add --supersedes, task add --references)"
+            [ testCase "right on unique prefix" testResolveContextPrefix
+            , testCase "left on missing" testResolveContextMissing
+            , testCase "left on ambiguous" testResolveContextAmbiguous
             ]
         , testGroup
             "resolveEdgeId (PREFIX_RESOLUTION: link rm)"
@@ -98,9 +98,9 @@ tests =
             [ testCase "selects all Task columns (regression: missing no_commit)" testDependencyTasksReturnsAllColumns
             ]
         , testGroup
-            "resolveNode (PREFIX_RESOLUTION: link add src/dst, link list --from/--to, know add --derived-from)"
+            "resolveNode (PREFIX_RESOLUTION: link add src/dst, link list --from/--to, ctx add --derived-from)"
             [ testCase "resolves task prefix" testResolveNodeTask
-            , testCase "resolves knowledge prefix" testResolveNodeKnowledge
+            , testCase "resolves context prefix" testResolveNodeContext
             , testCase "left on ambiguous cross-type" testResolveNodeAmbiguous
             ]
         , testGroup
@@ -132,16 +132,16 @@ tests =
             "category replace semantics"
             [ testCase "task update --domain replaces existing domain" testTaskUpdateDomainReplaces
             , testCase "task update --domain empty string clears domain" testTaskUpdateDomainClears
-            , testCase "know update --domain replaces not appends" testKnowUpdateDomainReplaces
+            , testCase "ctx update --domain replaces not appends" testCtxUpdateDomainReplaces
             ]
         , testGroup
             "searchEntries"
             [ testCase "title hit ranks before body hit" testSearchTitleBeforeBody
-            , testCase "title hit from knowledge outranks body hit from task" testSearchCrossKindRank
+            , testCase "title hit from context outranks body hit from task" testSearchCrossKindRank
             , testCase "escapeLike: query containing % matches literally" testSearchEscapePercent
             , testCase "escapeLike: query containing _ matches literally" testSearchEscapeUnderscore
-            , testCase "--kind task excludes knowledge hits" testSearchKindTask
-            , testCase "--kind know excludes task hits" testSearchKindKnow
+            , testCase "--kind task excludes context hits" testSearchKindTask
+            , testCase "--kind ctx excludes task hits" testSearchKindCtx
             , testCase "limit caps result count" testSearchLimit
             , testCase "no match returns empty list" testSearchNoMatch
             ]
@@ -179,54 +179,54 @@ loadConfigTest =
             Right _ -> pure ()
 
 -- =============================================================
--- categoryMatchedKnowledge tests
+-- categoryMatchedContexts tests
 -- =============================================================
 
 testBothAxisMatch :: IO ()
 testBothAxisMatch = withTestDb $ \c -> do
     domCat <- mkCat c Domain "cli"
     discCat <- mkCat c Discipline "haskell"
-    kid <- mkKnowledge c "Match K" "match body"
-    attachKnowledgeCats c kid [domCat, discCat]
-    result <- RK.categoryMatchedKnowledge c [domCat, discCat] 5
-    map knowledgeId result @?= [kid]
+    kid <- mkContext c "Match K" "match body"
+    attachContextCats c kid [domCat, discCat]
+    result <- RK.categoryMatchedContexts c [domCat, discCat] 5
+    map contextId result @?= [kid]
     let prompt = renderTaskPrompt minTask [] result []
-    assertBool "Related knowledge header present" ("## Related knowledge" `T.isInfixOf` prompt)
+    assertBool "Related context header present" ("## Related context" `T.isInfixOf` prompt)
     assertBool "Hedge sentence present" ("use judgment" `T.isInfixOf` prompt)
-    assertBool "Knowledge title in prompt" ("Match K" `T.isInfixOf` prompt)
+    assertBool "Context title in prompt" ("Match K" `T.isInfixOf` prompt)
 
 testStaleExcluded :: IO ()
 testStaleExcluded = withTestDb $ \c -> do
     domCat <- mkCat c Domain "cli"
-    kid <- mkKnowledge c "Stale K" "stale body"
-    attachKnowledgeCats c kid [domCat]
-    void $ RK.updateKnowledge c kid RK.emptyUpdate{RK.kuStale = Just True}
-    result <- RK.categoryMatchedKnowledge c [domCat] 5
+    kid <- mkContext c "Stale K" "stale body"
+    attachContextCats c kid [domCat]
+    void $ RK.updateContext c kid RK.emptyUpdate{RK.cuStale = Just True}
+    result <- RK.categoryMatchedContexts c [domCat] 5
     null result @?= True
 
 testNoCats :: IO ()
 testNoCats = withTestDb $ \c -> do
-    result <- RK.categoryMatchedKnowledge c [] 5
+    result <- RK.categoryMatchedContexts c [] 5
     null result @?= True
     let prompt = renderTaskPrompt minTask [] [] []
-    assertBool "no Related knowledge header" (not ("## Related knowledge" `T.isInfixOf` prompt))
+    assertBool "no Related context header" (not ("## Related context" `T.isInfixOf` prompt))
 
 testDedup :: IO ()
 testDedup = withTestDb $ \c -> do
     domCat <- mkCat c Domain "cli"
-    kid <- mkKnowledge c "Shared K" "shared body"
-    attachKnowledgeCats c kid [domCat]
-    catResult <- RK.categoryMatchedKnowledge c [domCat] 5
+    kid <- mkContext c "Shared K" "shared body"
+    attachContextCats c kid [domCat]
+    catResult <- RK.categoryMatchedContexts c [domCat] 5
     case catResult of
-        [] -> fail "expected knowledge to auto-pull"
+        [] -> fail "expected context to auto-pull"
         k : _ -> do
             let refs = [k]
-                refIds = map knowledgeId refs
-                dedupedCat = filter (\x -> knowledgeId x `notElem` refIds) catResult
+                refIds = map contextId refs
+                dedupedCat = filter (\x -> contextId x `notElem` refIds) catResult
             assertBool "dedupedCat is empty" (null dedupedCat)
             let prompt = renderTaskPrompt minTask refs dedupedCat []
-            assertBool "refs section present" ("## Referenced knowledge" `T.isInfixOf` prompt)
-            assertBool "related section absent (dedup)" (not ("## Related knowledge" `T.isInfixOf` prompt))
+            assertBool "refs section present" ("## Referenced context" `T.isInfixOf` prompt)
+            assertBool "related section absent (dedup)" (not ("## Related context" `T.isInfixOf` prompt))
 
 testCap :: IO ()
 testCap = withTestDb $ \c -> do
@@ -235,38 +235,38 @@ testCap = withTestDb $ \c -> do
         kid <- newId
         execute
             c
-            (Query "INSERT INTO knowledge (id, title, body, created_at) VALUES (?,?,?,?)")
+            (Query "INSERT INTO context (id, title, body, created_at) VALUES (?,?,?,?)")
             ( kid
             , "K" <> T.pack (show i) :: Text
             , "" :: Text
             , "2026-01-0" <> T.pack (show i) <> "T00:00:00" :: Text
             )
-        RC.attachKnowledgeCategory c kid (categoryId domCat)
+        RC.attachContextCategory c kid (categoryId domCat)
         pure kid
-    result <- RK.categoryMatchedKnowledge c [domCat] 5
+    result <- RK.categoryMatchedContexts c [domCat] 5
     length result @?= 5
-    map knowledgeId result @?= reverse (tail kids)
+    map contextId result @?= reverse (tail kids)
 
 testOneAxisMismatch :: IO ()
 testOneAxisMismatch = withTestDb $ \c -> do
     domCat <- mkCat c Domain "cli"
     discCat <- mkCat c Discipline "haskell"
-    kid <- mkKnowledge c "Domain-only K" "body"
-    attachKnowledgeCats c kid [domCat]
-    result <- RK.categoryMatchedKnowledge c [domCat, discCat] 5
+    kid <- mkContext c "Domain-only K" "body"
+    attachContextCats c kid [domCat]
+    result <- RK.categoryMatchedContexts c [domCat, discCat] 5
     null result @?= True
 
 testStaleRef :: IO ()
 testStaleRef = withTestDb $ \c -> do
-    kid <- mkKnowledge c "Stale ref" "stale ref body"
-    void $ RK.updateKnowledge c kid RK.emptyUpdate{RK.kuStale = Just True}
-    mk <- RK.getKnowledge c kid
+    kid <- mkContext c "Stale ref" "stale ref body"
+    void $ RK.updateContext c kid RK.emptyUpdate{RK.cuStale = Just True}
+    mk <- RK.getContext c kid
     case mk of
-        Nothing -> fail "knowledge not found after insert"
+        Nothing -> fail "context not found after insert"
         Just k -> do
             let prompt = renderTaskPrompt minTask [k] [] []
             assertBool "stale ref body in prompt" ("stale ref body" `T.isInfixOf` prompt)
-            assertBool "Referenced knowledge header" ("## Referenced knowledge" `T.isInfixOf` prompt)
+            assertBool "Referenced context header" ("## Referenced context" `T.isInfixOf` prompt)
 
 -- =============================================================
 -- Schema tests
@@ -283,6 +283,8 @@ testInitialSchema = withBaseTestDb $ \conn -> do
             IO [Only Text]
     let tables = map (\(Only n) -> n) tableRows
     assertBool "tasks table exists" ("tasks" `elem` tables)
+    -- Baseline schema is v1; the rename to `context` happens in migration 0005,
+    -- so at v1 the original `knowledge` / `knowledge_categories` names apply.
     assertBool "knowledge table exists" ("knowledge" `elem` tables)
     assertBool "categories table exists" ("categories" `elem` tables)
     assertBool "edges table exists" ("edges" `elem` tables)
@@ -290,15 +292,15 @@ testInitialSchema = withBaseTestDb $ \conn -> do
     assertBool "task_categories table exists" ("task_categories" `elem` tables)
     assertBool "knowledge_categories table exists" ("knowledge_categories" `elem` tables)
 
-testKnowledgeCategoriesCascade :: IO ()
-testKnowledgeCategoriesCascade = withTestDb $ \conn -> do
+testContextCategoriesCascade :: IO ()
+testContextCategoriesCascade = withTestDb $ \conn -> do
     domCat <- mkCat conn Domain "cli"
-    kid <- mkKnowledge conn "K" "body"
-    RC.attachKnowledgeCategory conn kid (categoryId domCat)
-    pre <- query_ conn "SELECT knowledge_id FROM knowledge_categories" :: IO [Only Text]
+    kid <- mkContext conn "K" "body"
+    RC.attachContextCategory conn kid (categoryId domCat)
+    pre <- query_ conn "SELECT context_id FROM context_categories" :: IO [Only Text]
     length pre @?= 1
-    execute conn (Query "DELETE FROM knowledge WHERE id = ?") (Only kid)
-    post <- query_ conn "SELECT knowledge_id FROM knowledge_categories" :: IO [Only Text]
+    execute conn (Query "DELETE FROM context WHERE id = ?") (Only kid)
+    post <- query_ conn "SELECT context_id FROM context_categories" :: IO [Only Text]
     length post @?= 0
 
 -- =============================================================
@@ -452,35 +454,35 @@ testResolveTaskAmbiguous = withTestDb $ \c -> do
         Right _ -> fail "expected Left for ambiguous task"
 
 -- =============================================================
--- resolveKnowledgeId tests
+-- resolveContextId tests
 -- =============================================================
 
-testResolveKnowledgePrefix :: IO ()
-testResolveKnowledgePrefix = withTestDb $ \c -> do
-    kid <- mkKnowledge c "K" "body"
-    r <- RK.resolveKnowledgeId c (T.take 10 kid)
+testResolveContextPrefix :: IO ()
+testResolveContextPrefix = withTestDb $ \c -> do
+    kid <- mkContext c "K" "body"
+    r <- RK.resolveContextId c (T.take 10 kid)
     r @?= Right kid
 
-testResolveKnowledgeMissing :: IO ()
-testResolveKnowledgeMissing = withTestDb $ \c -> do
-    r <- RK.resolveKnowledgeId c "01ZZZZZZZZ"
+testResolveContextMissing :: IO ()
+testResolveContextMissing = withTestDb $ \c -> do
+    r <- RK.resolveContextId c "01ZZZZZZZZ"
     case r of
         Left msg -> assertBool "error mentions input" ("01ZZZZZZZZ" `T.isInfixOf` T.pack msg)
-        Right _ -> fail "expected Left for missing knowledge"
+        Right _ -> fail "expected Left for missing context"
 
-testResolveKnowledgeAmbiguous :: IO ()
-testResolveKnowledgeAmbiguous = withTestDb $ \c -> do
+testResolveContextAmbiguous :: IO ()
+testResolveContextAmbiguous = withTestDb $ \c -> do
     let kid1 = "01DDDD000000000000000000AA" :: Text
         kid2 = "01DDDD000000000000000000BB" :: Text
     forM_ [kid1, kid2] $ \kid ->
         execute
             c
-            (Query "INSERT INTO knowledge (id, title, body) VALUES (?,?,?)")
+            (Query "INSERT INTO context (id, title, body) VALUES (?,?,?)")
             (kid, "K" :: Text, "" :: Text)
-    r <- RK.resolveKnowledgeId c "01DDDD0000"
+    r <- RK.resolveContextId c "01DDDD0000"
     case r of
         Left msg -> assertBool "error mentions input" ("01DDDD0000" `T.isInfixOf` T.pack msg)
-        Right _ -> fail "expected Left for ambiguous knowledge"
+        Right _ -> fail "expected Left for ambiguous context"
 
 -- =============================================================
 -- resolveEdgeId tests
@@ -534,9 +536,9 @@ testListEdgesSrcKindFilter = withTestDb $ \c -> do
     t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    kid <- RK.insertKnowledge c RK.NewKnowledge{RK.nkTitle = "K", RK.nkBody = ""}
+    kid <- RK.insertContext c RK.NewContext{RK.ncTitle = "K", RK.ncBody = ""}
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
-    _ <- RE.insertEdge c References TaskNode t1 KnowledgeNode kid
+    _ <- RE.insertEdge c References TaskNode t1 ContextNode kid
     _ <- RE.insertEdge c DependsOn TaskNode t2 TaskNode t3
     es <- RE.listEdges c (Just t1) Nothing (Just DependsOn)
     length es @?= 1
@@ -559,17 +561,17 @@ testResolveNodeTask :: IO ()
 testResolveNodeTask = withTestDb $ \c -> do
     tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     ts <- RT.getTasksByPrefix c (T.take 10 tid)
-    ks <- RK.getKnowledgesByPrefix c (T.take 10 tid)
+    ks <- RK.getContextsByPrefix c (T.take 10 tid)
     (length ts, length ks) @?= (1, 0)
     taskId (head ts) @?= tid
 
-testResolveNodeKnowledge :: IO ()
-testResolveNodeKnowledge = withTestDb $ \c -> do
-    kid <- mkKnowledge c "K" "body"
+testResolveNodeContext :: IO ()
+testResolveNodeContext = withTestDb $ \c -> do
+    kid <- mkContext c "K" "body"
     ts <- RT.getTasksByPrefix c (T.take 10 kid)
-    ks <- RK.getKnowledgesByPrefix c (T.take 10 kid)
+    ks <- RK.getContextsByPrefix c (T.take 10 kid)
     (length ts, length ks) @?= (0, 1)
-    knowledgeId (head ks) @?= kid
+    contextId (head ks) @?= kid
 
 testResolveNodeAmbiguous :: IO ()
 testResolveNodeAmbiguous = withTestDb $ \c -> do
@@ -582,11 +584,11 @@ testResolveNodeAmbiguous = withTestDb $ \c -> do
         (tid, "T" :: Text, "" :: Text, "ready" :: Text)
     execute
         c
-        (Query "INSERT INTO knowledge (id, title, body) VALUES (?,?,?)")
+        (Query "INSERT INTO context (id, title, body) VALUES (?,?,?)")
         (kid, "K" :: Text, "" :: Text)
     ts <- RT.getTasksByPrefix c sharedPrefix
-    ks <- RK.getKnowledgesByPrefix c sharedPrefix
-    assertBool "both task and knowledge match prefix" (length ts == 1 && length ks == 1)
+    ks <- RK.getContextsByPrefix c sharedPrefix
+    assertBool "both task and context match prefix" (length ts == 1 && length ks == 1)
 
 -- =============================================================
 -- category sync tests
@@ -833,15 +835,15 @@ testTaskUpdateDomainClears = withTestDb $ \c -> do
     cats <- RC.taskCategoriesFor c tid
     null cats @?= True
 
-testKnowUpdateDomainReplaces :: IO ()
-testKnowUpdateDomainReplaces = withTestDb $ \c -> do
+testCtxUpdateDomainReplaces :: IO ()
+testCtxUpdateDomainReplaces = withTestDb $ \c -> do
     domA <- mkCat c Domain "domA"
     domB <- mkCat c Domain "domB"
-    kid <- mkKnowledge c "K" "body"
-    RC.attachKnowledgeCategory c kid (categoryId domA)
-    RC.detachKnowledgeCategoriesByAxis c kid Domain
-    RC.attachKnowledgeCategory c kid (categoryId domB)
-    cats <- RC.knowledgeCategoriesFor c kid
+    kid <- mkContext c "K" "body"
+    RC.attachContextCategory c kid (categoryId domA)
+    RC.detachContextCategoriesByAxis c kid Domain
+    RC.attachContextCategory c kid (categoryId domB)
+    cats <- RC.contextCategoriesFor c kid
     let doms = filter (\x -> categoryAxis x == Domain) cats
     length doms @?= 1
     map categoryName doms @?= ["domB"]
@@ -853,7 +855,7 @@ testKnowUpdateDomainReplaces = withTestDb $ \c -> do
 testSearchTitleBeforeBody :: IO ()
 testSearchTitleBeforeBody = withTestDb $ \c -> do
     tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    kid <- mkKnowledge c "unrelated title" "body contains needle here"
+    kid <- mkContext c "unrelated title" "body contains needle here"
     results <- RS.searchEntries c "needle" Nothing 10
     assertBool "two results returned" (length results == 2)
     RS.hitId (head results) @?= tid
@@ -864,23 +866,23 @@ testSearchTitleBeforeBody = withTestDb $ \c -> do
 testSearchCrossKindRank :: IO ()
 testSearchCrossKindRank = withTestDb $ \c -> do
     _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    kid <- mkKnowledge c "title has xyzzy" "body"
+    kid <- mkContext c "title has xyzzy" "body"
     results <- RS.searchEntries c "xyzzy" Nothing 10
-    assertBool "knowledge title hit before task body hit" (RS.hitId (head results) == kid)
+    assertBool "context title hit before task body hit" (RS.hitId (head results) == kid)
     RS.hitTitleMatch (head results) @?= True
 
 testSearchEscapePercent :: IO ()
 testSearchEscapePercent = withTestDb $ \c -> do
-    kid <- mkKnowledge c "100% correct" "body"
-    _ <- mkKnowledge c "unrelated" "body"
+    kid <- mkContext c "100% correct" "body"
+    _ <- mkContext c "unrelated" "body"
     results <- RS.searchEntries c "100%" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
 testSearchEscapeUnderscore :: IO ()
 testSearchEscapeUnderscore = withTestDb $ \c -> do
-    kid <- mkKnowledge c "snake_case naming" "body"
-    _ <- mkKnowledge c "unrelated" "body"
+    kid <- mkContext c "snake_case naming" "body"
+    _ <- mkContext c "unrelated" "body"
     results <- RS.searchEntries c "snake_case" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
@@ -888,29 +890,29 @@ testSearchEscapeUnderscore = withTestDb $ \c -> do
 testSearchKindTask :: IO ()
 testSearchKindTask = withTestDb $ \c -> do
     tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    _ <- mkKnowledge c "needle knowledge" "body"
+    _ <- mkContext c "needle context" "body"
     results <- RS.searchEntries c "needle" (Just TaskNode) 10
     length results @?= 1
     RS.hitId (head results) @?= tid
 
-testSearchKindKnow :: IO ()
-testSearchKindKnow = withTestDb $ \c -> do
+testSearchKindCtx :: IO ()
+testSearchKindCtx = withTestDb $ \c -> do
     _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    kid <- mkKnowledge c "needle knowledge" "body"
-    results <- RS.searchEntries c "needle" (Just KnowledgeNode) 10
+    kid <- mkContext c "needle context" "body"
+    results <- RS.searchEntries c "needle" (Just ContextNode) 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
 testSearchLimit :: IO ()
 testSearchLimit = withTestDb $ \c -> do
     forM_ [(1 :: Int) .. 5] $ \i ->
-        void $ mkKnowledge c ("needle entry " <> T.pack (show i)) "body"
+        void $ mkContext c ("needle entry " <> T.pack (show i)) "body"
     results <- RS.searchEntries c "needle" Nothing 3
     length results @?= 3
 
 testSearchNoMatch :: IO ()
 testSearchNoMatch = withTestDb $ \c -> do
-    _ <- mkKnowledge c "some title" "some body"
+    _ <- mkContext c "some title" "some body"
     results <- RS.searchEntries c "xyzzy_no_match" Nothing 10
     null results @?= True
 

@@ -32,7 +32,7 @@ run dbPath o = do
     dbExists <- doesFileExist dbPath
     configExists <- doesFileExist defaultConfigPath
 
-    -- DB is protected: we refuse to clobber existing task/knowledge state.
+    -- DB is protected: we refuse to clobber existing task/context state.
     when (dbExists && not (optForce o)) $
         fatal
             2

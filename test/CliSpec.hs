@@ -58,20 +58,20 @@ tests =
         , testCase "task add --state blocked exits 2" testTaskAddStateBlocked
         , testCase "dispatch run drains empty queue without --max" testDispatchRunEmptyQueue
         , testCase "dispatch run ignores stale max_dispatches_per_run" testDispatchRunStaleConfig
-        , testCase "know list shows cats and linked count" testKnowledgeListLayout
+        , testCase "ctx list shows cats and linked count" testContextListLayout
         , testCase "link --help has corrected argument order example" testLinkHelpExample
         , testCase "link list emits header row when edges exist" testLinkListHeader
-        , testCase "know add --help and link add --help cross-reference each other" testHelpCrossRef
+        , testCase "ctx add --help and link add --help cross-reference each other" testHelpCrossRef
         , testCase "task show --body prints only body" testTaskShowBody
         , testCase "task show --prompt works" testTaskShowPrompt
         , testCase "task show --body --prompt exits 2" testTaskShowBodyAndPrompt
-        , testCase "know show --body prints only body" testKnowShowBody
+        , testCase "ctx show --body prints only body" testCtxShowBody
         , testCase "task show --body round-trip via update --body-file" testTaskBodyRoundTrip
         , -- bare icarium (no args) prints full help
           testCase "bare icarium prints help and exits 0" testBareIcariumHelp
         , -- bare noun group prints help, not list
           testCase "bare task prints help and exits non-zero" testBareTaskHelp
-        , testCase "bare know prints help and exits non-zero" testBareKnowHelp
+        , testCase "bare ctx prints help and exits non-zero" testBareCtxHelp
         , testCase "bare dispatch prints help and exits non-zero" testBareDispatchHelp
         , testCase "bare link prints help and exits non-zero" testBareLinkHelp
         , testCase "bare category prints help and exits non-zero" testBareCategoryHelp
@@ -83,8 +83,8 @@ tests =
         , -- --help shows list once, not ls
           testCase "task --help shows list but not ls" testTaskHelpNoLs
         , testCase "search: title-match and body-match both surface" testSearchBothKinds
-        , testCase "search: title hit on knowledge outranks body hit on task" testSearchCrossKindRank
-        , testCase "search: --kind task excludes knowledge results" testSearchKindTask
+        , testCase "search: title hit on context outranks body hit on task" testSearchCrossKindRank
+        , testCase "search: --kind task excludes context results" testSearchKindTask
         , testCase "search: --no-snippet suppresses indented line" testSearchNoSnippet
         , testCase "search: empty result prints (no matches)" testSearchNoMatches
         , testCase "dispatch show: tokens line present when values set" testDispatchShowTokensPresent
@@ -200,13 +200,13 @@ testDispatchRunStaleConfig = withSystemTempDirectory "icarium-test" $ \dir -> do
         "no parse error surfaced"
         (not ("config parse error" `isInfixOf` err))
 
-testKnowledgeListLayout :: IO ()
-testKnowledgeListLayout = withTempDb $ \db -> do
+testContextListLayout :: IO ()
+testContextListLayout = withTempDb $ \db -> do
     -- k1: no categories, no inbound edges
-    (_, _, _) <- runIcarium db ["know", "add", "Plain entry no links"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "Plain entry no links"]
 
     -- k2: no categories, will have one inbound references edge from a task
-    (_, k2Out, _) <- runIcarium db ["know", "add", "Entry with one inbound link"]
+    (_, k2Out, _) <- runIcarium db ["ctx", "add", "Entry with one inbound link"]
     let k2Id = head (words k2Out)
 
     (_, t1Out, _) <- runIcarium db ["task", "add", "Some task", "--state", "ready"]
@@ -214,7 +214,7 @@ testKnowledgeListLayout = withTempDb $ \db -> do
     (linkCode, _, _) <- runIcarium db ["link", "add", t1Id, "references", k2Id]
     linkCode @?= ExitSuccess
 
-    (code, out, _) <- runIcarium db ["know", "list"]
+    (code, out, _) <- runIcarium db ["ctx", "list"]
     code @?= ExitSuccess
     assertBool "list contains plain entry title" ("Plain entry no links" `isInfixOf` out)
     assertBool "list contains linked entry title" ("Entry with one inbound link" `isInfixOf` out)
@@ -233,7 +233,7 @@ testLinkListHeader :: IO ()
 testLinkListHeader = withTempDb $ \db -> do
     (_, tOut, _) <- runIcarium db ["task", "add", "Src task", "--state", "ready"]
     let tid = head (words tOut)
-    (_, kOut, _) <- runIcarium db ["know", "add", "Dst knowledge"]
+    (_, kOut, _) <- runIcarium db ["ctx", "add", "Dst context"]
     let kid = head (words kOut)
     (_, _, _) <- runIcarium db ["link", "add", tid, "references", kid]
 
@@ -243,11 +243,11 @@ testLinkListHeader = withTempDb $ \db -> do
 
 testHelpCrossRef :: IO ()
 testHelpCrossRef = withTempDb $ \db -> do
-    (_, knowOut, _) <- runIcarium db ["know", "add", "--help"]
-    assertBool "know add --help mentions link add" ("link add" `isInfixOf` knowOut)
+    (_, ctxOut, _) <- runIcarium db ["ctx", "add", "--help"]
+    assertBool "ctx add --help mentions link add" ("link add" `isInfixOf` ctxOut)
 
     (_, linkOut, _) <- runIcarium db ["link", "add", "--help"]
-    assertBool "link add --help mentions know add --derived-from" ("know add --derived-from" `isInfixOf` linkOut)
+    assertBool "link add --help mentions ctx add --derived-from" ("ctx add --derived-from" `isInfixOf` linkOut)
 
 testTaskShowBody :: IO ()
 testTaskShowBody = withTempDb $ \db -> do
@@ -277,14 +277,14 @@ testTaskShowBodyAndPrompt = withTempDb $ \db -> do
     code @?= ExitFailure 2
     assertBool "error mentions mutual exclusion" ("mutually exclusive" `isInfixOf` err)
 
-testKnowShowBody :: IO ()
-testKnowShowBody = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["know", "add", "Body test entry", "--body", "knowledge body text"]
+testCtxShowBody :: IO ()
+testCtxShowBody = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Body test entry", "--body", "context body text"]
     let kid = head (words addOut)
 
-    (code, out, _) <- runIcarium db ["know", "show", kid, "--body"]
+    (code, out, _) <- runIcarium db ["ctx", "show", kid, "--body"]
     code @?= ExitSuccess
-    out @?= "knowledge body text"
+    out @?= "context body text"
 
 testTaskBodyRoundTrip :: IO ()
 testTaskBodyRoundTrip = withSystemTempDirectory "icarium-test" $ \dir -> do
@@ -318,12 +318,12 @@ testBareTaskHelp = withTempDb $ \db -> do
     assertBool "bare task shows full help" ("Available commands:" `isInfixOf` out)
     assertBool "bare task help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
-testBareKnowHelp :: IO ()
-testBareKnowHelp = withTempDb $ \db -> do
-    (code, out, _) <- runIcarium db ["know"]
+testBareCtxHelp :: IO ()
+testBareCtxHelp = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["ctx"]
     code @?= ExitSuccess
-    assertBool "bare know shows full help" ("Available commands:" `isInfixOf` out)
-    assertBool "bare know help notes ls alias" ("(alias: ls)" `isInfixOf` out)
+    assertBool "bare ctx shows full help" ("Available commands:" `isInfixOf` out)
+    assertBool "bare ctx help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testBareDispatchHelp :: IO ()
 testBareDispatchHelp = withTempDb $ \db -> do
@@ -434,34 +434,34 @@ staleIcariumToml =
 testSearchBothKinds :: IO ()
 testSearchBothKinds = withTempDb $ \db -> do
     (_, _, _) <- runIcarium db ["task", "add", "mytoken in title task", "--state", "ready"]
-    (_, _, _) <- runIcarium db ["know", "add", "unrelated knowledge", "--body", "body contains mytoken here"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "unrelated context", "--body", "body contains mytoken here"]
     (code, out, _) <- runIcarium db ["search", "mytoken"]
     code @?= ExitSuccess
     assertBool "title match surfaces" ("mytoken in title task" `isInfixOf` out)
-    assertBool "body match surfaces" ("unrelated knowledge" `isInfixOf` out)
+    assertBool "body match surfaces" ("unrelated context" `isInfixOf` out)
 
 testSearchCrossKindRank :: IO ()
 testSearchCrossKindRank = withTempDb $ \db -> do
     (_, _, _) <- runIcarium db ["task", "add", "no match here", "--body", "body has xyzzy123", "--state", "ready"]
-    (_, kOut, _) <- runIcarium db ["know", "add", "xyzzy123 in title knowledge"]
+    (_, kOut, _) <- runIcarium db ["ctx", "add", "xyzzy123 in title context"]
     let kid = take 10 (head (words kOut))
     (code, out, _) <- runIcarium db ["search", "xyzzy123"]
     code @?= ExitSuccess
     let outLines = lines out
-    assertBool "knowledge title hit appears first" (kid `isInfixOf` head outLines)
+    assertBool "context title hit appears first" (kid `isInfixOf` head outLines)
 
 testSearchKindTask :: IO ()
 testSearchKindTask = withTempDb $ \db -> do
     (_, _, _) <- runIcarium db ["task", "add", "needle task", "--state", "ready"]
-    (_, _, _) <- runIcarium db ["know", "add", "needle knowledge"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "needle context"]
     (code, out, _) <- runIcarium db ["search", "needle", "--kind", "task"]
     code @?= ExitSuccess
     assertBool "task result present" ("needle task" `isInfixOf` out)
-    assertBool "knowledge result absent" (not ("needle knowledge" `isInfixOf` out))
+    assertBool "context result absent" (not ("needle context" `isInfixOf` out))
 
 testSearchNoSnippet :: IO ()
 testSearchNoSnippet = withTempDb $ \db -> do
-    (_, _, _) <- runIcarium db ["know", "add", "some title", "--body", "the body has needle123 inside it"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "some title", "--body", "the body has needle123 inside it"]
     (code, out, _) <- runIcarium db ["search", "needle123", "--no-snippet"]
     code @?= ExitSuccess
     assertBool "title line present" ("some title" `isInfixOf` out)

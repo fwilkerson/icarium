@@ -30,8 +30,8 @@ parser =
             ( option
                 kindReader
                 ( long "kind"
-                    <> metavar "task|know"
-                    <> help "Narrow to tasks or knowledge only"
+                    <> metavar "task|ctx"
+                    <> help "Narrow to tasks or context entries only"
                 )
             )
         <*> option
@@ -47,8 +47,8 @@ parser =
 kindReader :: ReadM NodeKind
 kindReader = eitherReader $ \case
     "task" -> Right TaskNode
-    "know" -> Right KnowledgeNode
-    s -> Left ("invalid kind: " <> s <> "; accepted: task, know")
+    "ctx" -> Right ContextNode
+    s -> Left ("invalid kind: " <> s <> "; accepted: task, ctx")
 
 run :: FilePath -> Options -> IO ()
 run db o = withDb db $ \c -> do
@@ -61,8 +61,8 @@ run db o = withDb db $ \c -> do
 buildRows :: Connection -> [RS.SearchHit] -> IO [SearchHitRow]
 buildRows c hits = do
     let taskIds = [RS.hitId h | h <- hits, RS.hitKind h == TaskNode]
-        knowIds = [RS.hitId h | h <- hits, RS.hitKind h == KnowledgeNode]
+        ctxIds = [RS.hitId h | h <- hits, RS.hitKind h == ContextNode]
     taskCats <- RC.taskCategoriesBatch c taskIds
-    knowCats <- RC.knowledgeCategoriesBatch c knowIds
-    let allCats = taskCats ++ knowCats
+    ctxCats <- RC.contextCategoriesBatch c ctxIds
+    let allCats = taskCats ++ ctxCats
     pure [SearchHitRow h (fromMaybe [] (lookup (RS.hitId h) allCats)) | h <- hits]

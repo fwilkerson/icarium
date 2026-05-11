@@ -4,11 +4,11 @@ module Icarium.Repo.Edge (
     deleteEdge,
     getEdgesByPrefix,
     resolveEdgeId,
-    referencedKnowledge,
+    referencedContexts,
     dependencyTasks,
     taskEdgeCounts,
-    knowledgeInboundCounts,
-    knowledgeDerivedFromDispatch,
+    contextInboundCounts,
+    contextDerivedFromDispatch,
 ) where
 
 import Data.Maybe (catMaybes, fromMaybe)
@@ -24,13 +24,13 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Context (ctxColsQualified)
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Repo.Knowledge (knowColsQualified)
 import Icarium.Repo.Task (taskColsQualified)
 import Icarium.Types (
+    Context,
     Edge (..),
     EdgeKind (..),
-    Knowledge,
     NodeKind (..),
     Task,
     edgeKindDbText,
@@ -110,19 +110,19 @@ getEdgesByPrefix conn = prefixLookup conn "edges" edgeCols
 resolveEdgeId :: Connection -> Text -> IO (Either String Text)
 resolveEdgeId conn = resolveByPrefix (getEdgesByPrefix conn) edgeId "edge"
 
--- | Knowledge linked by @references@ edges from the given task.
-referencedKnowledge :: Connection -> Text -> IO [Knowledge]
-referencedKnowledge conn tid =
+-- | Context entries linked by @references@ edges from the given task.
+referencedContexts :: Connection -> Text -> IO [Context]
+referencedContexts conn tid =
     query
         conn
         ( Query $
             "SELECT "
-                <> knowColsQualified "k"
+                <> ctxColsQualified "k"
                 <> " FROM edges e \
-                   \JOIN knowledge k ON k.id = e.dst_id \
+                   \JOIN context k ON k.id = e.dst_id \
                    \WHERE e.kind = 'references' \
                    \  AND e.src_kind = 'task' AND e.src_id = ? \
-                   \  AND e.dst_kind = 'knowledge' \
+                   \  AND e.dst_kind = 'context' \
                    \ORDER BY e.created_at ASC"
         )
         (Only tid)
@@ -169,30 +169,30 @@ taskEdgeCounts conn ids = do
                \GROUP BY src_id"
     params = map SQLText ids
 
-{- | Count inbound edges for multiple knowledge ids (all kinds, all source node kinds).
+{- | Count inbound edges for multiple context ids (all kinds, all source node kinds).
 Returns only ids with at least one inbound edge; caller treats missing as 0.
 -}
-knowledgeInboundCounts :: Connection -> [Text] -> IO [(Text, Int)]
-knowledgeInboundCounts _ [] = pure []
-knowledgeInboundCounts conn ids =
+contextInboundCounts :: Connection -> [Text] -> IO [(Text, Int)]
+contextInboundCounts _ [] = pure []
+contextInboundCounts conn ids =
     query conn (Query q) params :: IO [(Text, Int)]
   where
     ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
     q =
         "SELECT dst_id, COUNT(*) FROM edges \
-        \WHERE dst_kind = 'knowledge' AND dst_id IN "
+        \WHERE dst_kind = 'context' AND dst_id IN "
             <> ph
             <> " \
                \GROUP BY dst_id"
     params = map SQLText ids
 
-{- | Knowledge derived from a task during a specific dispatch window.
-Filters by knowledge.created_at >= started_at (and <= ended_at when present)
+{- | Context entries derived from a task during a specific dispatch window.
+Filters by context.created_at >= started_at (and <= ended_at when present)
 so that only entries from this dispatch are returned when the same task has
 had multiple dispatches.
 -}
-knowledgeDerivedFromDispatch :: Connection -> Text -> Text -> Maybe Text -> IO [Knowledge]
-knowledgeDerivedFromDispatch conn tid startedAt mEndedAt =
+contextDerivedFromDispatch :: Connection -> Text -> Text -> Maybe Text -> IO [Context]
+contextDerivedFromDispatch conn tid startedAt mEndedAt =
     query conn q params
   where
     endClause = case mEndedAt of
@@ -201,11 +201,11 @@ knowledgeDerivedFromDispatch conn tid startedAt mEndedAt =
     q =
         Query $
             "SELECT "
-                <> knowColsQualified "k"
+                <> ctxColsQualified "k"
                 <> " FROM edges e \
-                   \JOIN knowledge k ON k.id = e.src_id \
+                   \JOIN context k ON k.id = e.src_id \
                    \WHERE e.kind = 'derived_from' \
-                   \  AND e.src_kind = 'knowledge' \
+                   \  AND e.src_kind = 'context' \
                    \  AND e.dst_kind = 'task' AND e.dst_id = ? \
                    \  AND k.created_at >= ?"
                 <> endClause

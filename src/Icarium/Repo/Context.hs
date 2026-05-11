@@ -1,0 +1,174 @@
+module Icarium.Repo.Context (
+    NewContext (..),
+    ContextUpdate (..),
+    emptyUpdate,
+    ctxCols,
+    ctxColsQualified,
+    insertContext,
+    getContext,
+    getContextsByPrefix,
+    resolveContextId,
+    listContexts,
+    updateContext,
+    deleteContext,
+    categoryMatchedContexts,
+) where
+
+import Data.Maybe (catMaybes, fromMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Database.SQLite.Simple (
+    Connection,
+    Only (..),
+    Query (..),
+    SQLData (..),
+    execute,
+    query,
+ )
+
+import Icarium.Id (newId)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
+import Icarium.Types (Category (..), CategoryAxis (..), Context (..))
+
+data NewContext = NewContext
+    { ncTitle :: Text
+    , ncBody :: Text
+    }
+
+data ContextUpdate = ContextUpdate
+    { cuTitle :: Maybe Text
+    , cuBody :: Maybe Text
+    , cuStale :: Maybe Bool
+    }
+
+emptyUpdate :: ContextUpdate
+emptyUpdate = ContextUpdate Nothing Nothing Nothing
+
+contextColumnNames :: [Text]
+contextColumnNames = ["id", "title", "body", "stale", "created_at", "updated_at"]
+
+ctxCols :: Text
+ctxCols = T.intercalate ", " contextColumnNames
+
+ctxColsQualified :: Text -> Text
+ctxColsQualified alias = T.intercalate ", " (map (\c -> alias <> "." <> c) contextColumnNames)
+
+insertContext :: Connection -> NewContext -> IO Text
+insertContext conn NewContext{..} = do
+    cid <- newId
+    execute
+        conn
+        (Query "INSERT INTO context (id, title, body) VALUES (?, ?, ?)")
+        (cid, ncTitle, ncBody)
+    pure cid
+
+getContext :: Connection -> Text -> IO (Maybe Context)
+getContext conn cid = do
+    rows <-
+        query
+            conn
+            (Query $ "SELECT " <> ctxCols <> " FROM context WHERE id = ?")
+            (Only cid)
+    pure $ case rows of
+        (k : _) -> Just k
+        [] -> Nothing
+
+-- | Context entries whose ULID starts with @prefix@.
+getContextsByPrefix :: Connection -> Text -> IO [Context]
+getContextsByPrefix conn = prefixLookup conn "context" ctxCols
+
+-- | Resolve a user-supplied string to a canonical context ULID via prefix match.
+resolveContextId :: Connection -> Text -> IO (Either String Text)
+resolveContextId conn = resolveByPrefix (getContextsByPrefix conn) contextId "context"
+
+{- | List context entries. @staleFilter@: @Nothing@ = all entries,
+@Just True@ = stale only, @Just False@ = exclude stale.
+-}
+listContexts :: Connection -> Maybe Bool -> Maybe Text -> Maybe Text -> IO [Context]
+listContexts conn staleFilter mDomain mDisc =
+    query conn q params
+  where
+    (whereClause, params) = ctxCatWhere staleFilter mDomain mDisc
+    q = Query $ "SELECT " <> ctxCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
+
+ctxCatWhere :: Maybe Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
+ctxCatWhere staleFilter mDomain mDisc =
+    let catSubq axis =
+            "id IN (SELECT context_id FROM context_categories cc"
+                <> " JOIN categories c ON c.id = cc.category_id"
+                <> " WHERE c.axis = '"
+                <> axis
+                <> "' AND c.name = ?)"
+        staleClauses = case staleFilter of
+            Nothing -> []
+            Just True -> ["stale = 1"]
+            Just False -> ["stale = 0"]
+        catFilters =
+            catMaybes
+                [ fmap (\n -> (catSubq "domain", SQLText n)) mDomain
+                , fmap (\n -> (catSubq "discipline", SQLText n)) mDisc
+                ]
+        clauses = staleClauses <> map fst catFilters
+        catParams = map snd catFilters
+     in case clauses of
+            [] -> ("", [])
+            cs -> (" WHERE " <> T.intercalate " AND " cs, catParams)
+
+updateContext :: Connection -> Text -> ContextUpdate -> IO Bool
+updateContext conn cid ContextUpdate{..} = do
+    mk <- getContext conn cid
+    case mk of
+        Nothing -> pure False
+        Just k -> do
+            let newTitle = fromMaybe (contextTitle k) cuTitle
+                newBody = fromMaybe (contextBody k) cuBody
+                newStale = fromMaybe (contextStale k) cuStale
+                staleInt = if newStale then 1 else 0 :: Int
+            execute
+                conn
+                (Query "UPDATE context SET title=?, body=?, stale=? WHERE id=?")
+                (newTitle, newBody, staleInt, cid)
+            pure True
+
+deleteContext :: Connection -> Text -> IO Bool
+deleteContext conn cid = do
+    mk <- getContext conn cid
+    case mk of
+        Nothing -> pure False
+        Just _ -> do
+            execute conn (Query "DELETE FROM context WHERE id = ?") (Only cid)
+            pure True
+
+{- | Context entries whose categories AND-intersect with the given
+category list (one condition per axis present in the input). Excludes
+stale entries. Returns [] immediately when the input list is empty.
+Cap limits results; order is most-recently-created first.
+-}
+categoryMatchedContexts :: Connection -> [Category] -> Int -> IO [Context]
+categoryMatchedContexts conn cats cap
+    | null clauses = pure []
+    | otherwise = query conn q params
+  where
+    domains = [categoryName c | c <- cats, categoryAxis c == Domain]
+    discs = [categoryName c | c <- cats, categoryAxis c == Discipline]
+    axisClause axis names =
+        let ph = T.intercalate "," (replicate (length names) "?")
+         in "id IN (SELECT context_id FROM context_categories cc \
+            \JOIN categories c ON c.id = cc.category_id \
+            \WHERE c.axis = '"
+                <> axis
+                <> "' AND c.name IN ("
+                <> ph
+                <> "))"
+    clauses =
+        [axisClause "domain" domains | not (null domains)]
+            <> [axisClause "discipline" discs | not (null discs)]
+    q =
+        Query $
+            "SELECT "
+                <> ctxCols
+                <> " FROM context"
+                <> " WHERE stale = 0 AND "
+                <> T.intercalate " AND " clauses
+                <> " ORDER BY created_at DESC LIMIT ?"
+    params = map SQLText domains <> map SQLText discs <> [SQLInteger (fromIntegral cap)]

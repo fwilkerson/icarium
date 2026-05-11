@@ -24,7 +24,7 @@ module Icarium.Types (
 
     -- * Records
     Task (..),
-    Knowledge (..),
+    Context (..),
     Edge (..),
     Category (..),
     Dispatch (..),
@@ -138,16 +138,16 @@ parseEdgeKindDb = \case
     "supersedes" -> Just Supersedes
     _ -> Nothing
 
-data NodeKind = TaskNode | KnowledgeNode deriving (Show, Eq)
+data NodeKind = TaskNode | ContextNode deriving (Show, Eq)
 
 nodeKindText :: NodeKind -> Text
 nodeKindText TaskNode = "task"
-nodeKindText KnowledgeNode = "knowledge"
+nodeKindText ContextNode = "context"
 
 parseNodeKind :: Text -> Maybe NodeKind
 parseNodeKind = \case
     "task" -> Just TaskNode
-    "knowledge" -> Just KnowledgeNode
+    "context" -> Just ContextNode
     _ -> Nothing
 
 data CategoryAxis = Domain | Discipline deriving (Show, Eq)
@@ -215,19 +215,19 @@ instance FromRow Task where
             <*> field
             <*> field
 
-data Knowledge = Knowledge
-    { knowledgeId :: Text
-    , knowledgeTitle :: Text
-    , knowledgeBody :: Text
-    , knowledgeStale :: Bool
-    , knowledgeCreatedAt :: Text
-    , knowledgeUpdatedAt :: Text
+data Context = Context
+    { contextId :: Text
+    , contextTitle :: Text
+    , contextBody :: Text
+    , contextStale :: Bool
+    , contextCreatedAt :: Text
+    , contextUpdatedAt :: Text
     }
     deriving (Show, Eq)
 
-instance FromRow Knowledge where
+instance FromRow Context where
     fromRow =
-        Knowledge
+        Context
             <$> field
             <*> field
             <*> field

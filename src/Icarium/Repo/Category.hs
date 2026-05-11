@@ -5,13 +5,13 @@ module Icarium.Repo.Category (
     deleteCategory,
     categoryNodeUsages,
     attachTaskCategory,
-    attachKnowledgeCategory,
+    attachContextCategory,
     detachTaskCategoriesByAxis,
-    detachKnowledgeCategoriesByAxis,
+    detachContextCategoriesByAxis,
     taskCategoriesFor,
     taskCategoriesBatch,
-    knowledgeCategoriesFor,
-    knowledgeCategoriesBatch,
+    contextCategoriesFor,
+    contextCategoriesBatch,
 ) where
 
 import Data.List.NonEmpty qualified as NE
@@ -74,7 +74,7 @@ deleteCategory conn axis name = do
                 (axis, name)
             pure True
 
--- | Returns all node ids (task ids and knowledge ids) attached to this category.
+-- | Returns all node ids (task ids and context ids) attached to this category.
 categoryNodeUsages :: Connection -> Text -> IO [Text]
 categoryNodeUsages conn cid = do
     taskIds <-
@@ -82,12 +82,12 @@ categoryNodeUsages conn cid = do
             conn
             (Query "SELECT task_id FROM task_categories WHERE category_id = ?")
             [cid]
-    knowIds <-
+    ctxIds <-
         query
             conn
-            (Query "SELECT knowledge_id FROM knowledge_categories WHERE category_id = ?")
+            (Query "SELECT context_id FROM context_categories WHERE category_id = ?")
             [cid]
-    pure $ map (\(Only t) -> t) taskIds ++ map (\(Only k) -> k) knowIds
+    pure $ map (\(Only t) -> t) taskIds ++ map (\(Only k) -> k) ctxIds
 
 attachTaskCategory :: Connection -> Text -> Text -> IO ()
 attachTaskCategory conn tid cid =
@@ -96,11 +96,11 @@ attachTaskCategory conn tid cid =
         (Query "INSERT OR IGNORE INTO task_categories (task_id, category_id) VALUES (?, ?)")
         (tid, cid)
 
-attachKnowledgeCategory :: Connection -> Text -> Text -> IO ()
-attachKnowledgeCategory conn kid cid =
+attachContextCategory :: Connection -> Text -> Text -> IO ()
+attachContextCategory conn kid cid =
     execute
         conn
-        (Query "INSERT OR IGNORE INTO knowledge_categories (knowledge_id, category_id) VALUES (?, ?)")
+        (Query "INSERT OR IGNORE INTO context_categories (context_id, category_id) VALUES (?, ?)")
         (kid, cid)
 
 detachTaskCategoriesByAxis :: Connection -> Text -> CategoryAxis -> IO ()
@@ -113,12 +113,12 @@ detachTaskCategoriesByAxis conn tid axis =
         )
         (tid, axis)
 
-detachKnowledgeCategoriesByAxis :: Connection -> Text -> CategoryAxis -> IO ()
-detachKnowledgeCategoriesByAxis conn kid axis =
+detachContextCategoriesByAxis :: Connection -> Text -> CategoryAxis -> IO ()
+detachContextCategoriesByAxis conn kid axis =
     execute
         conn
         ( Query
-            "DELETE FROM knowledge_categories WHERE knowledge_id = ? \
+            "DELETE FROM context_categories WHERE context_id = ? \
             \AND category_id IN (SELECT id FROM categories WHERE axis = ?)"
         )
         (kid, axis)
@@ -134,14 +134,14 @@ taskCategoriesFor conn tid =
         )
         [tid]
 
-knowledgeCategoriesFor :: Connection -> Text -> IO [Category]
-knowledgeCategoriesFor conn kid =
+contextCategoriesFor :: Connection -> Text -> IO [Category]
+contextCategoriesFor conn kid =
     query
         conn
         ( Query
             "SELECT c.id, c.axis, c.name FROM categories c \
-            \JOIN knowledge_categories kc ON kc.category_id = c.id \
-            \WHERE kc.knowledge_id = ? ORDER BY c.axis, c.name"
+            \JOIN context_categories cc ON cc.category_id = c.id \
+            \WHERE cc.context_id = ? ORDER BY c.axis, c.name"
         )
         [kid]
 
@@ -153,12 +153,12 @@ and default to @[]@.
 taskCategoriesBatch :: Connection -> [Text] -> IO [(Text, [Category])]
 taskCategoriesBatch c = categoriesBatchBy c "task_categories" "task_id"
 
-{- | Fetch categories for multiple knowledge ids in a single query.
-Returns an association list of (knowledge_id, [Category]).
+{- | Fetch categories for multiple context ids in a single query.
+Returns an association list of (context_id, [Category]).
 Entries with no categories are omitted; use @lookup kid result@ and default to @[]@.
 -}
-knowledgeCategoriesBatch :: Connection -> [Text] -> IO [(Text, [Category])]
-knowledgeCategoriesBatch c = categoriesBatchBy c "knowledge_categories" "knowledge_id"
+contextCategoriesBatch :: Connection -> [Text] -> IO [(Text, [Category])]
+contextCategoriesBatch c = categoriesBatchBy c "context_categories" "context_id"
 
 categoriesBatchBy ::
     Connection ->

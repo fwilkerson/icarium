@@ -1,4 +1,4 @@
-module Icarium.Commands.Know (Command, parser, run, autoDeriveDeps) where
+module Icarium.Commands.Ctx (Command, parser, run, autoDeriveDeps) where
 
 import Control.Monad (forM_, void)
 import Data.Maybe (catMaybes, fromMaybe, isNothing)
@@ -14,8 +14,8 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
+import Icarium.Repo.Context qualified as RK
 import Icarium.Repo.Edge qualified as RE
-import Icarium.Repo.Knowledge qualified as RK
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -29,11 +29,11 @@ data Command
 parser :: Parser Command
 parser =
     subparser
-        ( subcmd "add" "Add a knowledge entry" (Add <$> addP)
-            <> subcmd "list" "List knowledge entries (alias: ls)" (List <$> listP)
-            <> subcmd "show" "Show a knowledge entry" (Show <$> showP)
-            <> subcmd "update" "Update a knowledge entry" (Update <$> updateP)
-            <> subcmd "rm" "Delete a knowledge entry" (Rm <$> rmP)
+        ( subcmd "add" "Add a context entry" (Add <$> addP)
+            <> subcmd "list" "List context entries (alias: ls)" (List <$> listP)
+            <> subcmd "show" "Show a context entry" (Show <$> showP)
+            <> subcmd "update" "Update a context entry" (Update <$> updateP)
+            <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -60,12 +60,12 @@ data AddOpts = AddOpts
 addP :: Parser AddOpts
 addP =
     AddOpts . T.pack
-        <$> strArgument (metavar "TITLE" <> help "Entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`.")
+        <$> strArgument (metavar "TITLE" <> help "Entry title. Keep ≤ 72 chars; longer titles are truncated in `ctx list`.")
         <*> bodyInputParser
         <*> optional (textOption "domain" "NAME" "Tag with this domain category")
         <*> optional (textOption "discipline" "NAME" "Tag with this discipline category")
-        <*> many (textOption "derived-from" "ID" "Shorthand for `icarium link add <THIS_KNOWLEDGE> derived-from <ID>`; may be repeated")
-        <*> optional (textOption "supersedes" "KNOWLEDGE_ID" "Mark this entry as superseding KNOWLEDGE_ID")
+        <*> many (textOption "derived-from" "ID" "Shorthand for `icarium link add <THIS_CONTEXT> derived-from <ID>`; may be repeated")
+        <*> optional (textOption "supersedes" "CONTEXT_ID" "Mark this entry as superseding CONTEXT_ID")
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
@@ -75,7 +75,7 @@ runAdd db o = withDb db $ \c -> do
     mDomain <- mapM (requireCategory c Domain) (aDomain o)
     mDisc <- mapM (requireCategory c Discipline) (aDiscipline o)
     derived <- mapM (resolveNode c) (aDerivedFrom o)
-    mSupersedesId <- mapM (requireKnowledge c) (aSupersedes o)
+    mSupersedesId <- mapM (requireContext c) (aSupersedes o)
 
     mTaskId <- lookupEnv "ICARIUM_TASK_ID"
 
@@ -90,19 +90,19 @@ runAdd db o = withDb db $ \c -> do
     autoDerived <- autoDeriveDeps c (aDerivedFrom o) mTaskId
 
     kid <-
-        RK.insertKnowledge
+        RK.insertContext
             c
-            RK.NewKnowledge
-                { RK.nkTitle = aTitle o
-                , RK.nkBody = body
+            RK.NewContext
+                { RK.ncTitle = aTitle o
+                , RK.ncBody = body
                 }
     forM_ (catMaybes [mDomain, mDisc] <> inheritedCats) $ \cat ->
-        RC.attachKnowledgeCategory c kid (categoryId cat)
+        RC.attachContextCategory c kid (categoryId cat)
     forM_ (derived <> autoDerived) $ \(nkind, nid) ->
-        void $ RE.insertEdge c DerivedFrom KnowledgeNode kid nkind nid
+        void $ RE.insertEdge c DerivedFrom ContextNode kid nkind nid
     case mSupersedesId of
         Just target ->
-            void $ RE.insertEdge c Supersedes KnowledgeNode kid KnowledgeNode target
+            void $ RE.insertEdge c Supersedes ContextNode kid ContextNode target
         Nothing -> pure ()
     TIO.putStrLn kid
   where
@@ -172,21 +172,21 @@ runList db o = withDb db $ \c -> do
             | lStale o = Just True -- stale only
             | lAll o = Nothing -- show all
             | otherwise = Just False -- hide stale (default)
-    ks <- RK.listKnowledge c staleFilter (lDomain o) (lDiscipline o)
-    rows <- buildKnowledgeRows c ks
+    ks <- RK.listContexts c staleFilter (lDomain o) (lDiscipline o)
+    rows <- buildContextRows c ks
     utf8 <- detectUtf8
-    TIO.putStr (Render.renderKnowledgeList utf8 rows)
+    TIO.putStr (Render.renderContextList utf8 rows)
 
-buildKnowledgeRows :: Connection -> [Knowledge] -> IO [Render.KnowledgeRow]
-buildKnowledgeRows c ks = do
-    let ids = map knowledgeId ks
-    catsBatch <- RC.knowledgeCategoriesBatch c ids
-    countsBatch <- RE.knowledgeInboundCounts c ids
+buildContextRows :: Connection -> [Context] -> IO [Render.ContextRow]
+buildContextRows c ks = do
+    let ids = map contextId ks
+    catsBatch <- RC.contextCategoriesBatch c ids
+    countsBatch <- RE.contextInboundCounts c ids
     pure
-        [ Render.KnowledgeRow
-            { Render.krKnowledge = k
-            , Render.krCats = fromMaybe [] (lookup (knowledgeId k) catsBatch)
-            , Render.krLinked = fromMaybe 0 (lookup (knowledgeId k) countsBatch)
+        [ Render.ContextRow
+            { Render.crContext = k
+            , Render.crCats = fromMaybe [] (lookup (contextId k) catsBatch)
+            , Render.crLinked = fromMaybe 0 (lookup (contextId k) countsBatch)
             }
         | k <- ks
         ]
@@ -203,19 +203,19 @@ data ShowOpts = ShowOpts
 showP :: Parser ShowOpts
 showP =
     ShowOpts . T.pack
-        <$> strArgument (metavar "KNOWLEDGE_ID")
-        <*> switch (long "body" <> help "Print only the knowledge body and nothing else")
+        <$> strArgument (metavar "CONTEXT_ID")
+        <*> switch (long "body" <> help "Print only the context body and nothing else")
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
-    kid <- resolveOrFatal (RK.resolveKnowledgeId c (sId o))
-    mk <- RK.getKnowledge c kid
-    k <- maybe (fatal 1 ("knowledge not found: " <> T.unpack kid)) pure mk
+    kid <- resolveOrFatal (RK.resolveContextId c (sId o))
+    mk <- RK.getContext c kid
+    k <- maybe (fatal 1 ("context not found: " <> T.unpack kid)) pure mk
     if sBody o
-        then TIO.putStr (knowledgeBody k)
+        then TIO.putStr (contextBody k)
         else do
-            cats <- RC.knowledgeCategoriesFor c (knowledgeId k)
-            TIO.putStr (Render.renderKnowledge k cats)
+            cats <- RC.contextCategoriesFor c (contextId k)
+            TIO.putStr (Render.renderContext k cats)
 
 -- =============================================================
 -- update
@@ -233,8 +233,8 @@ data UpdateOpts = UpdateOpts
 updateP :: Parser UpdateOpts
 updateP =
     UpdateOpts . T.pack
-        <$> strArgument (metavar "KNOWLEDGE_ID")
-        <*> optional (textOption "title" "TEXT" "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `know list`.")
+        <$> strArgument (metavar "CONTEXT_ID")
+        <*> optional (textOption "title" "TEXT" "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `ctx list`.")
         <*> bodyInputParser
         <*> staleFlag
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
@@ -248,7 +248,7 @@ staleFlag =
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do
-    kid <- resolveOrFatal (RK.resolveKnowledgeId c (uId o))
+    kid <- resolveOrFatal (RK.resolveContextId c (uId o))
     body <- case uBody o of
         BodyNone -> pure Nothing
         b -> Just <$> resolveBody b
@@ -257,22 +257,22 @@ runUpdate db o = withDb db $ \c -> do
     mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
     let upd =
             RK.emptyUpdate
-                { RK.kuTitle = uTitle o
-                , RK.kuBody = body
-                , RK.kuStale = uStale o
+                { RK.cuTitle = uTitle o
+                , RK.cuBody = body
+                , RK.cuStale = uStale o
                 }
-    ok <- RK.updateKnowledge c kid upd
+    ok <- RK.updateContext c kid upd
     if ok
         then do
             -- Apply replacements: detach all of that axis, then attach new one if given.
             forM_ mDomCat $ \mCat -> do
-                RC.detachKnowledgeCategoriesByAxis c kid Domain
-                forM_ mCat $ \cat -> RC.attachKnowledgeCategory c kid (categoryId cat)
+                RC.detachContextCategoriesByAxis c kid Domain
+                forM_ mCat $ \cat -> RC.attachContextCategory c kid (categoryId cat)
             forM_ mDiscCat $ \mCat -> do
-                RC.detachKnowledgeCategoriesByAxis c kid Discipline
-                forM_ mCat $ \cat -> RC.attachKnowledgeCategory c kid (categoryId cat)
+                RC.detachContextCategoriesByAxis c kid Discipline
+                forM_ mCat $ \cat -> RC.attachContextCategory c kid (categoryId cat)
             TIO.putStrLn ("updated " <> kid)
-        else fatal 1 ("knowledge not found: " <> T.unpack (uId o))
+        else fatal 1 ("context not found: " <> T.unpack (uId o))
 
 -- =============================================================
 -- rm
@@ -281,12 +281,12 @@ runUpdate db o = withDb db $ \c -> do
 newtype RmOpts = RmOpts {rId :: Text}
 
 rmP :: Parser RmOpts
-rmP = RmOpts . T.pack <$> strArgument (metavar "KNOWLEDGE_ID")
+rmP = RmOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
 runRm db o = withDb db $ \c -> do
-    kid <- resolveOrFatal (RK.resolveKnowledgeId c (rId o))
-    ok <- RK.deleteKnowledge c kid
+    kid <- resolveOrFatal (RK.resolveContextId c (rId o))
+    ok <- RK.deleteContext c kid
     if ok
         then TIO.putStrLn ("deleted " <> kid)
-        else fatal 1 ("knowledge not found: " <> T.unpack (rId o))
+        else fatal 1 ("context not found: " <> T.unpack (rId o))

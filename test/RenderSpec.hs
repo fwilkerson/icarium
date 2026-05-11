@@ -27,7 +27,7 @@ tests =
             ]
         , testGroup
             "renderDispatchList"
-            [ testCase "title, duration, outcome badge, know badge, no branch/header" testDispatchListFormat
+            [ testCase "title, duration, outcome badge, ctx badge, no branch/header" testDispatchListFormat
             ]
         , testGroup
             "task show links section"
@@ -35,7 +35,7 @@ tests =
             , testCase "only depends-on edges" testLinksOnlyDeps
             , testCase "only references edges" testLinksOnlyRefs
             , testCase "both kinds present, deps before refs" testLinksBothKinds
-            , testCase "stale knowledge gets [STALE] suffix" testLinksStaleKnowledge
+            , testCase "stale context gets [STALE] suffix" testLinksStaleContext
             , testCase "done task gets [done] suffix" testLinksTaskDone
             , testCase "blocked task gets [blocked] suffix" testLinksTaskBlocked
             , testCase "ASCII mode uses +- and \\- glyphs" testLinksAscii
@@ -216,15 +216,15 @@ testDispatchListFormat = do
         d2 = minDispatch "01BBB0000000000000000000BB" "01TTT0000000000000000000BB" (Just OFailure)
         d3 = minDispatch "01CCC0000000000000000000CC" "01TTT0000000000000000000CC" Nothing
         rows =
-            [ Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d1, Icarium.Render.drTaskTitle = "Add unified search", Icarium.Render.drKnowCount = 1, Icarium.Render.drDuration = "12m"}
-            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d2, Icarium.Render.drTaskTitle = "FTS5 backend decision", Icarium.Render.drKnowCount = 0, Icarium.Render.drDuration = "47m"}
-            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d3, Icarium.Render.drTaskTitle = "Search CLI shape", Icarium.Render.drKnowCount = 0, Icarium.Render.drDuration = "3m (running)"}
+            [ Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d1, Icarium.Render.drTaskTitle = "Add unified search", Icarium.Render.drCtxCount = 1, Icarium.Render.drDuration = "12m"}
+            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d2, Icarium.Render.drTaskTitle = "FTS5 backend decision", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "47m"}
+            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d3, Icarium.Render.drTaskTitle = "Search CLI shape", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "3m (running)"}
             ]
         out = Icarium.Render.renderDispatchList True rows
     assertBool "dispatch-id prefix in output" ("01AAA00000" `T.isInfixOf` out)
     assertBool "task title present" ("Add unified search" `T.isInfixOf` out)
-    assertBool "[know:1] badge shown" ("[know:1]" `T.isInfixOf` out)
-    assertBool "no [know:0] badge" (not ("[know:0]" `T.isInfixOf` out))
+    assertBool "[ctx:1] badge shown" ("[ctx:1]" `T.isInfixOf` out)
+    assertBool "no [ctx:0] badge" (not ("[ctx:0]" `T.isInfixOf` out))
     assertBool "[success] outcome badge" ("[success]" `T.isInfixOf` out)
     assertBool "[failure] outcome badge" ("[failure]" `T.isInfixOf` out)
     assertBool "[open] outcome badge" ("[open]" `T.isInfixOf` out)
@@ -237,15 +237,15 @@ testDispatchListFormat = do
 -- task show links section tests
 -- =============================================================
 
-minKnowledge :: Knowledge
-minKnowledge =
-    Knowledge
-        { knowledgeId = "01KNOW000000000000000000KK"
-        , knowledgeTitle = "Test knowledge"
-        , knowledgeBody = "Know body"
-        , knowledgeStale = False
-        , knowledgeCreatedAt = "2026-01-01T00:00:00Z"
-        , knowledgeUpdatedAt = "2026-01-01T00:00:00Z"
+minContext :: Context
+minContext =
+    Context
+        { contextId = "01CTX0000000000000000000CC"
+        , contextTitle = "Test context"
+        , contextBody = "Context body"
+        , contextStale = False
+        , contextCreatedAt = "2026-01-01T00:00:00Z"
+        , contextUpdatedAt = "2026-01-01T00:00:00Z"
         }
 
 depTask :: TaskState -> Task
@@ -257,12 +257,12 @@ depTask st =
         , taskBlockReason = Nothing
         }
 
-refKnow :: Bool -> Knowledge
-refKnow stale =
-    minKnowledge
-        { knowledgeId = "01RRRR000000000000000000RR"
-        , knowledgeTitle = "Ref knowledge"
-        , knowledgeStale = stale
+refCtx :: Bool -> Context
+refCtx stale =
+    minContext
+        { contextId = "01RRRR000000000000000000RR"
+        , contextTitle = "Ref context"
+        , contextStale = stale
         }
 
 testLinksNoEdges :: IO ()
@@ -286,11 +286,11 @@ testLinksOnlyDeps = do
 
 testLinksOnlyRefs :: IO ()
 testLinksOnlyRefs = do
-    let ref = refKnow False
+    let ref = refCtx False
         out = renderTaskHuman True minTask [ref] [] []
     assertBool "## Links header" ("## Links" `T.isInfixOf` out)
     assertBool "references edge" ("references" `T.isInfixOf` out)
-    assertBool "ref id prefix" (T.take 10 (knowledgeId ref) `T.isInfixOf` out)
+    assertBool "ref id prefix" (T.take 10 (contextId ref) `T.isInfixOf` out)
     assertBool "no [STALE] suffix" (not ("[STALE]" `T.isInfixOf` out))
     assertBool "no depends-on" (not ("depends-on" `T.isInfixOf` out))
     assertBool "last glyph is └─" ("└─" `T.isInfixOf` out)
@@ -298,7 +298,7 @@ testLinksOnlyRefs = do
 testLinksBothKinds :: IO ()
 testLinksBothKinds = do
     let dep = depTask Ready
-        ref = refKnow False
+        ref = refCtx False
         out = renderTaskHuman True minTask [ref] [dep] []
     assertBool "depends-on edge" ("depends-on" `T.isInfixOf` out)
     assertBool "references edge" ("references" `T.isInfixOf` out)
@@ -312,9 +312,9 @@ testLinksBothKinds = do
         let (pre, suf) = T.breakOn needle h
          in if T.null suf then Nothing else Just (T.length pre)
 
-testLinksStaleKnowledge :: IO ()
-testLinksStaleKnowledge = do
-    let ref = refKnow True
+testLinksStaleContext :: IO ()
+testLinksStaleContext = do
+    let ref = refCtx True
         out = renderTaskHuman True minTask [ref] [] []
     assertBool "[STALE] suffix present" ("[STALE]" `T.isInfixOf` out)
 
@@ -333,7 +333,7 @@ testLinksTaskBlocked = do
 testLinksAscii :: IO ()
 testLinksAscii = do
     let dep = depTask Planned
-        ref = refKnow False
+        ref = refCtx False
         out = renderTaskHuman False minTask [ref] [dep] []
     assertBool "ASCII branch glyph +- present" ("+-" `T.isInfixOf` out)
     assertBool "ASCII last glyph \\- present" ("\\-" `T.isInfixOf` out)

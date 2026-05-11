@@ -13,8 +13,8 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
+import Icarium.Repo.Context qualified as RK
 import Icarium.Repo.Edge qualified as RE
-import Icarium.Repo.Knowledge qualified as RK
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -85,7 +85,7 @@ addP =
         <*> optional (textOption "domain" "NAME" "Tag with this domain category")
         <*> optional (textOption "discipline" "NAME" "Tag with this discipline category")
         <*> many (textOption "depends-on" "TASK_ID" "Add a depends_on edge to TASK_ID")
-        <*> many (textOption "references" "KNOWLEDGE_ID" "Add a references edge to KNOWLEDGE_ID")
+        <*> many (textOption "references" "CONTEXT_ID" "Add a references edge to CONTEXT_ID")
         <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
 
 runAdd :: FilePath -> AddOpts -> IO ()
@@ -98,7 +98,7 @@ runAdd db o = withDb db $ \c -> do
     mDomain <- mapM (requireCategory c Domain) (aDomain o)
     mDisc <- mapM (requireCategory c Discipline) (aDiscipline o)
     depIds <- mapM (requireTask c) (aDependsOn o)
-    refIds <- mapM (requireKnowledge c) (aReferences o)
+    refIds <- mapM (requireContext c) (aReferences o)
 
     tid <-
         RT.insertTask
@@ -115,7 +115,7 @@ runAdd db o = withDb db $ \c -> do
     forM_ depIds $ \depId ->
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
-        void $ RE.insertEdge c References TaskNode tid KnowledgeNode refId
+        void $ RE.insertEdge c References TaskNode tid ContextNode refId
     TIO.putStrLn tid
 
 -- =============================================================
@@ -210,15 +210,15 @@ runShow db o = do
             else
                 if sPrompt o
                     then do
-                        refs <- RE.referencedKnowledge c (taskId t)
+                        refs <- RE.referencedContexts c (taskId t)
                         deps <- RE.dependencyTasks c (taskId t)
                         cats <- RC.taskCategoriesFor c (taskId t)
-                        catMatch <- RK.categoryMatchedKnowledge c cats 5
-                        let refIds = map knowledgeId refs
-                            dedupedCat = filter (\k -> knowledgeId k `notElem` refIds) catMatch
+                        catMatch <- RK.categoryMatchedContexts c cats 5
+                        let refIds = map contextId refs
+                            dedupedCat = filter (\k -> contextId k `notElem` refIds) catMatch
                         TIO.putStr (Render.renderTaskPrompt t refs dedupedCat deps)
                     else do
-                        refs <- RE.referencedKnowledge c (taskId t)
+                        refs <- RE.referencedContexts c (taskId t)
                         deps <- RE.dependencyTasks c (taskId t)
                         cats <- RC.taskCategoriesFor c (taskId t)
                         utf8 <- detectUtf8

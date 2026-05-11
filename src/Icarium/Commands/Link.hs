@@ -48,7 +48,7 @@ addP =
         <*> argument
             edgeKindReader
             ( metavar "KIND"
-                <> help "depends-on | references | derived-from | supersedes. For derived-from, `know add --derived-from <ID>` is the convenience equivalent."
+                <> help "depends-on | references | derived-from | supersedes. For derived-from, `ctx add --derived-from <ID>` is the convenience equivalent."
             )
         <*> (T.pack <$> strArgument (metavar "DST_ID"))
 
@@ -58,10 +58,10 @@ friendlier error than a SQLITE_CONSTRAINT.
 -}
 checkTyping :: EdgeKind -> NodeKind -> NodeKind -> Either String ()
 checkTyping DependsOn TaskNode TaskNode = Right ()
-checkTyping References TaskNode KnowledgeNode = Right ()
-checkTyping DerivedFrom KnowledgeNode TaskNode = Right ()
-checkTyping DerivedFrom KnowledgeNode KnowledgeNode = Right ()
-checkTyping Supersedes KnowledgeNode KnowledgeNode = Right ()
+checkTyping References TaskNode ContextNode = Right ()
+checkTyping DerivedFrom ContextNode TaskNode = Right ()
+checkTyping DerivedFrom ContextNode ContextNode = Right ()
+checkTyping Supersedes ContextNode ContextNode = Right ()
 checkTyping k sk dk =
     Left $
         "edge "
@@ -75,9 +75,9 @@ checkTyping k sk dk =
 
 expectedShape :: EdgeKind -> String
 expectedShape DependsOn = "task -> task"
-expectedShape References = "task -> knowledge"
-expectedShape DerivedFrom = "knowledge -> (task|knowledge)"
-expectedShape Supersedes = "knowledge -> knowledge"
+expectedShape References = "task -> context"
+expectedShape DerivedFrom = "context -> (task|context)"
+expectedShape Supersedes = "context -> context"
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do

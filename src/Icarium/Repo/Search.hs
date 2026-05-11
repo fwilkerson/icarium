@@ -8,8 +8,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Query (..), query)
 
+import Icarium.Repo.Context (ctxCols)
 import Icarium.Repo.Internal (escapeLike)
-import Icarium.Repo.Knowledge (knowCols)
 import Icarium.Repo.Task (taskCols)
 import Icarium.Types
 
@@ -24,18 +24,18 @@ data SearchHit = SearchHit
     , hitStale :: Bool
     }
 
-{- | Search tasks and knowledge for @q@. Results ranked: title hits first,
+{- | Search tasks and context for @q@. Results ranked: title hits first,
 then updated_at DESC. @mKind@ narrows to one table; @Nothing@ = both.
 -}
 searchEntries :: Connection -> Text -> Maybe NodeKind -> Int -> IO [SearchHit]
 searchEntries conn q mKind limit = do
     taskHits <- case mKind of
-        Just KnowledgeNode -> pure []
+        Just ContextNode -> pure []
         _ -> searchTasks conn qLower pat
-    knowHits <- case mKind of
+    ctxHits <- case mKind of
         Just TaskNode -> pure []
-        _ -> searchKnowledge conn qLower pat
-    let ranked = sortBy rankHit (taskHits ++ knowHits)
+        _ -> searchContexts conn qLower pat
+    let ranked = sortBy rankHit (taskHits ++ ctxHits)
     pure (take limit ranked)
   where
     pat = "%" <> escapeLike q <> "%"
@@ -63,20 +63,20 @@ searchTasks conn qLower pat = do
             , hitStale = False
             }
 
-searchKnowledge :: Connection -> Text -> Text -> IO [SearchHit]
-searchKnowledge conn qLower pat = do
-    rows <- query conn sql (pat, pat) :: IO [Knowledge]
+searchContexts :: Connection -> Text -> Text -> IO [SearchHit]
+searchContexts conn qLower pat = do
+    rows <- query conn sql (pat, pat) :: IO [Context]
     pure (map toHit rows)
   where
-    sql = Query $ "SELECT " <> knowCols <> " FROM knowledge WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'"
+    sql = Query $ "SELECT " <> ctxCols <> " FROM context WHERE title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\'"
     toHit k =
         SearchHit
-            { hitId = knowledgeId k
-            , hitKind = KnowledgeNode
-            , hitTitle = knowledgeTitle k
-            , hitBody = knowledgeBody k
-            , hitUpdatedAt = knowledgeUpdatedAt k
-            , hitTitleMatch = qLower `T.isInfixOf` T.toLower (knowledgeTitle k)
+            { hitId = contextId k
+            , hitKind = ContextNode
+            , hitTitle = contextTitle k
+            , hitBody = contextBody k
+            , hitUpdatedAt = contextUpdatedAt k
+            , hitTitleMatch = qLower `T.isInfixOf` T.toLower (contextTitle k)
             , hitState = Nothing
-            , hitStale = knowledgeStale k
+            , hitStale = contextStale k
             }

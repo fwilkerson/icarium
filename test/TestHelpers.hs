@@ -2,8 +2,8 @@ module TestHelpers (
     withTestDb,
     withBaseTestDb,
     mkCat,
-    mkKnowledge,
-    attachKnowledgeCats,
+    mkContext,
+    attachContextCats,
     minTask,
     withTestRepo,
     withCwdLock,
@@ -20,7 +20,7 @@ import System.Process.Typed (proc, readProcess, setWorkingDir)
 
 import Icarium.Db (migrateDb)
 import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Knowledge qualified as RK
+import Icarium.Repo.Context qualified as RK
 import Icarium.Schema (applySchema)
 import Icarium.Types
 
@@ -42,13 +42,13 @@ mkCat c axis name = do
     cid <- RC.insertCategory c axis name
     pure (Category cid axis name)
 
-mkKnowledge :: Connection -> Text -> Text -> IO Text
-mkKnowledge c title body =
-    RK.insertKnowledge c RK.NewKnowledge{RK.nkTitle = title, RK.nkBody = body}
+mkContext :: Connection -> Text -> Text -> IO Text
+mkContext c title body =
+    RK.insertContext c RK.NewContext{RK.ncTitle = title, RK.ncBody = body}
 
-attachKnowledgeCats :: Connection -> Text -> [Category] -> IO ()
-attachKnowledgeCats c kid cats =
-    forM_ cats $ \cat -> RC.attachKnowledgeCategory c kid (categoryId cat)
+attachContextCats :: Connection -> Text -> [Category] -> IO ()
+attachContextCats c kid cats =
+    forM_ cats $ \cat -> RC.attachContextCategory c kid (categoryId cat)
 
 minTask :: Task
 minTask =
