@@ -87,6 +87,10 @@ tests =
         , testCase "search: --kind task excludes context results" testSearchKindTask
         , testCase "search: --no-snippet suppresses indented line" testSearchNoSnippet
         , testCase "search: empty result prints (no matches)" testSearchNoMatches
+        , testCase "search: multi-word AND matches both tokens in any order" testSearchAndTokens
+        , testCase "search: quoted phrase requires contiguous match" testSearchPhraseSemantics
+        , testCase "search: OR returns union of token matches" testSearchOrSemantics
+        , testCase "search: space-separated tokens find underscore-joined corpus entry" testSearchSnakeCaseFallback
         , testCase "dispatch show: tokens line present when values set" testDispatchShowTokensPresent
         , testCase "dispatch show: tokens line absent when all NULL" testDispatchShowTokensAbsent
         , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
@@ -472,6 +476,44 @@ testSearchNoMatches = withTempDb $ \db -> do
     (code, out, _) <- runIcarium db ["search", "xyzzy_nothing_matches_this_99"]
     code @?= ExitSuccess
     assertBool "(no matches) printed" ("(no matches)" `isInfixOf` out)
+
+testSearchAndTokens :: IO ()
+testSearchAndTokens = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["ctx", "add", "credentials owned by client"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "client only"]
+    (code, out, _) <- runIcarium db ["search", "client credentials"]
+    code @?= ExitSuccess
+    assertBool "both-token entry present" ("credentials owned by client" `isInfixOf` out)
+    assertBool "single-token entry absent" (not ("client only" `isInfixOf` out))
+
+testSearchPhraseSemantics :: IO ()
+testSearchPhraseSemantics = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["ctx", "add", "client credentials flow"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "credentials for client"]
+    (code, out, _) <- runIcarium db ["search", "\"client credentials\""]
+    code @?= ExitSuccess
+    assertBool "exact phrase present" ("client credentials flow" `isInfixOf` out)
+    assertBool "out-of-order absent" (not ("credentials for client" `isInfixOf` out))
+
+testSearchOrSemantics :: IO ()
+testSearchOrSemantics = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["ctx", "add", "foo topic"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "bar topic"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "unrelated"]
+    (code, out, _) <- runIcarium db ["search", "foo OR bar"]
+    code @?= ExitSuccess
+    assertBool "foo entry present" ("foo topic" `isInfixOf` out)
+    assertBool "bar entry present" ("bar topic" `isInfixOf` out)
+    assertBool "unrelated absent" (not ("unrelated" `isInfixOf` out))
+
+testSearchSnakeCaseFallback :: IO ()
+testSearchSnakeCaseFallback = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["ctx", "add", "client_credentials"]
+    (_, _, _) <- runIcarium db ["ctx", "add", "unrelated"]
+    (code, out, _) <- runIcarium db ["search", "client credentials"]
+    code @?= ExitSuccess
+    assertBool "snake_case entry found" ("client_credentials" `isInfixOf` out)
+    assertBool "unrelated absent" (not ("unrelated" `isInfixOf` out))
 
 testDispatchShowTokensPresent :: IO ()
 testDispatchShowTokensPresent = withSystemTempDirectory "icarium-test" $ \dir -> do

@@ -25,7 +25,14 @@ data Options = Options
 parser :: Parser Options
 parser =
     Options . T.pack
-        <$> strArgument (metavar "QUERY" <> help "Search terms (substring match on title and body)")
+        <$> strArgument
+            ( metavar "QUERY"
+                <> help
+                    "Search terms. Multiple words are ANDed (any order). \
+                    \Quote a phrase for exact-substring match. \
+                    \Use OR between tokens for union. \
+                    \Bare words also match their underscore-joined form (e.g. 'client credentials' finds 'client_credentials')."
+            )
         <*> optional
             ( option
                 kindReader

@@ -23,6 +23,7 @@ import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RK
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Edge qualified as RE
+import Icarium.Repo.Search (ParsedQuery (..), Term (..), parseQuery)
 import Icarium.Repo.Search qualified as RS
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -144,6 +145,19 @@ tests =
             , testCase "--kind ctx excludes task hits" testSearchKindCtx
             , testCase "limit caps result count" testSearchLimit
             , testCase "no match returns empty list" testSearchNoMatch
+            , testCase "AND: multi-word matches tokens in any order" testSearchAndTokens
+            , testCase "AND: entry missing one token excluded" testSearchAndExcludes
+            , testCase "phrase: exact substring required" testSearchPhrase
+            , testCase "OR: union of token matches" testSearchOrTokens
+            , testCase "snake_case: space-separated tokens match underscore-joined form" testSearchSnakeCase
+            ]
+        , testGroup
+            "parseQuery"
+            [ testCase "single word → AndQuery [Word]" testParseQueryWord
+            , testCase "two words → AndQuery [Word, Word]" testParseQueryAnd
+            , testCase "quoted phrase → AndQuery [Phrase]" testParseQueryPhrase
+            , testCase "explicit OR → OrQuery" testParseQueryOr
+            , testCase "OR is case-sensitive (lowercase not treated as OR)" testParseQueryOrCase
             ]
         ]
 
@@ -915,6 +929,68 @@ testSearchNoMatch = withTestDb $ \c -> do
     _ <- mkContext c "some title" "some body"
     results <- RS.searchEntries c "xyzzy_no_match" Nothing 10
     null results @?= True
+
+testSearchAndTokens :: IO ()
+testSearchAndTokens = withTestDb $ \c -> do
+    kid <- mkContext c "credentials owned by client" "body"
+    _ <- mkContext c "client only" "body"
+    results <- RS.searchEntries c "client credentials" Nothing 10
+    length results @?= 1
+    RS.hitId (head results) @?= kid
+
+testSearchAndExcludes :: IO ()
+testSearchAndExcludes = withTestDb $ \c -> do
+    _ <- mkContext c "only alpha here" "body"
+    results <- RS.searchEntries c "alpha beta" Nothing 10
+    null results @?= True
+
+testSearchPhrase :: IO ()
+testSearchPhrase = withTestDb $ \c -> do
+    kid <- mkContext c "client credentials flow" "body"
+    _ <- mkContext c "credentials for client" "body"
+    results <- RS.searchEntries c "\"client credentials\"" Nothing 10
+    length results @?= 1
+    RS.hitId (head results) @?= kid
+
+testSearchOrTokens :: IO ()
+testSearchOrTokens = withTestDb $ \c -> do
+    _ <- mkContext c "foo topic" "body"
+    _ <- mkContext c "bar topic" "body"
+    _ <- mkContext c "unrelated" "body"
+    results <- RS.searchEntries c "foo OR bar" Nothing 10
+    length results @?= 2
+
+testSearchSnakeCase :: IO ()
+testSearchSnakeCase = withTestDb $ \c -> do
+    kid <- mkContext c "client_credentials" "body"
+    _ <- mkContext c "unrelated" "body"
+    results <- RS.searchEntries c "client credentials" Nothing 10
+    length results @?= 1
+    RS.hitId (head results) @?= kid
+
+-- =============================================================
+-- parseQuery tests
+-- =============================================================
+
+testParseQueryWord :: IO ()
+testParseQueryWord =
+    parseQuery "needle" @?= AndQuery [Word "needle"]
+
+testParseQueryAnd :: IO ()
+testParseQueryAnd =
+    parseQuery "client credentials" @?= AndQuery [Word "client", Word "credentials"]
+
+testParseQueryPhrase :: IO ()
+testParseQueryPhrase =
+    parseQuery "\"client credentials\"" @?= AndQuery [Phrase "client credentials"]
+
+testParseQueryOr :: IO ()
+testParseQueryOr =
+    parseQuery "foo OR bar" @?= OrQuery [Word "foo", Word "bar"]
+
+testParseQueryOrCase :: IO ()
+testParseQueryOrCase =
+    parseQuery "foo or bar" @?= AndQuery [Word "foo", Word "or", Word "bar"]
 
 -- =============================================================
 -- dispatch token column tests
