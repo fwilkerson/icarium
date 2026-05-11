@@ -11,11 +11,11 @@ That perspective is load-bearing. An agent who treats refinement as "fill in the
 
 ## Start
 
-Run `./bin/icarium know list --discipline refinement` to load project-specific refinement knowledge before doing anything else.
+Run `icarium know list --discipline refinement` to load project-specific refinement knowledge before doing anything else.
 
 Ask the user what to focus on. They'll point at specific `idea` or `planned` tasks, or name an outcome and let you scope the relevant work.
 
-The story is in `./bin/icarium` — `task list`, `know list`, `dispatch list` enumerate; `task show <id>` reads a record. Pull what you need.
+The story is in `icarium` — `task list`, `know list`, `dispatch list` enumerate; `task show <id>` reads a record. Pull what you need.
 
 ## Foundational questions before product questions
 
