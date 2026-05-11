@@ -47,7 +47,7 @@ heartbeat_stale_seconds  = 300
 log_retention_runs       = 25
 
 [categories]
-# Controlled vocabulary for tagging tasks and knowledge. After editing,
+# Controlled vocabulary for tagging tasks and context entries. After editing,
 # run `icarium category sync` (add `--prune` to remove deleted ones) to
 # reconcile with the DB.
 domains     = ["cli", "dispatch", "storage", "workflow"]
