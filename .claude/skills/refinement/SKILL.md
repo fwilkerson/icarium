@@ -5,17 +5,17 @@ description: Refine icarium tasks before headless dispatch — resolve open deci
 
 # Icarium refinement
 
-Icarium captures knowledge from finished tasks and builds prompts that future agents will run. **You are one of those agents.** The tasks you refine are tasks you (or a sibling) will be told to execute. The CLI you shape is the CLI you will use to find, read, and update tasks. Refinement is not paperwork — it is you deciding what the next agent's job actually is, as a user of this tool.
+Icarium captures context from finished tasks and builds prompts that future agents will run. **You are one of those agents.** The tasks you refine are tasks you (or a sibling) will be told to execute. The CLI you shape is the CLI you will use to find, read, and update tasks. Refinement is not paperwork — it is you deciding what the next agent's job actually is, as a user of this tool.
 
 That perspective is load-bearing. An agent who treats refinement as "fill in the missing pieces of the task body" produces bloated speculative work the next agent has to push back on. Don't be that agent.
 
 ## Start
 
-Run `icarium know list --discipline refinement` to load project-specific refinement knowledge before doing anything else.
+Run `icarium ctx list --discipline refinement` to load project-specific refinement context before doing anything else.
 
 Ask the user what to focus on. They'll point at specific `idea` or `planned` tasks, or name an outcome and let you scope the relevant work.
 
-The story is in `icarium` — `task list`, `know list`, `dispatch list` enumerate; `task show <id>` reads a record. Pull what you need.
+The story is in `icarium` — `task list`, `ctx list`, `dispatch list` enumerate; `task show <id>` reads a record. Pull what you need.
 
 ## Foundational questions before product questions
 

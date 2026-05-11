@@ -11,7 +11,7 @@ You are deciding whether a task can be handed to a sonnet agent for dispatch. Yo
 
 ## Start
 
-Run `icarium know list --discipline refinement` and read the promotion-philosophy entry if present. It is load-bearing for the calibration below.
+Run `icarium ctx list --discipline refinement` and read the promotion-philosophy entry if present. It is load-bearing for the calibration below.
 
 For one task: `icarium task show <id>`. For batch: `icarium task list --state planned`.
 
@@ -49,7 +49,7 @@ Walk through these. Necessary, not sufficient — judgment fills the rest.
 3. **Acceptance is testable.** Concrete commands and assertions; grep-style invariants are clean for encapsulation rules.
 4. **Dependencies are `done`.** `task show` lists them; verify each.
 5. **References are not `[STALE]`.** Stale references are how an agent works from a deprecated design.
-6. **Domain and discipline tagged.** Drives which knowledge entries reach the dispatched agent.
+6. **Domain and discipline tagged.** Drives which context entries reach the dispatched agent.
 7. **Out-of-scope is named, not hand-waved.** The safety valve when scope is ambiguous.
 
 If everything holds: `icarium task update <id> --state ready`.
