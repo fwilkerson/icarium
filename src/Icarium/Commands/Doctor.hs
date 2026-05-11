@@ -1,10 +1,8 @@
 module Icarium.Commands.Doctor (Options, parser, run) where
 
-import Control.Exception (bracket)
 import Control.Monad (filterM)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
-import Database.SQLite.Simple (close)
 import Options.Applicative
 import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..), exitWith)
@@ -15,7 +13,7 @@ import Icarium.Config (
     defaultConfigPath,
     loadConfig,
  )
-import Icarium.Db (dbSchemaVersion, openDb)
+import Icarium.Db (dbSchemaVersion, withDb)
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Schema (schemaVersion)
@@ -87,7 +85,7 @@ checkSchema dbPath = do
     if not e
         then pure $ Check "schema" (FAIL "no database")
         else do
-            v <- bracket (openDb dbPath) close dbSchemaVersion
+            v <- withDb dbPath dbSchemaVersion
             let expected = fromIntegral schemaVersion :: Integer
                 actual = fromIntegral v :: Integer
             pure $
@@ -115,7 +113,7 @@ checkOrphanedDispatches dbPath = do
                 Just cfg -> do
                     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
                     now <- getCurrentTime
-                    bracket (openDb dbPath) close $ \conn -> do
+                    withDb dbPath $ \conn -> do
                         open <- RD.listOpenDispatches conn
                         orphans <- filterM (isOrphanedDispatch now staleSec) open
                         pure $
