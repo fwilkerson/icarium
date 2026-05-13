@@ -123,10 +123,12 @@ matchesTitle pq title = case pq of
     titleLower = T.toLower title
     termIn haystack term = T.toLower (termText term) `T.isInfixOf` haystack
 
-{- | Search tasks and context for @q@. Results ranked: title hits first,
-then updated_at DESC. @mKind@ narrows to one table; @Nothing@ = both.
+{- | Search tasks and context for @q@. Returns @(total, results)@ where
+@total@ is the count before the limit is applied. Results are ranked:
+title hits first, non-stale before stale within the same tier, then
+updated_at DESC. @mKind@ narrows to one table; @Nothing@ = both.
 -}
-searchEntries :: Connection -> Text -> Maybe NodeKind -> Int -> IO [SearchHit]
+searchEntries :: Connection -> Text -> Maybe NodeKind -> Int -> IO (Int, [SearchHit])
 searchEntries conn q mKind limit = do
     taskHits <- case mKind of
         Just ContextNode -> pure []
@@ -135,11 +137,14 @@ searchEntries conn q mKind limit = do
         Just TaskNode -> pure []
         _ -> searchContexts conn pq
     let ranked = sortBy rankHit (taskHits ++ ctxHits)
-    pure (take limit ranked)
+        total = length ranked
+    pure (total, take limit ranked)
   where
     pq = parseQuery q
     rankHit a b = case compare (hitTitleMatch b) (hitTitleMatch a) of
-        EQ -> compare (hitUpdatedAt b) (hitUpdatedAt a)
+        EQ -> case compare (hitStale a) (hitStale b) of
+            EQ -> compare (hitUpdatedAt b) (hitUpdatedAt a)
+            o -> o
         o -> o
 
 searchTasks :: Connection -> ParsedQuery -> IO [SearchHit]

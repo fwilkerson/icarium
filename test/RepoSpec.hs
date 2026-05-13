@@ -870,7 +870,7 @@ testSearchTitleBeforeBody :: IO ()
 testSearchTitleBeforeBody = withTestDb $ \c -> do
     tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkContext c "unrelated title" "body contains needle here"
-    results <- RS.searchEntries c "needle" Nothing 10
+    (_, results) <- RS.searchEntries c "needle" Nothing 10
     assertBool "two results returned" (length results == 2)
     RS.hitId (head results) @?= tid
     RS.hitTitleMatch (head results) @?= True
@@ -881,7 +881,7 @@ testSearchCrossKindRank :: IO ()
 testSearchCrossKindRank = withTestDb $ \c -> do
     _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkContext c "title has xyzzy" "body"
-    results <- RS.searchEntries c "xyzzy" Nothing 10
+    (_, results) <- RS.searchEntries c "xyzzy" Nothing 10
     assertBool "context title hit before task body hit" (RS.hitId (head results) == kid)
     RS.hitTitleMatch (head results) @?= True
 
@@ -889,7 +889,7 @@ testSearchEscapePercent :: IO ()
 testSearchEscapePercent = withTestDb $ \c -> do
     kid <- mkContext c "100% correct" "body"
     _ <- mkContext c "unrelated" "body"
-    results <- RS.searchEntries c "100%" Nothing 10
+    (_, results) <- RS.searchEntries c "100%" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
@@ -897,7 +897,7 @@ testSearchEscapeUnderscore :: IO ()
 testSearchEscapeUnderscore = withTestDb $ \c -> do
     kid <- mkContext c "snake_case naming" "body"
     _ <- mkContext c "unrelated" "body"
-    results <- RS.searchEntries c "snake_case" Nothing 10
+    (_, results) <- RS.searchEntries c "snake_case" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
@@ -905,7 +905,7 @@ testSearchKindTask :: IO ()
 testSearchKindTask = withTestDb $ \c -> do
     tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     _ <- mkContext c "needle context" "body"
-    results <- RS.searchEntries c "needle" (Just TaskNode) 10
+    (_, results) <- RS.searchEntries c "needle" (Just TaskNode) 10
     length results @?= 1
     RS.hitId (head results) @?= tid
 
@@ -913,7 +913,7 @@ testSearchKindCtx :: IO ()
 testSearchKindCtx = withTestDb $ \c -> do
     _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkContext c "needle context" "body"
-    results <- RS.searchEntries c "needle" (Just ContextNode) 10
+    (_, results) <- RS.searchEntries c "needle" (Just ContextNode) 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
@@ -921,34 +921,34 @@ testSearchLimit :: IO ()
 testSearchLimit = withTestDb $ \c -> do
     forM_ [(1 :: Int) .. 5] $ \i ->
         void $ mkContext c ("needle entry " <> T.pack (show i)) "body"
-    results <- RS.searchEntries c "needle" Nothing 3
+    (_, results) <- RS.searchEntries c "needle" Nothing 3
     length results @?= 3
 
 testSearchNoMatch :: IO ()
 testSearchNoMatch = withTestDb $ \c -> do
     _ <- mkContext c "some title" "some body"
-    results <- RS.searchEntries c "xyzzy_no_match" Nothing 10
+    (_, results) <- RS.searchEntries c "xyzzy_no_match" Nothing 10
     null results @?= True
 
 testSearchAndTokens :: IO ()
 testSearchAndTokens = withTestDb $ \c -> do
     kid <- mkContext c "credentials owned by client" "body"
     _ <- mkContext c "client only" "body"
-    results <- RS.searchEntries c "client credentials" Nothing 10
+    (_, results) <- RS.searchEntries c "client credentials" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
 testSearchAndExcludes :: IO ()
 testSearchAndExcludes = withTestDb $ \c -> do
     _ <- mkContext c "only alpha here" "body"
-    results <- RS.searchEntries c "alpha beta" Nothing 10
+    (_, results) <- RS.searchEntries c "alpha beta" Nothing 10
     null results @?= True
 
 testSearchPhrase :: IO ()
 testSearchPhrase = withTestDb $ \c -> do
     kid <- mkContext c "client credentials flow" "body"
     _ <- mkContext c "credentials for client" "body"
-    results <- RS.searchEntries c "\"client credentials\"" Nothing 10
+    (_, results) <- RS.searchEntries c "\"client credentials\"" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 
@@ -957,14 +957,14 @@ testSearchOrTokens = withTestDb $ \c -> do
     _ <- mkContext c "foo topic" "body"
     _ <- mkContext c "bar topic" "body"
     _ <- mkContext c "unrelated" "body"
-    results <- RS.searchEntries c "foo OR bar" Nothing 10
+    (_, results) <- RS.searchEntries c "foo OR bar" Nothing 10
     length results @?= 2
 
 testSearchSnakeCase :: IO ()
 testSearchSnakeCase = withTestDb $ \c -> do
     kid <- mkContext c "client_credentials" "body"
     _ <- mkContext c "unrelated" "body"
-    results <- RS.searchEntries c "client credentials" Nothing 10
+    (_, results) <- RS.searchEntries c "client credentials" Nothing 10
     length results @?= 1
     RS.hitId (head results) @?= kid
 

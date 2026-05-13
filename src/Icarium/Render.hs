@@ -487,17 +487,29 @@ data SearchHitRow = SearchHitRow
 
 {- | Render search results. Each hit shows kind letter, id, title, cats,
 status badge; body-match hits get an indented snippet line underneath.
+When @total > length rows@ a footer shows the full match count.
 
 @useUnicode@: Unicode ellipsis in truncated titles.
 @isTty@: ANSI bold for match highlight; otherwise @**...**@.
 @noSnippet@: suppress the snippet line entirely.
 @q@: the original query string (used for snippet highlight).
+@total@: total matches before the limit was applied.
 -}
-renderSearchList :: Bool -> Bool -> Bool -> Text -> [SearchHitRow] -> Text
-renderSearchList _ _ _ _ [] = "(no matches)\n"
-renderSearchList useUnicode isTty noSnippet q rows =
-    T.unlines $ concatMap renderRow rows
+renderSearchList :: Bool -> Bool -> Bool -> Text -> Int -> [SearchHitRow] -> Text
+renderSearchList _ _ _ _ _ [] = "(no matches)\n"
+renderSearchList useUnicode isTty noSnippet q total rows =
+    T.unlines $ concatMap renderRow rows ++ footerLines
   where
+    shown = length rows
+    footerLines
+        | total > shown =
+            [ "  ... showing "
+                <> T.pack (show shown)
+                <> " of "
+                <> T.pack (show total)
+                <> " matches (use --limit to see more)"
+            ]
+        | otherwise = []
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . hitTitle . shrHit) rows))
     catWidth = maxLen 3 (map (T.length . formatCats . shrCats) rows)
 
@@ -534,9 +546,10 @@ searchBadge h = case hitKind h of
 extractSnippet :: Bool -> Text -> Text -> Text
 extractSnippet _ _ "" = ""
 extractSnippet isTty q body =
-    let qLower = T.toLower q
-        bodyLower = T.toLower body
-        (before, rest) = T.breakOn qLower bodyLower
+    let flat = T.unwords (T.words body)
+        qLower = T.toLower q
+        flatLower = T.toLower flat
+        (before, rest) = T.breakOn qLower flatLower
      in if T.null rest
             then ""
             else
@@ -544,11 +557,11 @@ extractSnippet isTty q body =
                     qLen = T.length q
                     half = 40 :: Int
                     start = max 0 (pos - half)
-                    end = min (T.length body) (pos + qLen + half)
+                    end = min (T.length flat) (pos + qLen + half)
                     winLen = end - start
-                    snippet = T.take winLen (T.drop start body)
+                    snippet = T.take winLen (T.drop start flat)
                     prefix = if start > 0 then "..." else ""
-                    suffix = if end < T.length body then "..." else ""
+                    suffix = if end < T.length flat then "..." else ""
                     inSnippet = pos - start
                     (preMatch, afterSnippet) = T.splitAt inSnippet snippet
                     matchText = T.take qLen afterSnippet

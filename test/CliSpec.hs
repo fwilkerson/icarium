@@ -91,6 +91,9 @@ tests =
         , testCase "search: quoted phrase requires contiguous match" testSearchPhraseSemantics
         , testCase "search: OR returns union of token matches" testSearchOrSemantics
         , testCase "search: space-separated tokens find underscore-joined corpus entry" testSearchSnakeCaseFallback
+        , testCase "search: --limit truncation shows footer with total count" testSearchTruncationFooter
+        , testCase "search: stale context ranks below live context at same relevance" testSearchStaleLast
+        , testCase "search: snippet collapses embedded newlines to single line" testSearchSnippetSingleLine
         , testCase "dispatch show: tokens line present when values set" testDispatchShowTokensPresent
         , testCase "dispatch show: tokens line absent when all NULL" testDispatchShowTokensAbsent
         , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
@@ -514,6 +517,46 @@ testSearchSnakeCaseFallback = withTempDb $ \db -> do
     code @?= ExitSuccess
     assertBool "snake_case entry found" ("client_credentials" `isInfixOf` out)
     assertBool "unrelated absent" (not ("unrelated" `isInfixOf` out))
+
+testSearchTruncationFooter :: IO ()
+testSearchTruncationFooter = withTempDb $ \db -> do
+    mapM_
+        (\i -> runIcarium db ["ctx", "add", "needle entry " ++ show (i :: Int)])
+        [1 .. 5]
+    -- limit 3 with 5 total matches should produce a footer
+    (code, out, _) <- runIcarium db ["search", "needle", "--limit", "3"]
+    code @?= ExitSuccess
+    assertBool "footer mentions total count" ("of 5 matches" `isInfixOf` out)
+    assertBool "footer mentions shown count" ("showing 3" `isInfixOf` out)
+    -- when all results fit, no footer
+    (code2, out2, _) <- runIcarium db ["search", "needle", "--limit", "10"]
+    code2 @?= ExitSuccess
+    assertBool "no footer when all results fit" (not ("showing" `isInfixOf` out2))
+
+testSearchStaleLast :: IO ()
+testSearchStaleLast = withTempDb $ \db -> do
+    (_, liveOut, _) <- runIcarium db ["ctx", "add", "zqtoken live entry"]
+    let liveId = take 10 (head (words liveOut))
+    (_, staleOut, _) <- runIcarium db ["ctx", "add", "zqtoken stale entry"]
+    let staleId = take 10 (head (words staleOut))
+    -- mark the stale entry as stale
+    (_, _, _) <- runIcarium db ["ctx", "update", staleId, "--stale"]
+    (code, out, _) <- runIcarium db ["search", "zqtoken"]
+    code @?= ExitSuccess
+    let outLines = lines out
+        liveIdx = head [i | (i, l) <- zip [0 :: Int ..] outLines, liveId `isInfixOf` l]
+        staleIdx = head [i | (i, l) <- zip [0 :: Int ..] outLines, staleId `isInfixOf` l]
+    assertBool "live entry ranks above stale entry" (liveIdx < staleIdx)
+
+testSearchSnippetSingleLine :: IO ()
+testSearchSnippetSingleLine = withTempDb $ \db -> do
+    let multilineBody = "line one\nline two with needleXYZ here\nline three"
+    (_, _, _) <- runIcarium db ["ctx", "add", "multiline body entry", "--body", multilineBody]
+    (code, out, _) <- runIcarium db ["search", "needleXYZ"]
+    code @?= ExitSuccess
+    let snippetLines = filter ("needleXYZ" `isInfixOf`) (lines out)
+    assertBool "snippet line found" (not (null snippetLines))
+    assertBool "snippet is a single line (no embedded newlines)" (length snippetLines == 1)
 
 testDispatchShowTokensPresent :: IO ()
 testDispatchShowTokensPresent = withSystemTempDirectory "icarium-test" $ \dir -> do

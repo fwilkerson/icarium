@@ -59,11 +59,11 @@ kindReader = eitherReader $ \case
 
 run :: FilePath -> Options -> IO ()
 run db o = withDb db $ \c -> do
-    hits <- RS.searchEntries c (oQuery o) (oKind o) (oLimit o)
+    (total, hits) <- RS.searchEntries c (oQuery o) (oKind o) (oLimit o)
     rows <- buildRows c hits
     utf8 <- detectUtf8
     isTty <- detectTty
-    TIO.putStr (Render.renderSearchList utf8 isTty (oNoSnippet o) (oQuery o) rows)
+    TIO.putStr (Render.renderSearchList utf8 isTty (oNoSnippet o) (oQuery o) total rows)
 
 buildRows :: Connection -> [RS.SearchHit] -> IO [SearchHitRow]
 buildRows c hits = do
