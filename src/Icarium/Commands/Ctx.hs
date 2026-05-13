@@ -1,15 +1,17 @@
 module Icarium.Commands.Ctx (Command, parser, run, autoDeriveDeps) where
 
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, void, when)
 import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
+import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 
+import Icarium.Bodies (bodiesDir, ctxBodyPath, ensureBodiesDirs, readBody, writeBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
@@ -25,6 +27,7 @@ data Command
     | Show ShowOpts
     | Update UpdateOpts
     | Rm RmOpts
+    | Path PathOpts
 
 parser :: Parser Command
 parser =
@@ -34,6 +37,7 @@ parser =
             <> subcmd "show" "Show a context entry" (Show <$> showP)
             <> subcmd "update" "Update a context entry" (Update <$> updateP)
             <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
+            <> subcmd "path" "Print body file path for a context entry" (Path <$> pathP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -43,6 +47,7 @@ run db = \case
     Show o -> runShow db o
     Update o -> runUpdate db o
     Rm o -> runRm db o
+    Path o -> runPath db o
 
 -- =============================================================
 -- add
@@ -104,7 +109,12 @@ runAdd db o = withDb db $ \c -> do
         Just target ->
             void $ RE.insertEdge c Supersedes ContextNode cxid ContextNode target
         Nothing -> pure ()
+    let bodDir = bodiesDir db
+    ensureBodiesDirs bodDir
+    let fp = ctxBodyPath bodDir cxid
+    writeBody fp body
     TIO.putStrLn cxid
+    TIO.putStrLn (T.pack fp)
   where
     loadInherited conn tid = do
         allCats <- RC.taskCategoriesFor conn (T.pack tid)
@@ -195,27 +205,22 @@ buildContextRows c cxs = do
 -- show
 -- =============================================================
 
-data ShowOpts = ShowOpts
-    { sId :: Text
-    , sBody :: Bool
-    }
+newtype ShowOpts = ShowOpts {sId :: Text}
 
 showP :: Parser ShowOpts
 showP =
     ShowOpts . T.pack
         <$> strArgument (metavar "CONTEXT_ID")
-        <*> switch (long "body" <> help "Print only the context body and nothing else")
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (sId o))
     mcx <- RCx.getContext c cxid
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
-    if sBody o
-        then TIO.putStr (contextBody cx)
-        else do
-            cats <- RC.contextCategoriesFor c (contextId cx)
-            TIO.putStr (Render.renderContext cx cats)
+    bodyFromFile <- readBody (ctxBodyPath (bodiesDir db) cxid)
+    let cx' = cx{contextBody = bodyFromFile}
+    cats <- RC.contextCategoriesFor c (contextId cx')
+    TIO.putStr (Render.renderContext cx' cats)
 
 -- =============================================================
 -- update
@@ -224,7 +229,6 @@ runShow db o = withDb db $ \c -> do
 data UpdateOpts = UpdateOpts
     { uId :: Text
     , uTitle :: Maybe Text
-    , uBody :: BodyInput
     , uStale :: Maybe Bool
     , uDomain :: Maybe Text
     , uDiscipline :: Maybe Text
@@ -235,7 +239,6 @@ updateP =
     UpdateOpts . T.pack
         <$> strArgument (metavar "CONTEXT_ID")
         <*> optional (textOption "title" "TEXT" "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `ctx list`.")
-        <*> bodyInputParser
         <*> staleFlag
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
@@ -249,16 +252,12 @@ staleFlag =
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (uId o))
-    body <- case uBody o of
-        BodyNone -> pure Nothing
-        b -> Just <$> resolveBody b
     -- Validate categories before any mutation.
     mDomCat <- resolveAxisFlag c Domain (uDomain o)
     mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
     let upd =
             RCx.emptyUpdate
                 { RCx.cuTitle = uTitle o
-                , RCx.cuBody = body
                 , RCx.cuStale = uStale o
                 }
     ok <- RCx.updateContext c cxid upd
@@ -288,5 +287,23 @@ runRm db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (rId o))
     ok <- RCx.deleteContext c cxid
     if ok
-        then TIO.putStrLn ("deleted " <> cxid)
+        then do
+            let fp = ctxBodyPath (bodiesDir db) cxid
+            exists <- doesFileExist fp
+            when exists $ removeFile fp
+            TIO.putStrLn ("deleted " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (rId o))
+
+-- =============================================================
+-- path
+-- =============================================================
+
+newtype PathOpts = PathOpts {pId :: Text}
+
+pathP :: Parser PathOpts
+pathP = PathOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
+
+runPath :: FilePath -> PathOpts -> IO ()
+runPath db o = withDb db $ \c -> do
+    cxid <- resolveOrFatal (RCx.resolveContextId c (pId o))
+    TIO.putStrLn (T.pack (ctxBodyPath (bodiesDir db) cxid))

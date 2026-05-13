@@ -7,8 +7,10 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
+import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode (..), exitWith)
 
+import Icarium.Bodies (bodiesDir, ensureBodiesDirs, readBody, taskBodyPath, writeBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
@@ -25,6 +27,7 @@ data Command
     | Update UpdateOpts
     | Rm RmOpts
     | Next NextOpts
+    | Path PathOpts
 
 parser :: Parser Command
 parser =
@@ -35,6 +38,7 @@ parser =
             <> subcmd "update" "Update a task" (Update <$> updateP)
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
             <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
+            <> subcmd "path" "Print body file path for a task" (Path <$> pathP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -45,6 +49,7 @@ run db = \case
     Update o -> runUpdate db o
     Rm o -> runRm db o
     Next o -> runNext db o
+    Path o -> runPath db o
 
 -- =============================================================
 -- add
@@ -116,7 +121,12 @@ runAdd db o = withDb db $ \c -> do
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
         void $ RE.insertEdge c References TaskNode tid ContextNode refId
+    let bodDir = bodiesDir db
+    ensureBodiesDirs bodDir
+    let fp = taskBodyPath bodDir tid
+    writeBody fp body
     TIO.putStrLn tid
+    TIO.putStrLn (T.pack fp)
 
 -- =============================================================
 -- list
@@ -187,7 +197,6 @@ buildTaskRows c ts = do
 data ShowOpts = ShowOpts
     { sId :: Text
     , sPrompt :: Bool
-    , sBody :: Bool
     }
 
 showP :: Parser ShowOpts
@@ -195,34 +204,29 @@ showP =
     ShowOpts . T.pack
         <$> strArgument (metavar "TASK_ID")
         <*> switch (long "prompt" <> help "Render task as an LLM prompt context block")
-        <*> switch (long "body" <> help "Print only the task body and nothing else")
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = do
-    when (sPrompt o && sBody o) $
-        fatal 2 "--body and --prompt are mutually exclusive"
-    withDb db $ \c -> do
-        tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
-        mt <- RT.getTask c tid
-        t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
-        if sBody o
-            then TIO.putStr (taskBody t)
-            else
-                if sPrompt o
-                    then do
-                        refs <- RE.referencedContexts c (taskId t)
-                        deps <- RE.dependencyTasks c (taskId t)
-                        cats <- RC.taskCategoriesFor c (taskId t)
-                        catMatch <- RCx.categoryMatchedContexts c cats 5
-                        let refIds = map contextId refs
-                            dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-                        TIO.putStr (Render.renderTaskPrompt t refs dedupedCat deps)
-                    else do
-                        refs <- RE.referencedContexts c (taskId t)
-                        deps <- RE.dependencyTasks c (taskId t)
-                        cats <- RC.taskCategoriesFor c (taskId t)
-                        utf8 <- detectUtf8
-                        TIO.putStr (Render.renderTaskHuman utf8 t refs deps cats)
+runShow db o = withDb db $ \c -> do
+    tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
+    mt <- RT.getTask c tid
+    t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
+    bodyFromFile <- readBody (taskBodyPath (bodiesDir db) tid)
+    let t' = t{taskBody = bodyFromFile}
+    if sPrompt o
+        then do
+            refs <- RE.referencedContexts c (taskId t')
+            deps <- RE.dependencyTasks c (taskId t')
+            cats <- RC.taskCategoriesFor c (taskId t')
+            catMatch <- RCx.categoryMatchedContexts c cats 5
+            let refIds = map contextId refs
+                dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
+            TIO.putStr (Render.renderTaskPrompt t' refs dedupedCat deps)
+        else do
+            refs <- RE.referencedContexts c (taskId t')
+            deps <- RE.dependencyTasks c (taskId t')
+            cats <- RC.taskCategoriesFor c (taskId t')
+            utf8 <- detectUtf8
+            TIO.putStr (Render.renderTaskHuman utf8 t' refs deps cats)
 
 -- =============================================================
 -- update
@@ -233,7 +237,6 @@ data UpdateOpts = UpdateOpts
     , uState :: Maybe TaskState
     , uPriority :: Maybe Int
     , uTitle :: Maybe Text
-    , uBody :: BodyInput
     , uBlockReason :: Maybe Text
     , uDomain :: Maybe Text
     , uDiscipline :: Maybe Text
@@ -262,7 +265,6 @@ updateP =
                 )
             )
         <*> optional (textOption "title" "TEXT" "Replace task title. Keep ≤ 72 chars; longer titles are truncated in `task list`.")
-        <*> bodyInputParser
         <*> optional (textOption "block-reason" "TEXT" "Reason for blocked state (required with --state blocked)")
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
@@ -276,9 +278,6 @@ runUpdate db o = withDb db $ \c -> do
     when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
     tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
-    body <- case uBody o of
-        BodyNone -> pure Nothing
-        b -> Just <$> resolveBody b
     -- Validate categories before any mutation.
     mDomCat <- resolveAxisFlag c Domain (uDomain o)
     mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
@@ -292,7 +291,6 @@ runUpdate db o = withDb db $ \c -> do
     let upd =
             RT.emptyUpdate
                 { RT.tuTitle = uTitle o
-                , RT.tuBody = body
                 , RT.tuState = uState o
                 , RT.tuPriority = fmap Just (uPriority o)
                 , RT.tuBlockReason = fmap Just (uBlockReason o)
@@ -317,7 +315,11 @@ runRm db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (rId o))
     ok <- RT.deleteTask c tid
     if ok
-        then TIO.putStrLn ("deleted " <> tid)
+        then do
+            let fp = taskBodyPath (bodiesDir db) tid
+            exists <- doesFileExist fp
+            when exists $ removeFile fp
+            TIO.putStrLn ("deleted " <> tid)
         else fatal 1 ("task not found: " <> T.unpack (rId o))
 
 -- =============================================================
@@ -335,3 +337,17 @@ runNext db _ = withDb db $ \c -> do
     case ts of
         [] -> exitWith (ExitFailure 1)
         (t : _) -> TIO.putStrLn (taskId t)
+
+-- =============================================================
+-- path
+-- =============================================================
+
+newtype PathOpts = PathOpts {pId :: Text}
+
+pathP :: Parser PathOpts
+pathP = PathOpts . T.pack <$> strArgument (metavar "TASK_ID")
+
+runPath :: FilePath -> PathOpts -> IO ()
+runPath db o = withDb db $ \c -> do
+    tid <- resolveOrFatal (RT.resolveTaskId c (pId o))
+    TIO.putStrLn (T.pack (taskBodyPath (bodiesDir db) tid))

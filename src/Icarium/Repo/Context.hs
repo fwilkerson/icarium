@@ -14,7 +14,8 @@ module Icarium.Repo.Context (
     categoryMatchedContexts,
 ) where
 
-import Data.Maybe (catMaybes, fromMaybe)
+import Control.Monad (when)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (
@@ -27,8 +28,9 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Types (Category (..), CategoryAxis (..), Context (..))
+import Icarium.Types (Category (..), CategoryAxis (..), Context (..), NodeKind (..))
 
 data NewContext = NewContext
     { ncTitle :: Text
@@ -37,12 +39,11 @@ data NewContext = NewContext
 
 data ContextUpdate = ContextUpdate
     { cuTitle :: Maybe Text
-    , cuBody :: Maybe Text
     , cuStale :: Maybe Bool
     }
 
 emptyUpdate :: ContextUpdate
-emptyUpdate = ContextUpdate Nothing Nothing Nothing
+emptyUpdate = ContextUpdate Nothing Nothing
 
 contextColumnNames :: [Text]
 contextColumnNames = ["id", "title", "body", "stale", "created_at", "updated_at"]
@@ -60,6 +61,7 @@ insertContext conn NewContext{..} = do
         conn
         (Query "INSERT INTO context (id, title, body) VALUES (?, ?, ?)")
         (cid, ncTitle, ncBody)
+    Fts.indexEntry conn cid ContextNode ncTitle ncBody
     pure cid
 
 getContext :: Connection -> Text -> IO (Maybe Context)
@@ -121,13 +123,14 @@ updateContext conn cid ContextUpdate{..} = do
         Nothing -> pure False
         Just k -> do
             let newTitle = fromMaybe (contextTitle k) cuTitle
-                newBody = fromMaybe (contextBody k) cuBody
                 newStale = fromMaybe (contextStale k) cuStale
                 staleInt = if newStale then 1 else 0 :: Int
             execute
                 conn
-                (Query "UPDATE context SET title=?, body=?, stale=? WHERE id=?")
-                (newTitle, newBody, staleInt, cid)
+                (Query "UPDATE context SET title=?, stale=? WHERE id=?")
+                (newTitle, staleInt, cid)
+            when (isJust cuTitle) $
+                Fts.indexEntry conn cid ContextNode newTitle (contextBody k)
             pure True
 
 deleteContext :: Connection -> Text -> IO Bool
@@ -137,6 +140,7 @@ deleteContext conn cid = do
         Nothing -> pure False
         Just _ -> do
             execute conn (Query "DELETE FROM context WHERE id = ?") (Only cid)
+            Fts.removeEntry conn cid
             pure True
 
 {- | Context entries whose categories AND-intersect with the given

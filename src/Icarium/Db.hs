@@ -15,6 +15,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, parseTimeM)
 import Database.SQLite.Simple (Connection, Only (..), close, open, query_)
+import Icarium.Bodies (mtimeSweep)
 import Icarium.Migrations (Migration (..), migrations)
 import Icarium.Schema (applySchema)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
@@ -35,6 +36,7 @@ left at its original schema version (the migration ran inside a transaction).
 withDb :: FilePath -> (Connection -> IO a) -> IO a
 withDb path action = bracket (openDb path) close $ \conn -> do
     migrateDb conn
+    mtimeSweep conn path
     action conn
 
 {- | Run all pending migrations against an open connection, in version order.

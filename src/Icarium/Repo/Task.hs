@@ -14,7 +14,8 @@ module Icarium.Repo.Task (
     deleteTask,
 ) where
 
-import Data.Maybe (catMaybes, fromMaybe)
+import Control.Monad (when)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (
@@ -27,8 +28,9 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Types (Task (..), TaskState (..))
+import Icarium.Types (NodeKind (..), Task (..), TaskState (..))
 
 data NewTask = NewTask
     { ntTitle :: Text
@@ -40,15 +42,14 @@ data NewTask = NewTask
 
 data TaskUpdate = TaskUpdate
     { tuTitle :: Maybe Text
-    , tuBody :: Maybe Text
     , tuState :: Maybe TaskState
-    , tuPriority :: Maybe (Maybe Int) -- Nothing = unchanged, Just Nothing = clear
+    , tuPriority :: Maybe (Maybe Int)
     , tuBlockReason :: Maybe (Maybe Text)
     , tuNoCommit :: Maybe Bool
     }
 
 emptyUpdate :: TaskUpdate
-emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing Nothing
+emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
 
 taskColumnNames :: [Text]
 taskColumnNames = ["id", "title", "body", "state", "priority", "block_reason", "created_at", "updated_at", "no_commit"]
@@ -69,6 +70,7 @@ insertTask conn NewTask{..} = do
             \VALUES (?, ?, ?, ?, ?, ?)"
         )
         (tid, ntTitle, ntBody, ntState, ntPriority, ntNoCommit)
+    Fts.indexEntry conn tid TaskNode ntTitle ntBody
     pure tid
 
 getTask :: Connection -> Text -> IO (Maybe Task)
@@ -141,7 +143,9 @@ taskCatWhere mDomain mDisc =
             [] -> ("", [])
             fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
 
--- | Apply a sparse update. Returns True iff a row was affected.
+{- | Apply a sparse update. Returns True iff a row was affected.
+When the title changes, updates the FTS5 entry to keep search current.
+-}
 updateTask :: Connection -> Text -> TaskUpdate -> IO Bool
 updateTask conn tid TaskUpdate{..} = do
     mt <- getTask conn tid
@@ -149,12 +153,9 @@ updateTask conn tid TaskUpdate{..} = do
         Nothing -> pure False
         Just t -> do
             let newTitle = fromMaybe (taskTitle t) tuTitle
-                newBody = fromMaybe (taskBody t) tuBody
                 newState = fromMaybe (taskState t) tuState
                 newPrio = fromMaybe (taskPriority t) tuPriority
                 -- Invariant: block_reason is meaningful only for Blocked.
-                -- Clear it on any transition out of Blocked so it doesn't
-                -- linger as stale text on done/in_progress tasks.
                 newBlock =
                     if newState == Blocked
                         then fromMaybe (taskBlockReason t) tuBlockReason
@@ -163,10 +164,13 @@ updateTask conn tid TaskUpdate{..} = do
             execute
                 conn
                 ( Query
-                    "UPDATE tasks SET title=?, body=?, state=?, \
+                    "UPDATE tasks SET title=?, state=?, \
                     \priority=?, block_reason=?, no_commit=? WHERE id=?"
                 )
-                (newTitle, newBody, newState, newPrio, newBlock, newNoCommit, tid)
+                (newTitle, newState, newPrio, newBlock, newNoCommit, tid)
+            -- Keep FTS title in sync when title changes.
+            when (isJust tuTitle) $
+                Fts.indexEntry conn tid TaskNode newTitle (taskBody t)
             pure True
 
 deleteTask :: Connection -> Text -> IO Bool
@@ -176,4 +180,5 @@ deleteTask conn tid = do
         Nothing -> pure False
         Just _ -> do
             execute conn (Query "DELETE FROM tasks WHERE id = ?") (Only tid)
+            Fts.removeEntry conn tid
             pure True

@@ -62,11 +62,10 @@ tests =
         , testCase "link --help has corrected argument order example" testLinkHelpExample
         , testCase "link list emits header row when edges exist" testLinkListHeader
         , testCase "ctx add --help and link add --help cross-reference each other" testHelpCrossRef
-        , testCase "task show --body prints only body" testTaskShowBody
+        , testCase "task path → body file contains body" testTaskShowBody
         , testCase "task show --prompt works" testTaskShowPrompt
-        , testCase "task show --body --prompt exits 2" testTaskShowBodyAndPrompt
-        , testCase "ctx show --body prints only body" testCtxShowBody
-        , testCase "task show --body round-trip via update --body-file" testTaskBodyRoundTrip
+        , testCase "ctx path → body file contains body" testCtxShowBody
+        , testCase "task add prints id and body path; path matches" testTaskBodyRoundTrip
         , -- bare icarium (no args) prints full help
           testCase "bare icarium prints help and exits 0" testBareIcariumHelp
         , -- bare noun group prints help, not list
@@ -261,9 +260,11 @@ testTaskShowBody = withTempDb $ \db -> do
     (_, addOut, _) <- runIcarium db ["task", "add", "Body test task", "--body", "hello world body"]
     let tid = head (words addOut)
 
-    (code, out, _) <- runIcarium db ["task", "show", tid, "--body"]
-    code @?= ExitSuccess
-    out @?= "hello world body"
+    (pCode, pathOut, _) <- runIcarium db ["task", "path", tid]
+    pCode @?= ExitSuccess
+    let bodyPath = head (lines pathOut)
+    contents <- readFile bodyPath
+    contents @?= "hello world body"
 
 testTaskShowPrompt :: IO ()
 testTaskShowPrompt = withTempDb $ \db -> do
@@ -275,41 +276,33 @@ testTaskShowPrompt = withTempDb $ \db -> do
     assertBool "prompt output contains task id" (tid `isInfixOf` out)
     assertBool "prompt output contains title" ("Prompt test task" `isInfixOf` out)
 
-testTaskShowBodyAndPrompt :: IO ()
-testTaskShowBodyAndPrompt = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "Conflict test"]
-    let tid = head (words addOut)
-
-    (code, _, err) <- runIcarium db ["task", "show", tid, "--body", "--prompt"]
-    code @?= ExitFailure 2
-    assertBool "error mentions mutual exclusion" ("mutually exclusive" `isInfixOf` err)
-
 testCtxShowBody :: IO ()
 testCtxShowBody = withTempDb $ \db -> do
     (_, addOut, _) <- runIcarium db ["ctx", "add", "Body test entry", "--body", "context body text"]
     let kid = head (words addOut)
 
-    (code, out, _) <- runIcarium db ["ctx", "show", kid, "--body"]
-    code @?= ExitSuccess
-    out @?= "context body text"
+    (pCode, pathOut, _) <- runIcarium db ["ctx", "path", kid]
+    pCode @?= ExitSuccess
+    let bodyPath = head (lines pathOut)
+    contents <- readFile bodyPath
+    contents @?= "context body text"
 
 testTaskBodyRoundTrip :: IO ()
 testTaskBodyRoundTrip = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
-        bodyFile = dir <> "/body.txt"
 
     (_, addOut, _) <- runIcarium db ["task", "add", "Round-trip task", "--body", "original body\nline two"]
-    let tid = head (words addOut)
+    let outLines = lines addOut
+        tid = head outLines
+        bodyPath = outLines !! 1
 
-    -- Extract body to file, re-apply via --body-file, confirm no change.
-    (_, bodyOut, _) <- runIcarium db ["task", "show", tid, "--body"]
-    writeFile bodyFile bodyOut
+    -- Read the body file written by `task add`.
+    contents <- readFile bodyPath
+    contents @?= "original body\nline two"
 
-    (uCode, _, _) <- runIcarium db ["task", "update", tid, "--body-file", bodyFile]
-    uCode @?= ExitSuccess
-
-    (_, bodyOut2, _) <- runIcarium db ["task", "show", tid, "--body"]
-    bodyOut2 @?= bodyOut
+    -- The path printed by `task path` should match the path from `task add`.
+    (_, pathOut, _) <- runIcarium db ["task", "path", tid]
+    head (lines pathOut) @?= bodyPath
 
 testBareIcariumHelp :: IO ()
 testBareIcariumHelp = do

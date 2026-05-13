@@ -9,10 +9,9 @@ module Icarium.Repo.Search (
 import Data.List (sortBy)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, Query (..), query)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), query)
 
 import Icarium.Repo.Context (ctxCols)
-import Icarium.Repo.Internal (escapeLike)
 import Icarium.Repo.Task (taskCols)
 import Icarium.Types
 
@@ -75,40 +74,17 @@ tokenizeRaw t
         let (tok, rest) = T.break (== ' ') t
          in tok : tokenizeRaw (T.stripStart rest)
 
-{- | Build a SQL WHERE clause and LIKE-pattern parameters for @pq@.
-
-For an @AndQuery@, every term must match (title OR body); if all terms
-are bare @Word@s, an additional OR branch matches the underscore-joined
-form so that @client credentials@ finds @client_credentials@.
-For an @OrQuery@, any one term matching is sufficient.
+{- | Convert a parsed query to an FTS5 MATCH string.
+Words and phrases are wrapped in double quotes to escape FTS5 special chars.
+AndQuery terms are joined by space (FTS5 implicit AND);
+OrQuery terms are joined by OR.
 -}
-buildWhere :: Text -> Text -> ParsedQuery -> (Text, [Text])
-buildWhere tc bc pq = case pq of
-    AndQuery terms ->
-        let andClauses = map mkTermClause terms
-            andExpr = parens (T.intercalate " AND " (map fst andClauses))
-            andParams = concatMap snd andClauses
-         in case snakeClause terms of
-                Nothing -> (andExpr, andParams)
-                Just (sc, sp) -> (parens (andExpr <> " OR " <> sc), andParams ++ sp)
-    OrQuery terms ->
-        let orClauses = map mkTermClause terms
-            orExpr = parens (T.intercalate " OR " (map fst orClauses))
-            orParams = concatMap snd orClauses
-         in (orExpr, orParams)
+buildFts5Query :: ParsedQuery -> Text
+buildFts5Query pq = case pq of
+    AndQuery terms -> T.intercalate " " (map quoteTerm terms)
+    OrQuery terms -> T.intercalate " OR " (map quoteTerm terms)
   where
-    likePat txt = "%" <> escapeLike txt <> "%"
-    mkTermClause term =
-        let p = likePat (termText term)
-         in (parens (tc <> " LIKE ? ESCAPE '\\' OR " <> bc <> " LIKE ? ESCAPE '\\'"), [p, p])
-    snakeClause terms =
-        let words' = [w | Word w <- terms]
-         in if length words' >= 2
-                then
-                    let p = likePat (T.intercalate "_" words')
-                     in Just (parens (tc <> " LIKE ? ESCAPE '\\' OR " <> bc <> " LIKE ? ESCAPE '\\'"), [p, p])
-                else Nothing
-    parens s = "(" <> s <> ")"
+    quoteTerm term = "\"" <> T.replace "\"" "\"\"" (termText term) <> "\""
 
 -- | Check whether @title@ satisfies the title-match criterion for ranking.
 matchesTitle :: ParsedQuery -> Text -> Bool
@@ -149,11 +125,16 @@ searchEntries conn q mKind limit = do
 
 searchTasks :: Connection -> ParsedQuery -> IO [SearchHit]
 searchTasks conn pq = do
-    rows <- query conn sql params :: IO [Task]
+    rows <- query conn sql (Only ftsQ) :: IO [Task]
     pure (map toHit rows)
   where
-    (whereClause, params) = buildWhere "title" "body" pq
-    sql = Query $ "SELECT " <> taskCols <> " FROM tasks WHERE " <> whereClause
+    ftsQ = buildFts5Query pq
+    sql =
+        Query $
+            "SELECT "
+                <> taskCols
+                <> " FROM tasks"
+                <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'task')"
     toHit t =
         SearchHit
             { hitId = taskId t
@@ -168,11 +149,16 @@ searchTasks conn pq = do
 
 searchContexts :: Connection -> ParsedQuery -> IO [SearchHit]
 searchContexts conn pq = do
-    rows <- query conn sql params :: IO [Context]
+    rows <- query conn sql (Only ftsQ) :: IO [Context]
     pure (map toHit rows)
   where
-    (whereClause, params) = buildWhere "title" "body" pq
-    sql = Query $ "SELECT " <> ctxCols <> " FROM context WHERE " <> whereClause
+    ftsQ = buildFts5Query pq
+    sql =
+        Query $
+            "SELECT "
+                <> ctxCols
+                <> " FROM context"
+                <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'context')"
     toHit cx =
         SearchHit
             { hitId = contextId cx

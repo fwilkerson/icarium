@@ -7,6 +7,7 @@ import Icarium.Commands.Dispatch qualified as Dispatch
 import Icarium.Commands.Doctor qualified as Doctor
 import Icarium.Commands.Init qualified as Init
 import Icarium.Commands.Link qualified as Link
+import Icarium.Commands.Reindex qualified as Reindex
 import Icarium.Commands.Search qualified as Search
 import Icarium.Commands.Task qualified as Task
 import Icarium.Db (defaultDbPath)
@@ -23,6 +24,7 @@ data Command
     | CmdCategory Category.Command
     | CmdDispatch Dispatch.Command
     | CmdSearch Search.Options
+    | CmdReindex Reindex.Command
 
 data Args = Args
     { argsDb :: FilePath
@@ -77,6 +79,7 @@ runCmd db (CmdLink c) = Link.run db c
 runCmd db (CmdCategory c) = Category.run db c
 runCmd db (CmdDispatch c) = Dispatch.run db c
 runCmd db (CmdSearch o) = Search.run db o
+runCmd db (CmdReindex c) = Reindex.run db c
 
 versionP :: Parser (a -> a)
 versionP =
@@ -155,5 +158,11 @@ cmdP =
                 ( info
                     (CmdSearch <$> Search.parser <**> helper)
                     (progDesc "Search tasks and context by title and body. Example: icarium search fts5")
+                )
+            <> command
+                "reindex"
+                ( info
+                    (CmdReindex <$> Reindex.parser <**> helper)
+                    (progDesc "Rebuild the FTS5 body index from current tasks and context")
                 )
         )
