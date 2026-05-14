@@ -25,23 +25,22 @@ newtype Options = Options
 parser :: Parser Options
 parser =
     Options
-        <$> switch (long "force" <> help "Overwrite existing icarium.toml if present (errors if DB already exists)")
+        <$> switch (long "force" <> help "Overwrite existing icarium.toml if present. The DB file is never overwritten; remove it manually if you really want to start over.")
 
 run :: FilePath -> Options -> IO ()
 run dbPath o = do
     dbExists <- doesFileExist dbPath
     configExists <- doesFileExist defaultConfigPath
 
-    -- DB is protected: we refuse to clobber existing task/context state.
-    when (dbExists && not (optForce o)) $
+    -- DB is protected: we refuse to clobber existing task/context state,
+    -- even with --force. Removing it is a deliberate manual step.
+    when dbExists $
         fatal
             2
             ( "database already exists: "
                 <> dbPath
-                <> " (use --force to reinitialize; this will NOT delete the file)"
+                <> " (refusing to clobber; remove it manually to reinitialize)"
             )
-    when (dbExists && optForce o) $
-        ioError (userError "refusing to clobber existing DB; remove it manually")
 
     initDb dbPath
     putStrLn $ "created  " <> dbPath
