@@ -53,6 +53,7 @@ minCfg =
                 , dcMaxMinutesPerDispatch = 30
                 , dcHeartbeatStaleSeconds = 300
                 , dcLogRetentionRuns = 25
+                , dcRetryStormThreshold = 3
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         }

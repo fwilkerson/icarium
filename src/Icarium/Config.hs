@@ -16,6 +16,7 @@ module Icarium.Config (
     validateConfig,
 ) where
 
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -56,6 +57,7 @@ data DispatchConfig = DispatchConfig
     , dcMaxMinutesPerDispatch :: Int
     , dcHeartbeatStaleSeconds :: Int
     , dcLogRetentionRuns :: Int
+    , dcRetryStormThreshold :: Int
     }
     deriving (Show)
 
@@ -97,6 +99,7 @@ dispatchCodec =
         <*> Toml.int "max_minutes_per_dispatch" .= dcMaxMinutesPerDispatch
         <*> Toml.int "heartbeat_stale_seconds" .= dcHeartbeatStaleSeconds
         <*> Toml.int "log_retention_runs" .= dcLogRetentionRuns
+        <*> (fromMaybe 3 <$> Toml.dioptional (Toml.int "retry_storm_threshold")) .= (Just . dcRetryStormThreshold)
 
 categoriesCodec :: TomlCodec CategoriesConfig
 categoriesCodec =
@@ -158,6 +161,10 @@ defaultConfigText =
     \max_minutes_per_dispatch = 30\n\
     \heartbeat_stale_seconds  = 300\n\
     \log_retention_runs       = 25\n\
+    \# Retry-storm watchdog: kill dispatch after this many consecutive api_retry\n\
+    \# events. Lower = faster kill on transient API spikes (risk: false kills);\n\
+    \# higher = more tolerant but a stuck agent burns more wall-clock budget.\n\
+    \retry_storm_threshold    = 3\n\
     \\n\
     \[categories]\n\
     \# Source of truth for the category vocabulary. Edit here, then run\n\

@@ -132,13 +132,14 @@ runClaudeStreaming ctx dcfg = do
                         setCreateGroup True $
                             proc "claude" args
         maxUsecs = maxMinutes * 60 * 1_000_000
+        retryThreshold = dcRetryStormThreshold dcfg
 
     withLogHandle logPath $ \logH ->
         withProcessWait pcfg $ \p -> do
             -- Record the child PID so recovery can detect a dead process.
             mPid <- getPid p
             mapM_ (\pid -> bracket (openDb dbPath) close $ \c -> RD.setPid c did (fromIntegral pid)) mPid
-            _ <- forkIO (teeAndHeartbeat dbPath (getStdout p) logH did (taskTitle task))
+            _ <- forkIO (teeAndHeartbeat retryThreshold dbPath (getStdout p) logH did (taskTitle task))
             result <- raceTimeout maxUsecs (waitExitCode p)
             case result of
                 Right exit -> pure exit
@@ -152,8 +153,8 @@ connection so we don't share sqlite-simple's Connection between
 threads. On any failure the thread just exits; the caller is not
 blocked waiting for it.
 -}
-teeAndHeartbeat :: FilePath -> Handle -> Handle -> Text -> Text -> IO ()
-teeAndHeartbeat dbPath src logH did title = do
+teeAndHeartbeat :: Int -> FilePath -> Handle -> Handle -> Text -> Text -> IO ()
+teeAndHeartbeat retryThreshold dbPath src logH did title = do
     hPutStrLn stderr $ "[" ++ T.unpack (T.take 8 did) ++ "] " ++ T.unpack (T.take 60 title)
     r <- try (bracket (openDb dbPath) close (loop src logH did emptyTickState))
     case r :: Either SomeException () of
@@ -170,7 +171,7 @@ teeAndHeartbeat dbPath src logH did title = do
                 RD.updateHeartbeat c d
                 now <- getCurrentTime
                 let ts = formatTime defaultTimeLocale "%H:%M:%S" now
-                    (outLines, st', action) = summariseTick ts line st
+                    (outLines, st', action) = summariseTick retryThreshold ts line st
                 mapM_ (hPutStrLn stderr) outLines
                 let tokensChanged =
                         tsLastIn st' /= tsLastIn st

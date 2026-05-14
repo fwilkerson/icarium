@@ -30,11 +30,11 @@ emptyTickState = TickState 0 0 0 0 0
 
 {- | Parse one JSONL line and return lines to emit on stderr plus a
 watchdog action. Increments the event counter and prints a usage
-summary every 20 events. Returns 'TickKill' when 3 consecutive
+summary every 20 events. Returns 'TickKill' when @threshold@ consecutive
 api_retry events are seen with no substantive turn between them.
 -}
-summariseTick :: String -> BC.ByteString -> TickState -> ([String], TickState, TickAction)
-summariseTick ts bytes st0 =
+summariseTick :: Int -> String -> BC.ByteString -> TickState -> ([String], TickState, TickAction)
+summariseTick threshold ts bytes st0 =
     let st = st0{tsEventCount = tsEventCount st0 + 1}
         fallback = ([formatRow ts '?' "unknown" (BC.unpack (BC.take 120 bytes))], st, TickContinue)
      in case decodeStrict bytes :: Maybe Value of
@@ -42,7 +42,7 @@ summariseTick ts bytes st0 =
             Just (Object obj) ->
                 let (outLines, st') = parseEvent ts st obj
                     action
-                        | tsConsecutiveRetries st' >= 3 =
+                        | tsConsecutiveRetries st' >= threshold =
                             TickKill
                                 ( "retry-storm: "
                                     <> T.pack (show (tsConsecutiveRetries st'))

@@ -21,16 +21,20 @@ tests =
         , testCase "malformed JSON emits ? unknown line and does not crash" testTickMalformed
         , testCase "3 consecutive api_retry events returns TickKill" testRetryStormKills
         , testCase "assistant text between retries resets counter; no kill on next two retries" testRetryStormResetsOnSubstantive
+        , testCase "threshold=5 kills at 5 retries, not 3" testRetryStormThreshold5
         ]
 
 tickTs :: String
 tickTs = "12:00:00"
 
 tick :: BC.ByteString -> ([String], TickState, TickAction)
-tick bytes = summariseTick tickTs bytes emptyTickState
+tick bytes = summariseTick 3 tickTs bytes emptyTickState
 
 tickWith :: BC.ByteString -> TickState -> ([String], TickState, TickAction)
-tickWith = summariseTick tickTs
+tickWith = summariseTick 3 tickTs
+
+tickWith5 :: BC.ByteString -> TickState -> ([String], TickState, TickAction)
+tickWith5 = summariseTick 5 tickTs
 
 strIn :: String -> String -> Bool
 strIn needle = T.isInfixOf (T.pack needle) . T.pack
@@ -120,3 +124,17 @@ testRetryStormResetsOnSubstantive = do
         (_, _, a5) = tickWith retryLine st4
     a4 @?= TickContinue
     a5 @?= TickContinue
+
+testRetryStormThreshold5 :: IO ()
+testRetryStormThreshold5 = do
+    let retryLine = "{\"type\":\"system\",\"subtype\":\"api_retry\",\"message\":\"overloaded\"}"
+        (_, st1, a1) = tickWith5 retryLine emptyTickState
+        (_, st2, a2) = tickWith5 retryLine st1
+        (_, st3, a3) = tickWith5 retryLine st2
+        (_, st4, a4) = tickWith5 retryLine st3
+        (_, _, a5) = tickWith5 retryLine st4
+    a1 @?= TickContinue
+    a2 @?= TickContinue
+    a3 @?= TickContinue -- would kill at threshold=3, but not at 5
+    a4 @?= TickContinue
+    a5 @?= TickKill "retry-storm: 5 consecutive api_retry events"

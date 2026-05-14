@@ -126,6 +126,7 @@ fakeConfig =
                 , dcMaxMinutesPerDispatch = 5
                 , dcHeartbeatStaleSeconds = 300
                 , dcLogRetentionRuns = 1
+                , dcRetryStormThreshold = 3
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         }
