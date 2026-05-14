@@ -11,7 +11,7 @@ import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Bodies (bodiesDir, ctxBodyPath, ensureBodiesDirs, writeBody)
+import Icarium.Bodies (bodiesDir, ctxBodyPath, persistBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
@@ -109,10 +109,7 @@ runAdd db o = withDb db $ \c -> do
         Just target ->
             void $ RE.insertEdge c Supersedes ContextNode cxid ContextNode target
         Nothing -> pure ()
-    let bodDir = bodiesDir db
-    ensureBodiesDirs bodDir
-    let fp = ctxBodyPath bodDir cxid
-    writeBody fp body
+    fp <- persistBody db ContextNode cxid body
     TIO.putStrLn cxid
     TIO.putStrLn (T.pack fp)
   where

@@ -10,7 +10,7 @@ import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode (..), exitWith)
 
-import Icarium.Bodies (bodiesDir, ensureBodiesDirs, readBody, taskBodyPath, writeBody)
+import Icarium.Bodies (bodiesDir, persistBody, readBody, taskBodyPath)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
@@ -121,10 +121,7 @@ runAdd db o = withDb db $ \c -> do
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
         void $ RE.insertEdge c References TaskNode tid ContextNode refId
-    let bodDir = bodiesDir db
-    ensureBodiesDirs bodDir
-    let fp = taskBodyPath bodDir tid
-    writeBody fp body
+    fp <- persistBody db TaskNode tid body
     TIO.putStrLn tid
     TIO.putStrLn (T.pack fp)
 
