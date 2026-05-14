@@ -43,7 +43,9 @@ library
                       Icarium.Repo.Dispatch
                       Icarium.Repo.Search
                       Icarium.Repo.Fts
+                      Icarium.Time
                       Icarium.Bodies
+                      Icarium.Bodies.Sweep
                       Icarium.Commands.Util
                       Icarium.Commands.Init
                       Icarium.Commands.Doctor

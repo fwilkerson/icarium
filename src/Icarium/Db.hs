@@ -11,13 +11,11 @@ module Icarium.Db (
 import Control.Exception (bracket)
 import Control.Monad (forM_)
 import Data.Int (Int64)
-import Data.Text (Text)
-import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, parseTimeM)
 import Database.SQLite.Simple (Connection, Only (..), close, open, query_)
-import Icarium.Bodies (mtimeSweep)
+import Icarium.Bodies.Sweep (mtimeSweep)
 import Icarium.Migrations (Migration (..), migrations)
 import Icarium.Schema (applySchema)
+import Icarium.Time (parseDbTime)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
 
@@ -66,6 +64,3 @@ dbSchemaVersion conn = do
     pure $ case rows of
         (Only v : _) -> v
         _ -> 0
-
-parseDbTime :: Text -> Maybe UTCTime
-parseDbTime = parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S" . T.unpack
