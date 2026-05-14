@@ -12,6 +12,11 @@ module Icarium.Repo.Context (
     updateContext,
     deleteContext,
     categoryMatchedContexts,
+    listContextIdTimes,
+    getContextBody,
+    getContextTitle,
+    setContextBody,
+    contextExists,
 ) where
 
 import Control.Monad (when)
@@ -25,6 +30,7 @@ import Database.SQLite.Simple (
     SQLData (..),
     execute,
     query,
+    query_,
  )
 
 import Icarium.Id (newId)
@@ -142,6 +148,32 @@ deleteContext conn cid = do
             execute conn (Query "DELETE FROM context WHERE id = ?") (Only cid)
             Fts.removeEntry conn cid
             pure True
+
+listContextIdTimes :: Connection -> IO [(Text, Text)]
+listContextIdTimes conn = query_ conn "SELECT id, updated_at FROM context"
+
+getContextBody :: Connection -> Text -> IO Text
+getContextBody conn cid = do
+    rows <- query conn "SELECT body FROM context WHERE id = ?" (Only cid) :: IO [Only Text]
+    pure $ case rows of
+        (Only b : _) -> b
+        [] -> ""
+
+getContextTitle :: Connection -> Text -> IO (Maybe Text)
+getContextTitle conn cid = do
+    rows <- query conn "SELECT title FROM context WHERE id = ?" (Only cid) :: IO [Only Text]
+    pure $ case rows of
+        (Only t : _) -> Just t
+        [] -> Nothing
+
+setContextBody :: Connection -> Text -> Text -> IO ()
+setContextBody conn cid body =
+    execute conn "UPDATE context SET body = ? WHERE id = ?" (body, cid)
+
+contextExists :: Connection -> Text -> IO Bool
+contextExists conn cid = do
+    rows <- query conn "SELECT 1 FROM context WHERE id = ?" (Only cid) :: IO [Only Int]
+    pure (not (null rows))
 
 {- | Context entries whose categories AND-intersect with the given
 category list (one condition per axis present in the input). Excludes

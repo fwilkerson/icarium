@@ -12,6 +12,11 @@ module Icarium.Repo.Task (
     listTasks,
     updateTask,
     deleteTask,
+    listTaskIdTimes,
+    getTaskBody,
+    getTaskTitle,
+    setTaskBody,
+    taskExists,
 ) where
 
 import Control.Monad (when)
@@ -25,6 +30,7 @@ import Database.SQLite.Simple (
     SQLData (..),
     execute,
     query,
+    query_,
  )
 
 import Icarium.Id (newId)
@@ -182,3 +188,29 @@ deleteTask conn tid = do
             execute conn (Query "DELETE FROM tasks WHERE id = ?") (Only tid)
             Fts.removeEntry conn tid
             pure True
+
+listTaskIdTimes :: Connection -> IO [(Text, Text)]
+listTaskIdTimes conn = query_ conn "SELECT id, updated_at FROM tasks"
+
+getTaskBody :: Connection -> Text -> IO Text
+getTaskBody conn tid = do
+    rows <- query conn "SELECT body FROM tasks WHERE id = ?" (Only tid) :: IO [Only Text]
+    pure $ case rows of
+        (Only b : _) -> b
+        [] -> ""
+
+getTaskTitle :: Connection -> Text -> IO (Maybe Text)
+getTaskTitle conn tid = do
+    rows <- query conn "SELECT title FROM tasks WHERE id = ?" (Only tid) :: IO [Only Text]
+    pure $ case rows of
+        (Only t : _) -> Just t
+        [] -> Nothing
+
+setTaskBody :: Connection -> Text -> Text -> IO ()
+setTaskBody conn tid body =
+    execute conn "UPDATE tasks SET body = ? WHERE id = ?" (body, tid)
+
+taskExists :: Connection -> Text -> IO Bool
+taskExists conn tid = do
+    rows <- query conn "SELECT 1 FROM tasks WHERE id = ?" (Only tid) :: IO [Only Int]
+    pure (not (null rows))

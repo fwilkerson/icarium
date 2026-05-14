@@ -15,7 +15,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Database.SQLite.Simple (Connection, Only (..), execute, query, query_)
+import Database.SQLite.Simple (Connection)
 import System.Directory (
     createDirectoryIfMissing,
     doesDirectoryExist,
@@ -27,7 +27,9 @@ import System.Directory (
 import System.FilePath (dropExtension, takeDirectory, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 
+import Icarium.Repo.Context qualified as Repo.Context
 import Icarium.Repo.Fts qualified as Fts
+import Icarium.Repo.Task qualified as Repo.Task
 import Icarium.Types (NodeKind (..))
 
 bodiesDir :: FilePath -> FilePath
@@ -100,7 +102,7 @@ sweepFile conn kind eid fp updAt = do
         Just t
             | mtimeSec > utcToSec t -> do
                 body <- TIO.readFile fp
-                updateBodyInDb conn kind eid body
+                setBodyInDb conn kind eid body
                 titleRow <- getTitleFromDb conn kind eid
                 Fts.indexEntry conn eid kind (fromMaybe "" titleRow) body
         _ -> pure ()
@@ -133,50 +135,21 @@ bodyPath bodDir TaskNode eid = taskBodyPath bodDir eid
 bodyPath bodDir ContextNode eid = ctxBodyPath bodDir eid
 
 listIdTimes :: Connection -> NodeKind -> IO [(Text, Text)]
-listIdTimes conn TaskNode =
-    query_ conn "SELECT id, updated_at FROM tasks"
-listIdTimes conn ContextNode =
-    query_ conn "SELECT id, updated_at FROM context"
+listIdTimes conn TaskNode = Repo.Task.listTaskIdTimes conn
+listIdTimes conn ContextNode = Repo.Context.listContextIdTimes conn
 
 getBodyFromDb :: Connection -> NodeKind -> Text -> IO Text
-getBodyFromDb conn kind eid = do
-    rows <- case kind of
-        TaskNode ->
-            query conn "SELECT body FROM tasks WHERE id = ?" (Only eid) ::
-                IO [Only Text]
-        ContextNode ->
-            query conn "SELECT body FROM context WHERE id = ?" (Only eid) ::
-                IO [Only Text]
-    pure $ case rows of
-        (Only b : _) -> b
-        [] -> ""
+getBodyFromDb conn TaskNode eid = Repo.Task.getTaskBody conn eid
+getBodyFromDb conn ContextNode eid = Repo.Context.getContextBody conn eid
 
 getTitleFromDb :: Connection -> NodeKind -> Text -> IO (Maybe Text)
-getTitleFromDb conn kind eid = do
-    rows <- case kind of
-        TaskNode ->
-            query conn "SELECT title FROM tasks WHERE id = ?" (Only eid) ::
-                IO [Only Text]
-        ContextNode ->
-            query conn "SELECT title FROM context WHERE id = ?" (Only eid) ::
-                IO [Only Text]
-    pure $ case rows of
-        (Only t : _) -> Just t
-        [] -> Nothing
+getTitleFromDb conn TaskNode eid = Repo.Task.getTaskTitle conn eid
+getTitleFromDb conn ContextNode eid = Repo.Context.getContextTitle conn eid
 
-updateBodyInDb :: Connection -> NodeKind -> Text -> Text -> IO ()
-updateBodyInDb conn TaskNode eid body =
-    execute conn "UPDATE tasks SET body = ? WHERE id = ?" (body, eid)
-updateBodyInDb conn ContextNode eid body =
-    execute conn "UPDATE context SET body = ? WHERE id = ?" (body, eid)
+setBodyInDb :: Connection -> NodeKind -> Text -> Text -> IO ()
+setBodyInDb conn TaskNode eid body = Repo.Task.setTaskBody conn eid body
+setBodyInDb conn ContextNode eid body = Repo.Context.setContextBody conn eid body
 
 rowExists :: Connection -> NodeKind -> Text -> IO Bool
-rowExists conn kind eid = do
-    rows <- case kind of
-        TaskNode ->
-            query conn "SELECT 1 FROM tasks WHERE id = ?" (Only eid) ::
-                IO [Only Int]
-        ContextNode ->
-            query conn "SELECT 1 FROM context WHERE id = ?" (Only eid) ::
-                IO [Only Int]
-    pure (not (null rows))
+rowExists conn TaskNode eid = Repo.Task.taskExists conn eid
+rowExists conn ContextNode eid = Repo.Context.contextExists conn eid
