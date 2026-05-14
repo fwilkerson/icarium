@@ -44,6 +44,10 @@ termText :: Term -> Text
 termText (Phrase t) = t
 termText (Word t) = t
 
+queryTerms :: ParsedQuery -> [Term]
+queryTerms (AndQuery ts) = ts
+queryTerms (OrQuery ts) = ts
+
 {- | Parse a user query string into structured tokens.
 
 Whitespace-delimited tokens are joined by AND by default.  A bare
@@ -105,16 +109,18 @@ title hits first, non-stale before stale within the same tier, then
 updated_at DESC. @mKind@ narrows to one table; @Nothing@ = both.
 -}
 searchEntries :: Connection -> Text -> Maybe NodeKind -> Int -> IO (Int, [SearchHit])
-searchEntries conn q mKind limit = do
-    taskHits <- case mKind of
-        Just ContextNode -> pure []
-        _ -> searchTasks conn pq
-    ctxHits <- case mKind of
-        Just TaskNode -> pure []
-        _ -> searchContexts conn pq
-    let ranked = sortBy rankHit (taskHits ++ ctxHits)
-        total = length ranked
-    pure (total, take limit ranked)
+searchEntries conn q mKind limit
+    | null (queryTerms pq) = pure (0, [])
+    | otherwise = do
+        taskHits <- case mKind of
+            Just ContextNode -> pure []
+            _ -> searchTasks conn pq
+        ctxHits <- case mKind of
+            Just TaskNode -> pure []
+            _ -> searchContexts conn pq
+        let ranked = sortBy rankHit (taskHits ++ ctxHits)
+            total = length ranked
+        pure (total, take limit ranked)
   where
     pq = parseQuery q
     rankHit a b = case compare (hitTitleMatch b) (hitTitleMatch a) of

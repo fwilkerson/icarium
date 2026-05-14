@@ -137,7 +137,8 @@ tests =
             ]
         , testGroup
             "searchEntries"
-            [ testCase "title hit ranks before body hit" testSearchTitleBeforeBody
+            [ testCase "whitespace-only query returns (0, [])" testSearchWhitespaceOnly
+            , testCase "title hit ranks before body hit" testSearchTitleBeforeBody
             , testCase "title hit from context outranks body hit from task" testSearchCrossKindRank
             , testCase "escapeLike: query containing % matches literally" testSearchEscapePercent
             , testCase "escapeLike: query containing _ matches literally" testSearchEscapeUnderscore
@@ -158,6 +159,7 @@ tests =
             , testCase "quoted phrase → AndQuery [Phrase]" testParseQueryPhrase
             , testCase "explicit OR → OrQuery" testParseQueryOr
             , testCase "OR is case-sensitive (lowercase not treated as OR)" testParseQueryOrCase
+            , testCase "whitespace-only → AndQuery []" testParseQueryWhitespace
             ]
         ]
 
@@ -866,6 +868,13 @@ testCtxUpdateDomainReplaces = withTestDb $ \c -> do
 -- searchEntries tests
 -- =============================================================
 
+testSearchWhitespaceOnly :: IO ()
+testSearchWhitespaceOnly = withTestDb $ \c -> do
+    _ <- mkContext c "some title" "some body"
+    (total, results) <- RS.searchEntries c "   " Nothing 10
+    total @?= 0
+    null results @?= True
+
 testSearchTitleBeforeBody :: IO ()
 testSearchTitleBeforeBody = withTestDb $ \c -> do
     tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
@@ -991,6 +1000,10 @@ testParseQueryOr =
 testParseQueryOrCase :: IO ()
 testParseQueryOrCase =
     parseQuery "foo or bar" @?= AndQuery [Word "foo", Word "or", Word "bar"]
+
+testParseQueryWhitespace :: IO ()
+testParseQueryWhitespace =
+    parseQuery "   " @?= AndQuery []
 
 -- =============================================================
 -- dispatch token column tests
