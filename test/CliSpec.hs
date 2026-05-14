@@ -52,6 +52,7 @@ tests =
         , testCase "task add/list/show roundtrip" testTaskRoundtrip
         , testCase "task update --state changes state" testTaskUpdateState
         , testCase "dispatch list on empty DB exits 0" testDispatchListEmpty
+        , testCase "dispatch list --limit caps rows" testDispatchListLimit
         , testCase "task next exits 1 on empty queue" testTaskNextEmpty
         , testCase "task next prints id on non-empty" testTaskNextNonEmpty
         , testCase "task add --depends-on bad id exits 2" testTaskAddBadDependsOn
@@ -152,6 +153,45 @@ testDispatchListEmpty = withTempDb $ \db -> do
     (code, _, err) <- runIcarium db ["dispatch", "list"]
     code @?= ExitSuccess
     assertBool "no error output on empty dispatch list" (null err)
+
+testDispatchListLimit :: IO ()
+testDispatchListLimit = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    -- init DB by adding a task first
+    (_, addOut, _) <- runIcarium db ["task", "add", "Limit test task", "--state", "ready"]
+    let tid = head (words addOut)
+    conn <- open db
+    -- Insert 5 dispatches directly so we don't need a full claude run.
+    -- IDs must be exactly 26 chars (ULID length).
+    mapM_
+        ( \i ->
+            execute
+                conn
+                ( Query
+                    "INSERT INTO dispatches \
+                    \(id, task_id, branch, base_branch, base_sha, model, effort, outcome) \
+                    \VALUES (?,?,?,?,?,?,?,?)"
+                )
+                ( "01TESTLIMIT0000000000000" ++ show (i :: Int) ++ "X"
+                , tid
+                , "dispatch/limit-" ++ show i
+                , "main" :: String
+                , "abc123" :: String
+                , "claude-sonnet-4-6" :: String
+                , "medium" :: String
+                , "success" :: String
+                )
+        )
+        [1 .. 5 :: Int]
+    close conn
+    -- Each dispatch row has a [success] badge; count those.
+    let countSuccessRows = length . filter ("[success]" `isInfixOf`) . lines
+    (code, out, _) <- runIcarium db ["dispatch", "list", "--limit", "3"]
+    code @?= ExitSuccess
+    assertBool "at most 3 rows with --limit 3" (countSuccessRows out <= 3)
+    (code2, out2, _) <- runIcarium db ["dispatch", "list"]
+    code2 @?= ExitSuccess
+    assertBool "without --limit all 5 rows returned" (countSuccessRows out2 == 5)
 
 testTaskNextEmpty :: IO ()
 testTaskNextEmpty = withTempDb $ \db -> do

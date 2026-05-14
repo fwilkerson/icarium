@@ -288,6 +288,7 @@ formatDispatchDuration now d =
 data ListOpts = ListOpts
     { lTask :: Maybe Text
     , lOutcome :: Maybe DispatchOutcome
+    , lLimit :: Maybe Int
     }
 
 listP :: Parser ListOpts
@@ -302,6 +303,14 @@ listP =
                     <> help "success | failure | interrupted"
                 )
             )
+        <*> optional
+            ( option
+                auto
+                ( long "limit"
+                    <> metavar "N"
+                    <> help "Return at most N dispatches"
+                )
+            )
 
 outcomeReader :: ReadM DispatchOutcome
 outcomeReader = eitherReader $ \s ->
@@ -313,9 +322,10 @@ runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <- RD.listDispatches c mTaskId
-    let filtered = case lOutcome o of
+    let filtered0 = case lOutcome o of
             Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
+        filtered = maybe filtered0 (`take` filtered0) (lLimit o)
     now <- getCurrentTime
     let taskIds = nub (map dispatchTaskId filtered)
     tasks <- RT.getTasksByIds c taskIds
