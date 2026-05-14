@@ -65,7 +65,7 @@ Leave `state=planned`. Surface the unanswered questions — the goal is a design
 
 Once a parked question has an answer, the design is complete enough to promote. Follow-ups, in order:
 
-1. **Lock the decisions into the body.** Fold answers into Outcome / Why or add a short locked-decisions block. The body should read as if the design call were always settled — future agents shouldn't have to reconstruct the conversation.
+1. **Lock the decisions into the body.** Fold answers into Outcome / Why or add a short locked-decisions block. The body should read as if the design call were always settled — future agents shouldn't have to reconstruct the conversation. To edit the body: `Read $(icarium task path <id>)` first, then `Edit` or `Write` the same path. The `icarium task show` output is not a substitute for `Read` — the harness only tracks files touched via the `Read` tool.
 2. **Split if the answer revealed a sub-task.** If the resolution introduces separable work (e.g. "do the migration interactively, dispatch the doc sweep"), create the follow-up with `--depends-on` and scope this task down to match.
 3. **Promote.** Run `icarium task update <id> --state ready`.
 
