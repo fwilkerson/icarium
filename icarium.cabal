@@ -100,6 +100,7 @@ test-suite icarium-test
     build-depends:    base,
                       bytestring,
                       directory,
+                      filepath,
                       text,
                       time,
                       sqlite-simple,

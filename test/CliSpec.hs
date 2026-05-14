@@ -2,9 +2,12 @@ module CliSpec (tests) where
 
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.List (isInfixOf, isPrefixOf)
-import Database.SQLite.Simple (Query (..), close, execute, open)
-import System.Directory (makeAbsolute)
+import Data.Time.Calendar (fromGregorian)
+import Data.Time.Clock (UTCTime (..))
+import Database.SQLite.Simple (Query (..), close, execute, execute_, open)
+import System.Directory (doesFileExist, makeAbsolute, setModificationTime)
 import System.Exit (ExitCode (..))
+import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (proc, readProcess, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
@@ -101,6 +104,9 @@ tests =
         , testCase "dispatch quarantine: blocked upstream excludes dependent from ready queue" testDispatchQuarantine
         , testCase "task show (human) prints body path, not body content" testTaskShowBodyPath
         , testCase "ctx show prints body path, not body content" testCtxShowBodyPath
+        , testCase "mtime sweep: external body edit is re-indexed" testMtimeSweepReindex
+        , testCase "orphan sweep: stray .md file is removed with warn:" testOrphanRemoval
+        , testCase "reindex: rebuilds FTS from DB after body_fts wipe" testReindexRestoresFts
         ]
 
 testVersion :: IO ()
@@ -722,6 +728,73 @@ testCtxShowBodyPath = withTempDb $ \db -> do
     assertBool "show contains body path" (bodyPath `isInfixOf` out)
     assertBool "show does not contain body content" (not ("secret context body" `isInfixOf` out))
     assertBool "show does not have ## Body header" (not ("## Body" `isInfixOf` out))
+
+-- =============================================================
+-- body-files sync tests (d7d13fa)
+-- =============================================================
+
+{- | Write new content to a body file and set its mtime to a far-future
+time so the sweep condition (file_mtime > updated_at) is guaranteed to
+fire on the next command.  The tasks_touch trigger resets updated_at on
+every UPDATE, so we cannot rewind it via SQL; bumping the file mtime is
+the reliable alternative.
+-}
+testMtimeSweepReindex :: IO ()
+testMtimeSweepReindex = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    (_, addOut, _) <- runIcarium db ["task", "add", "sweep-test task", "--body", "original xsweep1"]
+    let outLines = lines addOut
+        bodyPath = outLines !! 1
+    -- external edit with future mtime so sweep always triggers
+    writeFile bodyPath "edited xsweep2"
+    setModificationTime bodyPath (UTCTime (fromGregorian 2099 1 1) 0)
+    -- any command triggers mtimeSweep
+    _ <- runIcarium db ["task", "list"]
+    -- new content must be findable via FTS
+    (code, out, _) <- runIcarium db ["search", "xsweep2"]
+    code @?= ExitSuccess
+    assertBool "edited body content surfaces in search" ("sweep-test task" `isInfixOf` out)
+
+{- | A .md file placed in bodies/tasks/ with no matching DB row is an
+orphan.  mtimeSweep removes it and emits a warn: line on stderr.
+-}
+testOrphanRemoval :: IO ()
+testOrphanRemoval = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+        orphanFile = dir </> "bodies" </> "tasks" </> "01ORPHAN0000000000000000XX.md"
+    -- seed the DB so that bodies/tasks/ gets created
+    _ <- runIcarium db ["task", "add", "seed task"]
+    -- plant a stray file with no DB row
+    writeFile orphanFile "orphan content"
+    -- any command triggers orphanScan
+    (_, _, err) <- runIcarium db ["task", "list"]
+    assertBool "warn: emitted for orphan" ("warn:" `isInfixOf` err)
+    gone <- not <$> doesFileExist orphanFile
+    assertBool "orphan file removed" gone
+
+{- | After wiping body_fts, search should miss (we pin updated_at to the
+future so mtimeSweep does not auto-repair it).  icarium reindex rebuilds
+the index from the body column; search must find the entry afterwards.
+-}
+testReindexRestoresFts :: IO ()
+testReindexRestoresFts = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    _ <- runIcarium db ["ctx", "add", "reindex test entry", "--body", "xreindex999 unique token"]
+    -- wipe FTS and pin updated_at to the future so mtimeSweep won't repair it
+    conn <- open db
+    execute_ conn "DELETE FROM body_fts"
+    execute_ conn "UPDATE context SET updated_at = '2099-01-01 00:00:00'"
+    close conn
+    -- search must miss before reindex
+    (_, outBefore, _) <- runIcarium db ["search", "xreindex999"]
+    assertBool "search misses before reindex" (not ("reindex test entry" `isInfixOf` outBefore))
+    -- reindex rebuilds FTS from DB body column
+    (rCode, _, _) <- runIcarium db ["reindex"]
+    rCode @?= ExitSuccess
+    -- now search must find the entry
+    (code, out, _) <- runIcarium db ["search", "xreindex999"]
+    code @?= ExitSuccess
+    assertBool "entry found after reindex" ("reindex test entry" `isInfixOf` out)
 
 testDispatchQuarantine :: IO ()
 testDispatchQuarantine = withTempDb $ \db -> do
