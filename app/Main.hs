@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Data.Version (showVersion)
+import Icarium.Commands.Agents qualified as Agents
 import Icarium.Commands.Category qualified as Category
 import Icarium.Commands.Ctx qualified as Ctx
 import Icarium.Commands.Dispatch qualified as Dispatch
@@ -25,6 +26,7 @@ data Command
     | CmdDispatch Dispatch.Command
     | CmdSearch Search.Options
     | CmdReindex Reindex.Command
+    | CmdAgents Agents.Command
 
 data Args = Args
     { argsDb :: FilePath
@@ -80,6 +82,7 @@ runCmd db (CmdCategory c) = Category.run db c
 runCmd db (CmdDispatch c) = Dispatch.run db c
 runCmd db (CmdSearch o) = Search.run db o
 runCmd db (CmdReindex c) = Reindex.run db c
+runCmd _ (CmdAgents c) = Agents.run c
 
 versionP :: Parser (a -> a)
 versionP =
@@ -92,7 +95,7 @@ parser =
     info
         (argsP <**> helper <**> versionP)
         ( fullDesc
-            <> progDesc "Task/context/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id."
+            <> progDesc "Task/context/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id. New agents: run `icarium agents` for a quickstart."
             <> header "icarium"
         )
 
@@ -164,5 +167,11 @@ cmdP =
                 ( info
                     (CmdReindex <$> Reindex.parser <**> helper)
                     (progDesc "Rebuild the FTS5 body index from current tasks and context")
+                )
+            <> command
+                "agents"
+                ( info
+                    (CmdAgents <$> Agents.parser <**> helper)
+                    (progDesc "Print an agent quickstart: storage model, body read/write flow, common commands")
                 )
         )

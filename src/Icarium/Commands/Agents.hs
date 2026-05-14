@@ -1,0 +1,70 @@
+module Icarium.Commands.Agents (Command, parser, run) where
+
+import Data.Text (Text)
+import Data.Text.IO qualified as TIO
+import Options.Applicative
+
+data Command = Agents
+
+parser :: Parser Command
+parser = pure Agents
+
+run :: Command -> IO ()
+run Agents = TIO.putStr guide
+
+guide :: Text
+guide =
+    "icarium - agent quickstart\n\
+    \\n\
+    \Storage model\n\
+    \  The DB tracks metadata. Bodies are plain markdown files on disk at\n\
+    \  .icarium/bodies/{tasks,contexts}/<ulid>.md. Edit them with your normal\n\
+    \  Read/Edit/Write tools.\n\
+    \\n\
+    \Create (one shot, fully linked)\n\
+    \  icarium task add \"Title\" --domain <d> --discipline <d> \\\n\
+    \    --references <ctx-id> --depends-on <task-id> --priority 7\n\
+    \  # stdout: <new-id>\\n<body-path>\n\
+    \\n\
+    \  Two equivalent one-turn flows:\n\
+    \    1. Run the command, then Write your markdown to <body-path>. The\n\
+    \       file is not pre-created, so Write succeeds without a prior Read.\n\
+    \    2. Pipe a heredoc: `icarium task add \"Title\" --body-stdin <<'EOF'`\n\
+    \       ...markdown... `EOF`. No temp file, no extra Write.\n\
+    \  Do NOT author a separate temp file just to pass it back in.\n\
+    \\n\
+    \  Later edits (body already populated): Read $(icarium <kind> path <id>)\n\
+    \  then Edit. Claude Code's Edit tool requires a prior Read of the path.\n\
+    \\n\
+    \  Same shape for `icarium ctx add` (no --depends-on; --derived-from\n\
+    \  available for supersession chains).\n\
+    \\n\
+    \Edit a body (no retype, surgical)\n\
+    \  Read $(icarium task path <id>)         # then Edit the same path\n\
+    \  Read $(icarium ctx  path <id>)\n\
+    \  FTS picks up edits on the next icarium command (mtime sweep) -\n\
+    \  no manual `reindex` needed.\n\
+    \\n\
+    \Inspecting\n\
+    \  icarium task show <id>                 # metadata only; body NOT printed.\n\
+    \                                         # To see the body, Read the path.\n\
+    \  icarium task next                      # print next ready task id (loop primitive)\n\
+    \  icarium task list --state ready        # actionable queue\n\
+    \  icarium search \"query\"                 # FTS5; \"phrase\", UPPERCASE OR,\n\
+    \                                         # --kind task|ctx, --limit N\n\
+    \\n\
+    \IDs\n\
+    \  ULIDs. Any unique prefix works on the command line.\n\
+    \\n\
+    \Linking after the fact\n\
+    \  icarium link add <task> depends-on <task>\n\
+    \  icarium link add <task> references <ctx>\n\
+    \\n\
+    \Task lifecycle\n\
+    \  planned -> ready -> in-progress -> done\n\
+    \                                  \\-> blocked  (requires --block-reason)\n\
+    \  Dispatch picks up ready tasks whose dependencies are done.\n\
+    \\n\
+    \More\n\
+    \  icarium <cmd> --help                   # every subcommand has --help\n\
+    \  icarium doctor                         # health check\n"

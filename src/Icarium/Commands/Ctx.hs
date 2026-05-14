@@ -32,12 +32,12 @@ data Command
 parser :: Parser Command
 parser =
     subparser
-        ( subcmd "add" "Add a context entry" (Add <$> addP)
+        ( subcmd "add" "Add a context entry. Prints <id> and body path; Write your markdown to that path (no temp draft needed)." (Add <$> addP)
             <> subcmd "list" "List context entries (alias: ls)" (List <$> listP)
-            <> subcmd "show" "Show a context entry" (Show <$> showP)
-            <> subcmd "update" "Update a context entry" (Update <$> updateP)
+            <> subcmd "show" "Show context metadata. The body is intentionally not printed: Read $(icarium ctx path <id>) so a subsequent Edit can succeed (Claude Code's Edit tool requires a prior Read of the same path)." (Show <$> showP)
+            <> subcmd "update" "Update context metadata. To edit the body: Read $(icarium ctx path <id>) then Edit." (Update <$> updateP)
             <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
-            <> subcmd "path" "Print body file path for a context entry" (Path <$> pathP)
+            <> subcmd "path" "Print body file path for a context entry (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -112,6 +112,9 @@ runAdd db o = withDb db $ \c -> do
     fp <- persistBody db ContextNode cxid body
     TIO.putStrLn cxid
     TIO.putStrLn (T.pack fp)
+    when (T.null body) $ do
+        hPutStrLn stderr ("# next: Write your markdown to " <> fp)
+        hPutStrLn stderr ("# to edit later: Read $(icarium ctx path " <> T.unpack cxid <> ") then Edit")
   where
     loadInherited conn tid = do
         allCats <- RC.taskCategoriesFor conn (T.pack tid)
@@ -167,7 +170,7 @@ listP :: Parser ListOpts
 listP =
     ListOpts
         <$> switch (long "stale" <> help "Only entries flagged stale")
-        <*> switch (long "all" <> help "Include stale entries")
+        <*> switch (long "all" <> help "Include stale entries and older versions superseded by another entry. By default ctx list shows only current heads (non-stale, not superseded).")
         <*> optional (textOption "domain" "NAME" "Filter by domain category")
         <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
 
@@ -179,7 +182,8 @@ runList db o = withDb db $ \c -> do
             | lStale o = Just True -- stale only
             | lAll o = Nothing -- show all
             | otherwise = Just False -- hide stale (default)
-    cxs <- RCx.listContexts c staleFilter (lDomain o) (lDiscipline o)
+    let includeSuperseded = lAll o
+    cxs <- RCx.listContexts c staleFilter includeSuperseded (lDomain o) (lDiscipline o)
     rows <- buildContextRows c cxs
     utf8 <- detectUtf8
     TIO.putStr (Render.renderContextList utf8 rows)

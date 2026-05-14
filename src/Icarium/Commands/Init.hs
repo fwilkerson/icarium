@@ -66,6 +66,8 @@ run dbPath o = do
             (srInserted rpt)
 
     putStrLn "initialized."
+    putStrLn ""
+    putStrLn "Agents: run `icarium agents` for the read/write/edit quickstart."
 
 fatal :: Int -> String -> IO a
 fatal code msg = do

@@ -8,6 +8,7 @@ module Icarium.Bodies (
     persistBody,
 ) where
 
+import Control.Monad (unless)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -40,6 +41,10 @@ readBody fp = do
     exists <- doesFileExist fp
     if exists then TIO.readFile fp else pure ""
 
+{- | Compute the body path for a new entry and ensure body dirs exist.
+On empty body, the file is intentionally not created so agents can Write
+to the printed path without a forced no-op Read of an empty stub.
+-}
 persistBody :: FilePath -> NodeKind -> Text -> Text -> IO FilePath
 persistBody db kind nid body = do
     let bodDir = bodiesDir db
@@ -47,5 +52,5 @@ persistBody db kind nid body = do
             TaskNode -> taskBodyPath bodDir nid
             ContextNode -> ctxBodyPath bodDir nid
     ensureBodiesDirs bodDir
-    writeBody fp body
+    unless (T.null body) $ writeBody fp body
     pure fp

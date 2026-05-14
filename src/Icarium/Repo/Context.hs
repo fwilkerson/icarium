@@ -91,16 +91,18 @@ resolveContextId conn = resolveByPrefix (getContextsByPrefix conn) contextId "co
 
 {- | List context entries. @staleFilter@: @Nothing@ = all entries,
 @Just True@ = stale only, @Just False@ = exclude stale.
+@includeSuperseded@: @False@ excludes entries that are the @dst@ of a
+@supersedes@ edge (i.e. older versions); @True@ keeps all entries.
 -}
-listContexts :: Connection -> Maybe Bool -> Maybe Text -> Maybe Text -> IO [Context]
-listContexts conn staleFilter mDomain mDisc =
+listContexts :: Connection -> Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> IO [Context]
+listContexts conn staleFilter includeSuperseded mDomain mDisc =
     query conn q params
   where
-    (whereClause, params) = ctxCatWhere staleFilter mDomain mDisc
+    (whereClause, params) = ctxCatWhere staleFilter includeSuperseded mDomain mDisc
     q = Query $ "SELECT " <> ctxCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
 
-ctxCatWhere :: Maybe Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
-ctxCatWhere staleFilter mDomain mDisc =
+ctxCatWhere :: Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
+ctxCatWhere staleFilter includeSuperseded mDomain mDisc =
     let catSubq axis =
             "id IN (SELECT context_id FROM context_categories cc"
                 <> " JOIN categories c ON c.id = cc.category_id"
@@ -116,7 +118,11 @@ ctxCatWhere staleFilter mDomain mDisc =
                 [ fmap (\n -> (catSubq "domain", SQLText n)) mDomain
                 , fmap (\n -> (catSubq "discipline", SQLText n)) mDisc
                 ]
-        clauses = staleClauses <> map fst catFilters
+        supersededClause =
+            [ "id NOT IN (SELECT dst_id FROM edges WHERE kind = 'supersedes' AND dst_kind = 'context')"
+            | not includeSuperseded
+            ]
+        clauses = staleClauses <> supersededClause <> map fst catFilters
         catParams = map snd catFilters
      in case clauses of
             [] -> ("", [])

@@ -9,6 +9,7 @@ import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode (..), exitWith)
+import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies (bodiesDir, persistBody, readBody, taskBodyPath)
 import Icarium.Commands.Util
@@ -32,13 +33,13 @@ data Command
 parser :: Parser Command
 parser =
     subparser
-        ( subcmd "add" "Add a task" (Add <$> addP)
+        ( subcmd "add" "Add a task. Prints <id> and body path; Write your markdown to that path (no temp draft needed)." (Add <$> addP)
             <> subcmd "list" "List tasks (alias: ls)" (List <$> listP)
-            <> subcmd "show" "Show a task" (Show <$> showP)
-            <> subcmd "update" "Update a task" (Update <$> updateP)
+            <> subcmd "show" "Show task metadata. The body is intentionally not printed: Read $(icarium task path <id>) so a subsequent Edit can succeed (Claude Code's Edit tool requires a prior Read of the same path)." (Show <$> showP)
+            <> subcmd "update" "Update task metadata. To edit the body: Read $(icarium task path <id>) then Edit." (Update <$> updateP)
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
             <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
-            <> subcmd "path" "Print body file path for a task" (Path <$> pathP)
+            <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -124,6 +125,9 @@ runAdd db o = withDb db $ \c -> do
     fp <- persistBody db TaskNode tid body
     TIO.putStrLn tid
     TIO.putStrLn (T.pack fp)
+    when (T.null body) $ do
+        hPutStrLn stderr ("# next: Write your markdown to " <> fp)
+        hPutStrLn stderr ("# to edit later: Read $(icarium task path " <> T.unpack tid <> ") then Edit")
 
 -- =============================================================
 -- list

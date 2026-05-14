@@ -50,7 +50,7 @@ Bodies live on disk at `.icarium/bodies/{tasks,contexts}/<id>.md`. `icarium task
 - **See the current body:** `Read $(icarium task path <id>)`. This also primes the harness so `Edit`/`Write` on the same path will not be blocked.
 - **Wholesale rewrite:** `Write` the new body to the same path. (You must have `Read` it first if it exists.)
 - **Targeted change to a long body:** `Edit` with `old_string`/`new_string`. Cheaper in output tokens than re-emitting the whole body.
-- **Brand-new task body (`/prep new`):** `icarium task add --title "..." --body-file - <<'EOF' ... EOF`, or `icarium task add --title "..."` then `Write` to the printed path.
+- **Brand-new task body (`/prep new`):** `icarium task add --title "..." --body-stdin <<'EOF' ... EOF`, or `icarium task add --title "..."` then `Write` to the printed path.
 
 Do not use `icarium task show` as a "read step" before editing — its CLI output is invisible to the harness, and the subsequent `Edit`/`Write` will fail. Always `Read` the body file path.
 
