@@ -89,7 +89,8 @@ test-suite icarium-test
     hs-source-dirs:   test
     main-is:          Main.hs
     ghc-options:      -threaded -with-rtsopts=-N
-    other-modules:    CliSpec
+    other-modules:    BodiesSpec
+                      CliSpec
                       GuardSpec
                       HeartbeatSpec
                       LogResultSpec

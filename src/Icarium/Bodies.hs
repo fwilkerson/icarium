@@ -10,7 +10,7 @@ module Icarium.Bodies (
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Directory (createDirectoryIfMissing, doesFileExist, renamePath)
 import System.FilePath (takeDirectory, (</>))
 
 bodiesDir :: FilePath -> FilePath
@@ -28,7 +28,10 @@ ensureBodiesDirs bodDir = do
     createDirectoryIfMissing True (bodDir </> "contexts")
 
 writeBody :: FilePath -> Text -> IO ()
-writeBody = TIO.writeFile
+writeBody fp content = do
+    let tmp = fp <> ".tmp"
+    TIO.writeFile tmp content
+    renamePath tmp fp
 
 readBody :: FilePath -> IO Text
 readBody fp = do
