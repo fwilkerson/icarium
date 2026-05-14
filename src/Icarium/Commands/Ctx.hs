@@ -11,7 +11,7 @@ import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Bodies (bodiesDir, ctxBodyPath, ensureBodiesDirs, readBody, writeBody)
+import Icarium.Bodies (bodiesDir, ctxBodyPath, ensureBodiesDirs, writeBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
@@ -217,10 +217,9 @@ runShow db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (sId o))
     mcx <- RCx.getContext c cxid
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
-    bodyFromFile <- readBody (ctxBodyPath (bodiesDir db) cxid)
-    let cx' = cx{contextBody = bodyFromFile}
-    cats <- RC.contextCategoriesFor c (contextId cx')
-    TIO.putStr (Render.renderContext cx' cats)
+    cats <- RC.contextCategoriesFor c (contextId cx)
+    let bodyPath = T.pack (ctxBodyPath (bodiesDir db) cxid)
+    TIO.putStr (Render.renderContext cx cats bodyPath)
 
 -- =============================================================
 -- update

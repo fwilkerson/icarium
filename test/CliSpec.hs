@@ -98,6 +98,8 @@ tests =
         , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
         , testCase "task update --no-commit and --commit-required toggle flag" testTaskNoCommitUpdate
         , testCase "dispatch quarantine: blocked upstream excludes dependent from ready queue" testDispatchQuarantine
+        , testCase "task show (human) prints body path, not body content" testTaskShowBodyPath
+        , testCase "ctx show prints body path, not body content" testCtxShowBodyPath
         ]
 
 testVersion :: IO ()
@@ -655,6 +657,32 @@ draining normally.
 We simulate a failed dispatch by blocking task A directly; the view
 doesn't care how it got there.
 -}
+testTaskShowBodyPath :: IO ()
+testTaskShowBodyPath = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Body path test task", "--body", "secret body content"]
+    let outLines = lines addOut
+        tid = head outLines
+        bodyPath = outLines !! 1
+
+    (code, out, _) <- runIcarium db ["task", "show", tid]
+    code @?= ExitSuccess
+    assertBool "show contains body path" (bodyPath `isInfixOf` out)
+    assertBool "show does not contain body content" (not ("secret body content" `isInfixOf` out))
+    assertBool "show does not have ## Body header" (not ("## Body" `isInfixOf` out))
+
+testCtxShowBodyPath :: IO ()
+testCtxShowBodyPath = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Body path test entry", "--body", "secret context body"]
+    let outLines = lines addOut
+        cxid = head outLines
+        bodyPath = outLines !! 1
+
+    (code, out, _) <- runIcarium db ["ctx", "show", cxid]
+    code @?= ExitSuccess
+    assertBool "show contains body path" (bodyPath `isInfixOf` out)
+    assertBool "show does not contain body content" (not ("secret context body" `isInfixOf` out))
+    assertBool "show does not have ## Body header" (not ("## Body" `isInfixOf` out))
+
 testDispatchQuarantine :: IO ()
 testDispatchQuarantine = withTempDb $ \db -> do
     -- A: will be blocked (simulating a failed dispatch)

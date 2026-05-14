@@ -267,7 +267,7 @@ refCtx stale =
 
 testLinksNoEdges :: IO ()
 testLinksNoEdges = do
-    let out = renderTaskHuman True minTask [] [] []
+    let out = renderTaskHuman True minTask "/tmp/body" [] [] []
     assertBool "## Links header" ("## Links" `T.isInfixOf` out)
     assertBool "(none) line" ("(none)" `T.isInfixOf` out)
     assertBool "no depends-on edge" (not ("depends-on" `T.isInfixOf` out))
@@ -276,7 +276,7 @@ testLinksNoEdges = do
 testLinksOnlyDeps :: IO ()
 testLinksOnlyDeps = do
     let dep = depTask Planned
-        out = renderTaskHuman True minTask [] [dep] []
+        out = renderTaskHuman True minTask "/tmp/body" [] [dep] []
     assertBool "## Links header" ("## Links" `T.isInfixOf` out)
     assertBool "depends-on edge" ("depends-on" `T.isInfixOf` out)
     assertBool "dep id prefix" (T.take 10 (taskId dep) `T.isInfixOf` out)
@@ -287,7 +287,7 @@ testLinksOnlyDeps = do
 testLinksOnlyRefs :: IO ()
 testLinksOnlyRefs = do
     let ref = refCtx False
-        out = renderTaskHuman True minTask [ref] [] []
+        out = renderTaskHuman True minTask "/tmp/body" [ref] [] []
     assertBool "## Links header" ("## Links" `T.isInfixOf` out)
     assertBool "references edge" ("references" `T.isInfixOf` out)
     assertBool "ref id prefix" (T.take 10 (contextId ref) `T.isInfixOf` out)
@@ -299,7 +299,7 @@ testLinksBothKinds :: IO ()
 testLinksBothKinds = do
     let dep = depTask Ready
         ref = refCtx False
-        out = renderTaskHuman True minTask [ref] [dep] []
+        out = renderTaskHuman True minTask "/tmp/body" [ref] [dep] []
     assertBool "depends-on edge" ("depends-on" `T.isInfixOf` out)
     assertBool "references edge" ("references" `T.isInfixOf` out)
     iDep <- mustJust "depends-on position" (posOf "depends-on" out)
@@ -315,26 +315,26 @@ testLinksBothKinds = do
 testLinksStaleContext :: IO ()
 testLinksStaleContext = do
     let ref = refCtx True
-        out = renderTaskHuman True minTask [ref] [] []
+        out = renderTaskHuman True minTask "/tmp/body" [ref] [] []
     assertBool "[STALE] suffix present" ("[STALE]" `T.isInfixOf` out)
 
 testLinksTaskDone :: IO ()
 testLinksTaskDone = do
     let dep = depTask Done
-        out = renderTaskHuman True minTask [] [dep] []
+        out = renderTaskHuman True minTask "/tmp/body" [] [dep] []
     assertBool "[done] suffix" ("[done]" `T.isInfixOf` out)
 
 testLinksTaskBlocked :: IO ()
 testLinksTaskBlocked = do
     let dep = (depTask Blocked){taskBlockReason = Just "waiting"}
-        out = renderTaskHuman True minTask [] [dep] []
+        out = renderTaskHuman True minTask "/tmp/body" [] [dep] []
     assertBool "[blocked] suffix" ("[blocked]" `T.isInfixOf` out)
 
 testLinksAscii :: IO ()
 testLinksAscii = do
     let dep = depTask Planned
         ref = refCtx False
-        out = renderTaskHuman False minTask [ref] [dep] []
+        out = renderTaskHuman False minTask "/tmp/body" [ref] [dep] []
     assertBool "ASCII branch glyph +- present" ("+-" `T.isInfixOf` out)
     assertBool "ASCII last glyph \\- present" ("\\-" `T.isInfixOf` out)
     assertBool "no UTF-8 branch glyph" (not ("├─" `T.isInfixOf` out))

@@ -42,12 +42,13 @@ data TaskRow = TaskRow
 -- Task rendering
 -- =============================================================
 
-{- | Human-facing task view. Shows metadata + body + linked nodes.
+{- | Human-facing task view. Shows metadata + body file path + linked nodes.
 
 @utf8@: True → Unicode tree glyphs; False → ASCII fallback.
+@bodyPath@: path to the body file on disk (agents @Read@ this to see content).
 -}
-renderTaskHuman :: Bool -> Task -> [Context] -> [Task] -> [Category] -> Text
-renderTaskHuman utf8 t refs deps cats =
+renderTaskHuman :: Bool -> Task -> Text -> [Context] -> [Task] -> [Category] -> Text
+renderTaskHuman utf8 t bodyPath refs deps cats =
     T.unlines $
         [ "id:        " <> taskId t
         , "title:     " <> taskTitle t
@@ -58,14 +59,10 @@ renderTaskHuman utf8 t refs deps cats =
             <> noCommitLine t
             <> [ "created:   " <> taskCreatedAt t
                , "updated:   " <> taskUpdatedAt t
+               , "body:      " <> bodyPath
                ]
             <> categoriesBlock cats
-            <> [ ""
-               , "## Body"
-               , ""
-               , if T.null (taskBody t) then "(no body)" else taskBody t
-               , ""
-               ]
+            <> [""]
             <> linksSection utf8 t deps refs
 
 priorityLine :: Task -> Text
@@ -303,21 +300,17 @@ formatEdgeCounts d r =
 -- Context rendering
 -- =============================================================
 
-renderContext :: Context -> [Category] -> Text
-renderContext k cats =
+renderContext :: Context -> [Category] -> Text -> Text
+renderContext k cats bodyPath =
     T.unlines $
         [ "id:       " <> contextId k
         , "title:    " <> contextTitle k
         , "stale:    " <> (if contextStale k then "yes" else "no")
         , "created:  " <> contextCreatedAt k
         , "updated:  " <> contextUpdatedAt k
+        , "body:     " <> bodyPath
         ]
             <> categoriesBlock cats
-            <> [ ""
-               , "## Body"
-               , ""
-               , if T.null (contextBody k) then "(no body)" else contextBody k
-               ]
 
 data ContextRow = ContextRow
     { crContext :: Context
