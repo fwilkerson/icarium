@@ -5,7 +5,7 @@ module Icarium.Repo.Fts (
 ) where
 
 import Data.Text (Text)
-import Database.SQLite.Simple (Connection, Only (..), execute, execute_)
+import Database.SQLite.Simple (Connection, Only (..), execute, execute_, query_)
 
 import Icarium.Types (NodeKind (..), nodeKindText)
 
@@ -22,14 +22,17 @@ removeEntry :: Connection -> Text -> IO ()
 removeEntry conn eid =
     execute conn "DELETE FROM body_fts WHERE id = ?" (Only eid)
 
-reindexAll :: Connection -> IO ()
+reindexAll :: Connection -> IO (Int, Int)
 reindexAll conn = do
     execute_ conn "DELETE FROM body_fts"
     execute_
         conn
         "INSERT INTO body_fts (id, kind, title, body) \
         \SELECT id, 'task', title, body FROM tasks"
+    [Only taskCount] <- query_ conn "SELECT COUNT(*) FROM tasks" :: IO [Only Int]
     execute_
         conn
         "INSERT INTO body_fts (id, kind, title, body) \
         \SELECT id, 'context', title, body FROM context"
+    [Only ctxCount] <- query_ conn "SELECT COUNT(*) FROM context" :: IO [Only Int]
+    pure (taskCount, ctxCount)

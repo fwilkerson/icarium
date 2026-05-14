@@ -1,5 +1,6 @@
 module Icarium.Commands.Reindex (Command, parser, run) where
 
+import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Options.Applicative
 
@@ -13,5 +14,10 @@ parser = pure Reindex
 
 run :: FilePath -> Command -> IO ()
 run db Reindex = withDb db $ \c -> do
-    Fts.reindexAll c
-    TIO.putStrLn "reindexed"
+    (taskCount, ctxCount) <- Fts.reindexAll c
+    TIO.putStrLn $
+        "reindexed "
+            <> T.pack (show taskCount)
+            <> " tasks, "
+            <> T.pack (show ctxCount)
+            <> " context entries"
