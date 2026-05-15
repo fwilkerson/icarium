@@ -9,6 +9,7 @@ module Icarium.Repo.Edge (
     taskEdgeCounts,
     contextInboundCounts,
     contextDerivedFromDispatch,
+    ctxChildEdges,
 ) where
 
 import Data.Maybe (catMaybes, fromMaybe)
@@ -185,6 +186,29 @@ contextInboundCounts conn ids =
             <> " \
                \GROUP BY dst_id"
     params = map SQLText ids
+
+{- | Context→context edges where the given context is the destination.
+These represent the "children" of the given context — entries that
+derived-from, reference, or supersede it.
+-}
+ctxChildEdges :: Connection -> Text -> Maybe EdgeKind -> IO [Edge]
+ctxChildEdges conn dstId mKind =
+    query conn q params
+  where
+    kindClause = case mKind of
+        Nothing -> ""
+        Just _ -> " AND kind = ?"
+    q =
+        Query $
+            "SELECT "
+                <> edgeCols
+                <> " FROM edges"
+                <> " WHERE dst_id = ? AND dst_kind = 'context' AND src_kind = 'context'"
+                <> kindClause
+                <> " ORDER BY created_at ASC"
+    params = case mKind of
+        Nothing -> [SQLText dstId]
+        Just k -> [SQLText dstId, SQLText (edgeKindDbText k)]
 
 {- | Context entries derived from a task during a specific dispatch window.
 Filters by context.created_at >= started_at (and <= ended_at when present)

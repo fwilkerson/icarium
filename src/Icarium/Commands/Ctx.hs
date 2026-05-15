@@ -28,6 +28,8 @@ data Command
     | Update UpdateOpts
     | Rm RmOpts
     | Path PathOpts
+    | Children ChildrenOpts
+    | Tree TreeOpts
 
 parser :: Parser Command
 parser =
@@ -38,6 +40,8 @@ parser =
             <> subcmd "update" "Update context metadata. To edit the body: Read $(icarium ctx path <id>) then Edit." (Update <$> updateP)
             <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
             <> subcmd "path" "Print body file path for a context entry (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
+            <> subcmd "children" "List direct context children of a context entry (entries that derive from, reference, or supersede it)." (Children <$> childrenP)
+            <> subcmd "tree" "Recursive tree of context children, indented. Cycle-safe." (Tree <$> treeP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -48,6 +52,8 @@ run db = \case
     Update o -> runUpdate db o
     Rm o -> runRm db o
     Path o -> runPath db o
+    Children o -> runChildren db o
+    Tree o -> runTree db o
 
 -- =============================================================
 -- add
@@ -307,3 +313,88 @@ runPath :: FilePath -> PathOpts -> IO ()
 runPath db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (pId o))
     TIO.putStrLn (T.pack (ctxBodyPath (bodiesDir db) cxid))
+
+-- =============================================================
+-- children
+-- =============================================================
+
+data ChildrenOpts = ChildrenOpts
+    { chId :: Text
+    , chKind :: Maybe EdgeKind
+    }
+
+childrenP :: Parser ChildrenOpts
+childrenP =
+    ChildrenOpts . T.pack
+        <$> strArgument (metavar "CONTEXT_ID")
+        <*> optional
+            ( option
+                edgeKindReader
+                ( long "kind"
+                    <> metavar "KIND"
+                    <> help "Filter by edge kind (derived-from | references | supersedes)"
+                )
+            )
+
+runChildren :: FilePath -> ChildrenOpts -> IO ()
+runChildren db o = withDb db $ \c -> do
+    cxid <- resolveOrFatal (RCx.resolveContextId c (chId o))
+    edges <- RE.ctxChildEdges c cxid (chKind o)
+    case edges of
+        [] -> TIO.putStrLn "(no children)"
+        _ -> do
+            let kindW = maximum (map (T.length . edgeKindDisplay . edgeKind) edges)
+            forM_ edges $ \e -> do
+                let childId = edgeSrcId e
+                mcx <- RCx.getContext c childId
+                case mcx of
+                    Nothing -> pure ()
+                    Just cx ->
+                        TIO.putStrLn $
+                            padr kindW (edgeKindDisplay (edgeKind e))
+                                <> "  "
+                                <> T.take 10 childId
+                                <> "  "
+                                <> contextTitle cx
+
+-- =============================================================
+-- tree
+-- =============================================================
+
+newtype TreeOpts = TreeOpts {tId :: Text}
+
+treeP :: Parser TreeOpts
+treeP = TreeOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
+
+runTree :: FilePath -> TreeOpts -> IO ()
+runTree db o = withDb db $ \c -> do
+    cxid <- resolveOrFatal (RCx.resolveContextId c (tId o))
+    mcx <- RCx.getContext c cxid
+    cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
+    TIO.putStrLn (T.take 10 cxid <> "  " <> contextTitle cx)
+    printBranch c [cxid] cxid 1
+  where
+    printBranch c visited parentId depth = do
+        edges <- RE.ctxChildEdges c parentId Nothing
+        forM_ edges $ \e -> do
+            let childId = edgeSrcId e
+                indent = T.replicate (depth * 2) " "
+                kindStr = edgeKindDisplay (edgeKind e)
+            if childId `elem` visited
+                then TIO.putStrLn (indent <> "[cycle: " <> T.take 10 childId <> "]")
+                else do
+                    mcx <- RCx.getContext c childId
+                    case mcx of
+                        Nothing -> pure ()
+                        Just cx -> do
+                            TIO.putStrLn $
+                                indent
+                                    <> kindStr
+                                    <> "  "
+                                    <> T.take 10 childId
+                                    <> "  "
+                                    <> contextTitle cx
+                            printBranch c (childId : visited) childId (depth + 1)
+
+padr :: Int -> Text -> Text
+padr n s = s <> T.replicate (max 0 (n - T.length s)) " "

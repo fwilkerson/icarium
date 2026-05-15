@@ -9,16 +9,19 @@ import System.Directory (doesFileExist, makeAbsolute, setModificationTime)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-bin :: FilePath
-bin = "./bin/icarium"
+-- Resolved once at load time so concurrent cwd changes in PostClaudeSpec
+-- tests (which use withCurrentDirectory) don't corrupt makeAbsolute calls.
+{-# NOINLINE absBin #-}
+absBin :: FilePath
+absBin = unsafePerformIO (makeAbsolute "./bin/icarium")
 
 runIcarium :: FilePath -> [String] -> IO (ExitCode, String, String)
 runIcarium db args = do
-    absBin <- makeAbsolute bin
     (code, outBs, errBs) <- readProcess (proc absBin (["--db", db] ++ args))
     pure (code, BLC.unpack outBs, BLC.unpack errBs)
 
@@ -28,7 +31,6 @@ resolved against the test's cwd before chdir, so they stay valid.
 -}
 runIcariumIn :: FilePath -> FilePath -> [String] -> IO (ExitCode, String, String)
 runIcariumIn workdir db args = do
-    absBin <- makeAbsolute bin
     absDb <- makeAbsolute db
     (code, outBs, errBs) <-
         readProcess $
@@ -42,7 +44,6 @@ withTempDb k = withSystemTempDirectory "icarium-test" $ \dir ->
 
 runIcariumBare :: [String] -> IO (ExitCode, String, String)
 runIcariumBare args = do
-    absBin <- makeAbsolute bin
     (code, outBs, errBs) <- readProcess (proc absBin args)
     pure (code, BLC.unpack outBs, BLC.unpack errBs)
 
@@ -107,6 +108,9 @@ tests =
         , testCase "mtime sweep: external body edit is re-indexed" testMtimeSweepReindex
         , testCase "orphan sweep: stray .md file is removed with warn:" testOrphanRemoval
         , testCase "reindex: rebuilds FTS from DB after body_fts wipe" testReindexRestoresFts
+        , testCase "link add ctx references ctx is accepted" testLinkAddCtxReferencesCtx
+        , testCase "ctx children lists direct children by edge kind" testCtxChildren
+        , testCase "ctx tree recurses and detects cycles" testCtxTree
         ]
 
 testVersion :: IO ()
@@ -825,3 +829,74 @@ testDispatchQuarantine = withTempDb $ \db -> do
     nCode @?= ExitSuccess
     assertBool "task next picks C, not B" (cId `isInfixOf` nOut)
     assertBool "task next does not pick B" (not (bId `isInfixOf` nOut))
+
+testLinkAddCtxReferencesCtx :: IO ()
+testLinkAddCtxReferencesCtx = withTempDb $ \db -> do
+    (_, aOut, _) <- runIcarium db ["ctx", "add", "Umbrella context"]
+    let aId = head (words aOut)
+    (_, bOut, _) <- runIcarium db ["ctx", "add", "Child context"]
+    let bId = head (words bOut)
+
+    (code, out, _) <- runIcarium db ["link", "add", bId, "references", aId]
+    code @?= ExitSuccess
+    assertBool "link add ctx references ctx returns edge id" (not (null out))
+
+    (lCode, lOut, _) <- runIcarium db ["link", "list", "--to", aId]
+    lCode @?= ExitSuccess
+    assertBool "link list shows references edge" ("references" `isInfixOf` lOut)
+
+testCtxChildren :: IO ()
+testCtxChildren = withTempDb $ \db -> do
+    (_, pOut, _) <- runIcarium db ["ctx", "add", "Parent context"]
+    let pId = head (words pOut)
+    (_, cOut, _) <- runIcarium db ["ctx", "add", "Child context A"]
+    let cId = head (words cOut)
+    (_, dOut, _) <- runIcarium db ["ctx", "add", "Child context B"]
+    let dId = head (words dOut)
+
+    _ <- runIcarium db ["link", "add", cId, "derived-from", pId]
+    _ <- runIcarium db ["link", "add", dId, "references", pId]
+
+    (code, out, _) <- runIcarium db ["ctx", "children", pId]
+    code @?= ExitSuccess
+    assertBool "children shows child A" ("Child context A" `isInfixOf` out)
+    assertBool "children shows child B" ("Child context B" `isInfixOf` out)
+    assertBool "children shows derived-from kind" ("derived-from" `isInfixOf` out)
+    assertBool "children shows references kind" ("references" `isInfixOf` out)
+
+    (fCode, fOut, _) <- runIcarium db ["ctx", "children", pId, "--kind", "derived-from"]
+    fCode @?= ExitSuccess
+    assertBool "--kind derived-from shows child A" ("Child context A" `isInfixOf` fOut)
+    assertBool "--kind derived-from excludes child B" (not ("Child context B" `isInfixOf` fOut))
+
+    -- no children on dId
+    _ <- pure dId
+    (eCode, eOut, _) <- runIcarium db ["ctx", "children", cId]
+    eCode @?= ExitSuccess
+    assertBool "leaf node reports no children" ("(no children)" `isInfixOf` eOut)
+
+testCtxTree :: IO ()
+testCtxTree = withTempDb $ \db -> do
+    (_, rOut, _) <- runIcarium db ["ctx", "add", "Root"]
+    let rId = head (words rOut)
+    (_, cOut, _) <- runIcarium db ["ctx", "add", "Child"]
+    let cId = head (words cOut)
+    (_, gOut, _) <- runIcarium db ["ctx", "add", "Grandchild"]
+    let gId = head (words gOut)
+
+    _ <- runIcarium db ["link", "add", cId, "derived-from", rId]
+    _ <- runIcarium db ["link", "add", gId, "derived-from", cId]
+
+    (code, out, _) <- runIcarium db ["ctx", "tree", rId]
+    code @?= ExitSuccess
+    assertBool "tree root shows Root" ("Root" `isInfixOf` out)
+    assertBool "tree shows Child" ("Child" `isInfixOf` out)
+    assertBool "tree shows Grandchild" ("Grandchild" `isInfixOf` out)
+
+    -- cycle detection: link grandchild back to root
+    _ <- runIcarium db ["link", "add", rId, "references", gId]
+    (cycCode, cycOut, _) <- runIcarium db ["ctx", "tree", rId]
+    cycCode @?= ExitSuccess
+    assertBool "cycle detected and noted" ("[cycle:" `isInfixOf` cycOut)
+
+    pure ()
