@@ -14,7 +14,7 @@ import System.Exit (ExitCode (..))
 import System.Process.Typed (runProcess, shell)
 
 import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..))
-import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, finishWith)
+import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
 import Icarium.Git qualified as Git
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Types
@@ -36,7 +36,16 @@ handlePostClaude dx cfg noCommit exit baseSha logPath = do
         maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
         cc = cfgCommands cfg
         finish o mSha notes =
-            finishWith dx o mSha notes ret (Just logPath) (Just baseSha)
+            finishWith
+                dx
+                FinishArgs
+                    { faOutcome = o
+                    , faSha = mSha
+                    , faNotes = notes
+                    , faRetention = ret
+                    , faLogPath = Just logPath
+                    , faBaseSha = Just baseSha
+                    }
         checkExit = case exit of
             ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
             ExitFailure c -> throwE ("claude exited " <> T.pack (show c))

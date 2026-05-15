@@ -1,6 +1,7 @@
 module Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
+    FinishArgs (..),
     applyOutcomeToTask,
     finishWith,
     pruneLogFiles,
@@ -32,16 +33,17 @@ data DispatchResult = DispatchResult
     , dresBaseSha :: Maybe Text
     }
 
-finishWith ::
-    DispatchCtx ->
-    DispatchOutcome ->
-    Maybe Text ->
-    Text ->
-    Int ->
-    Maybe FilePath ->
-    Maybe Text ->
-    IO DispatchResult
-finishWith dx outcome mSha notes retention mLogPath mBaseSha = do
+data FinishArgs = FinishArgs
+    { faOutcome :: DispatchOutcome
+    , faSha :: Maybe Text
+    , faNotes :: Text
+    , faRetention :: Int
+    , faLogPath :: Maybe FilePath
+    , faBaseSha :: Maybe Text
+    }
+
+finishWith :: DispatchCtx -> FinishArgs -> IO DispatchResult
+finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha} = do
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx

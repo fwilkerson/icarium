@@ -10,7 +10,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Config (CategoriesConfig (..), CommandsConfig (..), Config (..), DispatchConfig (..), ProjectConfig (..))
-import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult (..), finishWith)
+import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult (..), FinishArgs (..), finishWith)
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude)
 import Icarium.Git qualified as Git
 import Icarium.Repo.Dispatch qualified as RD
@@ -185,7 +185,7 @@ testFinishWithWipCheckpoint =
                             , dxBranch = branch
                             , dxBase = "main"
                             }
-                res <- finishWith dx OFailure Nothing "agent timed out" 25 Nothing (Just baseSha)
+                res <- finishWith dx FinishArgs{faOutcome = OFailure, faSha = Nothing, faNotes = "agent timed out", faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha}
                 -- (a) base branch worktree is clean after teardown
                 clean <- Git.isClean
                 assertBool "base branch worktree is clean after teardown" clean

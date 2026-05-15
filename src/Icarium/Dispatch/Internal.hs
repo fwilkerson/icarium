@@ -29,6 +29,7 @@ import Icarium.Dispatch.Claude (RunCtx (..), raceTimeout, runClaudeStreaming, ti
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
+    FinishArgs (..),
     applyOutcomeToTask,
     finishWith,
  )
@@ -203,12 +204,14 @@ doReal conn req = do
         Left e ->
             finishWith
                 dx
-                OFailure
-                Nothing
-                ("git checkout -b failed: " <> T.pack (show e))
-                retention
-                Nothing
-                (Just baseSha)
+                FinishArgs
+                    { faOutcome = OFailure
+                    , faSha = Nothing
+                    , faNotes = "git checkout -b failed: " <> T.pack (show e)
+                    , faRetention = retention
+                    , faLogPath = Nothing
+                    , faBaseSha = Just baseSha
+                    }
         Right () -> do
             let ctx =
                     RunCtx
