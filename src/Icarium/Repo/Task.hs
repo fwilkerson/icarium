@@ -2,8 +2,6 @@ module Icarium.Repo.Task (
     NewTask (..),
     TaskUpdate (..),
     emptyUpdate,
-    taskCols,
-    taskColsQualified,
     insertTask,
     getTask,
     getTasksByIds,
@@ -57,15 +55,6 @@ data TaskUpdate = TaskUpdate
 emptyUpdate :: TaskUpdate
 emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
 
-taskColumnNames :: [Text]
-taskColumnNames = ["id", "title", "body", "state", "priority", "block_reason", "created_at", "updated_at", "no_commit"]
-
-taskCols :: Text
-taskCols = T.intercalate ", " taskColumnNames
-
-taskColsQualified :: Text -> Text
-taskColsQualified alias = T.intercalate ", " (map (\c -> alias <> "." <> c) taskColumnNames)
-
 insertTask :: Connection -> NewTask -> IO Text
 insertTask conn NewTask{..} = do
     tid <- newId
@@ -84,7 +73,7 @@ getTask conn tid = do
     rows <-
         query
             conn
-            (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id = ?")
+            "SELECT id, title, body, state, priority, block_reason, created_at, updated_at, no_commit FROM tasks WHERE id = ?"
             (Only tid)
     pure $ case rows of
         (t : _) -> Just t
@@ -96,14 +85,14 @@ getTasksByIds _ [] = pure []
 getTasksByIds conn ids =
     query
         conn
-        (Query $ "SELECT " <> taskCols <> " FROM tasks WHERE id IN " <> ph)
+        (Query $ "SELECT id, title, body, state, priority, block_reason, created_at, updated_at, no_commit FROM tasks WHERE id IN " <> ph)
         (map SQLText ids)
   where
     ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
 
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]
-getTasksByPrefix conn = prefixLookup conn "tasks" taskCols
+getTasksByPrefix conn = prefixLookup conn "tasks" "id, title, body, state, priority, block_reason, created_at, updated_at, no_commit"
 
 -- | Resolve a user-supplied string to a canonical task ULID via prefix match.
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
@@ -130,7 +119,7 @@ listTasks conn filterStates readyOnly mDomain mDisc = do
             then "COALESCE(priority, 0) DESC, created_at ASC"
             else "created_at ASC"
     (whereClause, params) = taskCatWhere mDomain mDisc
-    buildQ t o = Query $ "SELECT " <> taskCols <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
+    buildQ t o = Query $ "SELECT id, title, body, state, priority, block_reason, created_at, updated_at, no_commit FROM " <> t <> whereClause <> " ORDER BY " <> o
 
 taskCatWhere :: Maybe Text -> Maybe Text -> (Text, [SQLData])
 taskCatWhere mDomain mDisc =

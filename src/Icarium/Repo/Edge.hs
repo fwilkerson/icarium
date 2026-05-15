@@ -25,9 +25,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Context (ctxColsQualified)
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Repo.Task (taskColsQualified)
 import Icarium.Types (
     Context,
     Edge (..),
@@ -116,16 +114,13 @@ referencedContexts :: Connection -> Text -> IO [Context]
 referencedContexts conn tid =
     query
         conn
-        ( Query $
-            "SELECT "
-                <> ctxColsQualified "cx"
-                <> " FROM edges e \
-                   \JOIN context cx ON cx.id = e.dst_id \
-                   \WHERE e.kind = 'references' \
-                   \  AND e.src_kind = 'task' AND e.src_id = ? \
-                   \  AND e.dst_kind = 'context' \
-                   \ORDER BY e.created_at ASC"
-        )
+        "SELECT cx.id, cx.title, cx.body, cx.stale, cx.created_at, cx.updated_at \
+        \FROM edges e \
+        \JOIN context cx ON cx.id = e.dst_id \
+        \WHERE e.kind = 'references' \
+        \  AND e.src_kind = 'task' AND e.src_id = ? \
+        \  AND e.dst_kind = 'context' \
+        \ORDER BY e.created_at ASC"
         (Only tid)
 
 -- | Tasks that the given task depends on (depends_on edges, dst side).
@@ -133,16 +128,13 @@ dependencyTasks :: Connection -> Text -> IO [Task]
 dependencyTasks conn tid =
     query
         conn
-        ( Query $
-            "SELECT "
-                <> taskColsQualified "t"
-                <> " FROM edges e \
-                   \JOIN tasks t ON t.id = e.dst_id \
-                   \WHERE e.kind = 'depends_on' \
-                   \  AND e.src_kind = 'task' AND e.src_id = ? \
-                   \  AND e.dst_kind = 'task' \
-                   \ORDER BY e.created_at ASC"
-        )
+        "SELECT t.id, t.title, t.body, t.state, t.priority, t.block_reason, t.created_at, t.updated_at, t.no_commit \
+        \FROM edges e \
+        \JOIN tasks t ON t.id = e.dst_id \
+        \WHERE e.kind = 'depends_on' \
+        \  AND e.src_kind = 'task' AND e.src_id = ? \
+        \  AND e.dst_kind = 'task' \
+        \ORDER BY e.created_at ASC"
         (Only tid)
 
 {- | Count outgoing depends_on and references edges for multiple task ids.
@@ -224,14 +216,13 @@ contextDerivedFromDispatch conn tid startedAt mEndedAt =
         Just _ -> " AND cx.created_at <= ?"
     q =
         Query $
-            "SELECT "
-                <> ctxColsQualified "cx"
-                <> " FROM edges e \
-                   \JOIN context cx ON cx.id = e.src_id \
-                   \WHERE e.kind = 'derived_from' \
-                   \  AND e.src_kind = 'context' \
-                   \  AND e.dst_kind = 'task' AND e.dst_id = ? \
-                   \  AND cx.created_at >= ?"
+            "SELECT cx.id, cx.title, cx.body, cx.stale, cx.created_at, cx.updated_at \
+            \FROM edges e \
+            \JOIN context cx ON cx.id = e.src_id \
+            \WHERE e.kind = 'derived_from' \
+            \  AND e.src_kind = 'context' \
+            \  AND e.dst_kind = 'task' AND e.dst_id = ? \
+            \  AND cx.created_at >= ?"
                 <> endClause
                 <> " ORDER BY cx.created_at ASC"
     params = case mEndedAt of

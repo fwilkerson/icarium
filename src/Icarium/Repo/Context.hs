@@ -2,8 +2,6 @@ module Icarium.Repo.Context (
     NewContext (..),
     ContextUpdate (..),
     emptyUpdate,
-    ctxCols,
-    ctxColsQualified,
     insertContext,
     getContext,
     getContextsByPrefix,
@@ -51,15 +49,6 @@ data ContextUpdate = ContextUpdate
 emptyUpdate :: ContextUpdate
 emptyUpdate = ContextUpdate Nothing Nothing
 
-contextColumnNames :: [Text]
-contextColumnNames = ["id", "title", "body", "stale", "created_at", "updated_at"]
-
-ctxCols :: Text
-ctxCols = T.intercalate ", " contextColumnNames
-
-ctxColsQualified :: Text -> Text
-ctxColsQualified alias = T.intercalate ", " (map (\c -> alias <> "." <> c) contextColumnNames)
-
 insertContext :: Connection -> NewContext -> IO Text
 insertContext conn NewContext{..} = do
     cid <- newId
@@ -75,7 +64,7 @@ getContext conn cid = do
     rows <-
         query
             conn
-            (Query $ "SELECT " <> ctxCols <> " FROM context WHERE id = ?")
+            "SELECT id, title, body, stale, created_at, updated_at FROM context WHERE id = ?"
             (Only cid)
     pure $ case rows of
         (k : _) -> Just k
@@ -83,7 +72,7 @@ getContext conn cid = do
 
 -- | Context entries whose ULID starts with @prefix@.
 getContextsByPrefix :: Connection -> Text -> IO [Context]
-getContextsByPrefix conn = prefixLookup conn "context" ctxCols
+getContextsByPrefix conn = prefixLookup conn "context" "id, title, body, stale, created_at, updated_at"
 
 -- | Resolve a user-supplied string to a canonical context ULID via prefix match.
 resolveContextId :: Connection -> Text -> IO (Either String Text)
@@ -99,7 +88,7 @@ listContexts conn staleFilter includeSuperseded mDomain mDisc =
     query conn q params
   where
     (whereClause, params) = ctxCatWhere staleFilter includeSuperseded mDomain mDisc
-    q = Query $ "SELECT " <> ctxCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
+    q = Query $ "SELECT id, title, body, stale, created_at, updated_at FROM context" <> whereClause <> " ORDER BY created_at ASC"
 
 ctxCatWhere :: Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
 ctxCatWhere staleFilter includeSuperseded mDomain mDisc =
@@ -207,9 +196,7 @@ categoryMatchedContexts conn cats cap
             <> [axisClause "discipline" discs | not (null discs)]
     q =
         Query $
-            "SELECT "
-                <> ctxCols
-                <> " FROM context"
+            "SELECT id, title, body, stale, created_at, updated_at FROM context"
                 <> " WHERE stale = 0 AND "
                 <> T.intercalate " AND " clauses
                 <> " ORDER BY created_at DESC LIMIT ?"
