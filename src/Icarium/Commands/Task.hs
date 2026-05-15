@@ -29,6 +29,7 @@ data Command
     | Rm RmOpts
     | Next NextOpts
     | Path PathOpts
+    | Cat CatOpts
 
 parser :: Parser Command
 parser =
@@ -40,6 +41,7 @@ parser =
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
             <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
             <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
+            <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -51,6 +53,7 @@ run db = \case
     Rm o -> runRm db o
     Next o -> runNext db o
     Path o -> runPath db o
+    Cat o -> runCat db o
 
 -- =============================================================
 -- add
@@ -353,3 +356,21 @@ runPath :: FilePath -> PathOpts -> IO ()
 runPath db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (pId o))
     TIO.putStrLn (T.pack (taskBodyPath (bodiesDir db) tid))
+
+-- =============================================================
+-- cat
+-- =============================================================
+
+newtype CatOpts = CatOpts {catId :: Text}
+
+catP :: Parser CatOpts
+catP = CatOpts . T.pack <$> strArgument (metavar "TASK_ID")
+
+runCat :: FilePath -> CatOpts -> IO ()
+runCat db o = withDb db $ \c -> do
+    tid <- resolveOrFatal (RT.resolveTaskId c (catId o))
+    let fp = taskBodyPath (bodiesDir db) tid
+    exists <- doesFileExist fp
+    if exists
+        then TIO.putStr =<< TIO.readFile fp
+        else fatal 1 ("body file missing: " <> fp)

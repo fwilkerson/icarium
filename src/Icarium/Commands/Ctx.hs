@@ -28,6 +28,7 @@ data Command
     | Update UpdateOpts
     | Rm RmOpts
     | Path PathOpts
+    | Cat CatOpts
     | Children ChildrenOpts
     | Tree TreeOpts
 
@@ -40,6 +41,7 @@ parser =
             <> subcmd "update" "Update context metadata. To edit the body: Read $(icarium ctx path <id>) then Edit." (Update <$> updateP)
             <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
             <> subcmd "path" "Print body file path for a context entry (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
+            <> subcmd "cat" "Print body of a context entry to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
             <> subcmd "children" "List direct context children of a context entry (entries that derive from, reference, or supersede it)." (Children <$> childrenP)
             <> subcmd "tree" "Recursive tree of context children, indented. Cycle-safe." (Tree <$> treeP)
         )
@@ -52,6 +54,7 @@ run db = \case
     Update o -> runUpdate db o
     Rm o -> runRm db o
     Path o -> runPath db o
+    Cat o -> runCat db o
     Children o -> runChildren db o
     Tree o -> runTree db o
 
@@ -313,6 +316,24 @@ runPath :: FilePath -> PathOpts -> IO ()
 runPath db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (pId o))
     TIO.putStrLn (T.pack (ctxBodyPath (bodiesDir db) cxid))
+
+-- =============================================================
+-- cat
+-- =============================================================
+
+newtype CatOpts = CatOpts {catId :: Text}
+
+catP :: Parser CatOpts
+catP = CatOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
+
+runCat :: FilePath -> CatOpts -> IO ()
+runCat db o = withDb db $ \c -> do
+    cxid <- resolveOrFatal (RCx.resolveContextId c (catId o))
+    let fp = ctxBodyPath (bodiesDir db) cxid
+    exists <- doesFileExist fp
+    if exists
+        then TIO.putStr =<< TIO.readFile fp
+        else fatal 1 ("body file missing: " <> fp)
 
 -- =============================================================
 -- children

@@ -112,6 +112,10 @@ tests =
         , testCase "dispatch quarantine: blocked upstream excludes dependent from ready queue" testDispatchQuarantine
         , testCase "task show (human) prints body path, not body content" testTaskShowBodyPath
         , testCase "ctx show prints body path, not body content" testCtxShowBodyPath
+        , testCase "task cat prints body to stdout" testTaskCat
+        , testCase "task cat on no-body task prints empty and exits 0" testTaskCatNoBody
+        , testCase "ctx cat prints body to stdout" testCtxCat
+        , testCase "ctx cat on no-body entry prints empty and exits 0" testCtxCatNoBody
         , testCase "mtime sweep: external body edit is re-indexed" testMtimeSweepReindex
         , testCase "orphan sweep: stray .md file is removed with warn:" testOrphanRemoval
         , testCase "reindex: rebuilds FTS from DB after body_fts wipe" testReindexRestoresFts
@@ -825,6 +829,42 @@ testCtxShowBodyPath = withTempDb $ \db -> do
     assertBool "show contains body path" (bodyPath `isInfixOf` out)
     assertBool "show does not contain body content" (not ("secret context body" `isInfixOf` out))
     assertBool "show does not have ## Body header" (not ("## Body" `isInfixOf` out))
+
+testTaskCat :: IO ()
+testTaskCat = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Cat task", "--body", "body line one\nbody line two"]
+    let tid = head (lines addOut)
+
+    (code, out, _) <- runIcarium db ["task", "cat", tid]
+    code @?= ExitSuccess
+    out @?= "body line one\nbody line two"
+
+testTaskCatNoBody :: IO ()
+testTaskCatNoBody = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "No body task"]
+    let tid = head (lines addOut)
+
+    (code, out, _) <- runIcarium db ["task", "cat", tid]
+    code @?= ExitSuccess
+    out @?= ""
+
+testCtxCat :: IO ()
+testCtxCat = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Cat context", "--body", "ctx body line one\nctx body line two"]
+    let cxid = head (lines addOut)
+
+    (code, out, _) <- runIcarium db ["ctx", "cat", cxid]
+    code @?= ExitSuccess
+    out @?= "ctx body line one\nctx body line two"
+
+testCtxCatNoBody :: IO ()
+testCtxCatNoBody = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "No body context"]
+    let cxid = head (lines addOut)
+
+    (code, out, _) <- runIcarium db ["ctx", "cat", cxid]
+    code @?= ExitSuccess
+    out @?= ""
 
 -- =============================================================
 -- body-files sync tests (d7d13fa)
