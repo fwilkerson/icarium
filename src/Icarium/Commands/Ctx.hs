@@ -173,6 +173,7 @@ data ListOpts = ListOpts
     , lAll :: Bool
     , lDomain :: Maybe Text
     , lDiscipline :: Maybe Text
+    , lLimit :: Maybe Int
     }
 
 listP :: Parser ListOpts
@@ -182,6 +183,14 @@ listP =
         <*> switch (long "all" <> help "Include stale entries and older versions superseded by another entry. By default ctx list shows only current heads (non-stale, not superseded).")
         <*> optional (textOption "domain" "NAME" "Filter by domain category")
         <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
+        <*> optional
+            ( option
+                auto
+                ( long "limit"
+                    <> metavar "N"
+                    <> help "Return at most N entries"
+                )
+            )
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
@@ -192,7 +201,8 @@ runList db o = withDb db $ \c -> do
             | lAll o = Nothing -- show all
             | otherwise = Just False -- hide stale (default)
     let includeSuperseded = lAll o
-    cxs <- RCx.listContexts c staleFilter includeSuperseded (lDomain o) (lDiscipline o)
+    cxs0 <- RCx.listContexts c staleFilter includeSuperseded (lDomain o) (lDiscipline o)
+    let cxs = maybe cxs0 (`take` cxs0) (lLimit o)
     rows <- buildContextRows c cxs
     utf8 <- detectUtf8
     TIO.putStr (Render.renderContextList utf8 rows)

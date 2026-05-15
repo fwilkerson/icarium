@@ -142,6 +142,7 @@ data ListOpts = ListOpts
     , lDomain :: Maybe Text
     , lDiscipline :: Maybe Text
     , lAll :: Bool
+    , lLimit :: Maybe Int
     }
 
 listP :: Parser ListOpts
@@ -160,6 +161,14 @@ listP =
         <*> optional (textOption "domain" "NAME" "Filter by domain category")
         <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
         <*> switch (long "all" <> help "Include done and abandoned tasks")
+        <*> optional
+            ( option
+                auto
+                ( long "limit"
+                    <> metavar "N"
+                    <> help "Return at most N tasks"
+                )
+            )
 
 defaultActiveStates :: [TaskState]
 defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
@@ -172,7 +181,8 @@ runList db o = withDb db $ \c -> do
             | not (null (lStates o)) = lStates o
             | lAll o = []
             | otherwise = defaultActiveStates
-    ts <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
+    ts0 <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
+    let ts = maybe ts0 (`take` ts0) (lLimit o)
     taskRows <- buildTaskRows c ts
     utf8 <- detectUtf8
     TIO.putStr (Render.renderTaskList utf8 taskRows)

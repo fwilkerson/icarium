@@ -55,6 +55,8 @@ tests =
         , testCase "-V short form works" testVersionShort
         , testCase "task add/list/show roundtrip" testTaskRoundtrip
         , testCase "task update --state changes state" testTaskUpdateState
+        , testCase "task list --limit caps rows" testTaskListLimit
+        , testCase "ctx list --limit caps rows" testCtxListLimit
         , testCase "dispatch list on empty DB exits 0" testDispatchListEmpty
         , testCase "dispatch list --limit caps rows" testDispatchListLimit
         , testCase "task next exits 1 on empty queue" testTaskNextEmpty
@@ -168,6 +170,22 @@ testTaskUpdateState = withTempDb $ \db -> do
     (lCode2, lOut2, _) <- runIcarium db ["task", "list", "--state", "planned"]
     lCode2 @?= ExitSuccess
     assertBool "task no longer in planned list" (not ("State change task" `isInfixOf` lOut2))
+
+testTaskListLimit :: IO ()
+testTaskListLimit = withTempDb $ \db -> do
+    mapM_ (\i -> runIcarium db ["task", "add", "Task " ++ show (i :: Int), "--state", "ready"]) [1 .. 5 :: Int]
+    (code, out, _) <- runIcarium db ["task", "list", "--limit", "3"]
+    code @?= ExitSuccess
+    let rows = filter (not . null) (lines out)
+    length rows @?= 3
+
+testCtxListLimit :: IO ()
+testCtxListLimit = withTempDb $ \db -> do
+    mapM_ (\i -> runIcarium db ["ctx", "add", "Ctx " ++ show (i :: Int)]) [1 .. 4 :: Int]
+    (code, out, _) <- runIcarium db ["ctx", "list", "--limit", "2"]
+    code @?= ExitSuccess
+    let rows = filter (not . null) (lines out)
+    length rows @?= 2
 
 testDispatchListEmpty :: IO ()
 testDispatchListEmpty = withTempDb $ \db -> do
