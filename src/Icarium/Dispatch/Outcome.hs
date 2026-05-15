@@ -46,19 +46,35 @@ finishWith dx outcome mSha notes retention mLogPath mBaseSha = do
         did = dxDid dx
         branch = dxBranch dx
         base = dxBase dx
-    -- Best-effort: on failure, return to the base branch so the next
-    -- dispatch (e.g. drain mode) doesn't fail its on-base-branch
-    -- precondition. Ignore errors here so we don't mask the original
-    -- failure note.
+    -- On failure, snapshot any dirty worktree/index onto the dispatch branch
+    -- before returning to base. Without this, `git checkout base` carries
+    -- staged or unstaged changes onto main when the dispatch branch SHA equals
+    -- base SHA (i.e. the agent never committed). Best-effort: ignore git errors
+    -- so we don't mask the original failure note.
+    mWipSha <-
+        if outcome == OFailure
+            then do
+                clean <- Git.isClean
+                if clean
+                    then pure Nothing
+                    else do
+                        r <- Git.commitAll ("WIP: dispatch " <> did <> " failed before commit")
+                        case r of
+                            Left _ -> pure Nothing
+                            Right () -> either (const Nothing) Just <$> Git.revParse "HEAD"
+            else pure Nothing
     when (outcome == OFailure) $ void (Git.checkout base)
-    RD.finishDispatch conn did outcome mSha (Just notes)
+    let enrichedNotes = case mWipSha of
+            Nothing -> notes
+            Just sha -> notes <> "\nwip_commit: " <> sha
+    RD.finishDispatch conn did outcome mSha (Just enrichedNotes)
     pruneLogFiles conn retention
     pure
         DispatchResult
             { dresDispatchId = Just did
             , dresOutcome = outcome
             , dresBranch = branch
-            , dresNotes = notes
+            , dresNotes = enrichedNotes
             , dresLogPath = mLogPath
             , dresBaseSha = mBaseSha
             }

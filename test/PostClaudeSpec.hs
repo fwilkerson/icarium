@@ -10,8 +10,9 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Config (CategoriesConfig (..), CommandsConfig (..), Config (..), DispatchConfig (..), ProjectConfig (..))
-import Icarium.Dispatch.Outcome (DispatchCtx (..), dresOutcome)
+import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult (..), finishWith)
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude)
+import Icarium.Git qualified as Git
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -25,6 +26,7 @@ tests =
         , testCase "checkpointDirtyTree is no-op on clean tree" testCheckpointCleanTree
         , testCase "handlePostClaude failure leaves wip commit on dispatch branch" testHandlePostClaudeFailureCheckpoints
         , testCase "handlePostClaude no-commit success with agent commits is failure; branch retained" testNoCommitAgentCommittedAnyway
+        , testCase "finishWith OFailure checkpoints staged changes and leaves base clean" testFinishWithWipCheckpoint
         ]
 
 -- | Run git in a specific directory; return raw stdout bytes as String.
@@ -134,6 +136,64 @@ testHandlePostClaudeFailureCheckpoints =
                 -- a wip commit is on the dispatch branch
                 logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
                 assertBool "wip commit on dispatch branch" ("wip: dispatch" `isInfixOf` logOut)
+
+{- | finishWith with OFailure must snapshot staged/unstaged changes onto the
+dispatch branch before switching to base, so those changes never leak to main.
+Asserts (a) base worktree is clean, (b) dispatch branch carries the WIP commit,
+(c) the WIP commit SHA is embedded in dresNotes for easy recovery.
+-}
+testFinishWithWipCheckpoint :: IO ()
+testFinishWithWipCheckpoint =
+    withTestRepo $ \dir ->
+        withTestDb $ \conn ->
+            withCwdLock $ withCurrentDirectory dir $ do
+                let did = "01TESTWIPCHECKPOINT000000A" :: Text
+                    branch = "dispatch/" <> did
+                gitIn_ dir ["checkout", "-b", T.unpack branch]
+                -- staged change that the agent never committed
+                writeFile (dir <> "/staged.hs") "module Staged where"
+                gitIn_ dir ["add", "staged.hs"]
+                baseShaRaw <- gitIn dir ["rev-parse", "main"]
+                let baseSha = T.pack (takeWhile (/= '"') (dropWhile (== '"') baseShaRaw))
+                tid <-
+                    RT.insertTask
+                        conn
+                        RT.NewTask
+                            { RT.ntTitle = "WIP checkpoint task"
+                            , RT.ntBody = ""
+                            , RT.ntState = Ready
+                            , RT.ntPriority = Nothing
+                            , RT.ntNoCommit = False
+                            }
+                RD.insertDispatch
+                    conn
+                    did
+                    RD.NewDispatch
+                        { RD.ndTaskId = tid
+                        , RD.ndBranch = branch
+                        , RD.ndBaseBranch = "main"
+                        , RD.ndBaseSha = baseSha
+                        , RD.ndModel = "claude-sonnet-4-6"
+                        , RD.ndEffort = Medium
+                        , RD.ndLogPath = Nothing
+                        , RD.ndPid = Nothing
+                        }
+                let dx =
+                        DispatchCtx
+                            { dxConn = conn
+                            , dxDid = did
+                            , dxBranch = branch
+                            , dxBase = "main"
+                            }
+                res <- finishWith dx OFailure Nothing "agent timed out" 25 Nothing (Just baseSha)
+                -- (a) base branch worktree is clean after teardown
+                clean <- Git.isClean
+                assertBool "base branch worktree is clean after teardown" clean
+                -- (b) dispatch branch carries the WIP commit
+                logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
+                assertBool "WIP commit on dispatch branch" ("WIP: dispatch" `isInfixOf` logOut)
+                -- (c) WIP SHA is surfaced in dresNotes for dispatch show
+                assertBool "notes contain wip_commit:" ("wip_commit:" `isInfixOf` T.unpack (dresNotes res))
 
 {- | Regression: a --no-commit task whose agent committed anyway must be
 treated as failure, with the dispatch branch retained for inspection. The
