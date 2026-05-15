@@ -139,7 +139,8 @@ runRun db o = do
                         D.applyOutcomeToTask c task res
                         summarize res
         Nothing -> do
-            mapM_ (\n -> when (n <= 0) $ fatal 2 "max must be > 0") (rMax o)
+            forM_ (rMax o) $ \n ->
+                when (n <= 0) $ fatal 2 "max must be > 0"
             sigCount <- newIORef (0 :: Int)
             let sigHandler = do
                     modifyIORef sigCount (+ 1)
