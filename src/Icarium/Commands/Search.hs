@@ -1,5 +1,6 @@
 module Icarium.Commands.Search (Options, parser, run) where
 
+import Control.Monad (forM_, void, when)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -20,6 +21,12 @@ data Options = Options
     , oKind :: Maybe NodeKind
     , oLimit :: Int
     , oNoSnippet :: Bool
+    , oDomains :: [Text]
+    , oDisciplines :: [Text]
+    , oExcludeDomains :: [Text]
+    , oExcludeDisciplines :: [Text]
+    , oTitleOnly :: Bool
+    , oBodyOnly :: Bool
     }
 
 parser :: Parser Options
@@ -50,6 +57,12 @@ parser =
                 <> help "Maximum number of results"
             )
         <*> switch (long "no-snippet" <> help "One line per hit; suppress body snippet")
+        <*> many (textOption "domain" "NAME" "Include only entries tagged with this domain (repeatable; OR within axis, AND across axes)")
+        <*> many (textOption "discipline" "NAME" "Include only entries tagged with this discipline (repeatable; OR within axis, AND across axes)")
+        <*> many (textOption "exclude-domain" "NAME" "Exclude entries tagged with this domain (repeatable)")
+        <*> many (textOption "exclude-discipline" "NAME" "Exclude entries tagged with this discipline (repeatable)")
+        <*> switch (long "title-only" <> help "Match only against entry titles (mutually exclusive with --body-only)")
+        <*> switch (long "body-only" <> help "Match only against entry bodies (mutually exclusive with --title-only)")
 
 kindReader :: ReadM NodeKind
 kindReader = eitherReader $ \case
@@ -58,12 +71,35 @@ kindReader = eitherReader $ \case
     s -> Left ("invalid kind: " <> s <> "; accepted: task, ctx")
 
 run :: FilePath -> Options -> IO ()
-run db o = withDb db $ \c -> do
-    (total, hits) <- RS.searchEntries c (oQuery o) (oKind o) (oLimit o)
-    rows <- buildRows c hits
-    utf8 <- detectUtf8
-    isTty <- detectTty
-    TIO.putStr (Render.renderSearchList utf8 isTty (oNoSnippet o) (oQuery o) total rows)
+run db o = do
+    when (oTitleOnly o && oBodyOnly o) $
+        fatal 1 "--title-only and --body-only are mutually exclusive"
+    withDb db $ \c -> do
+        validateCats c
+        let scope
+                | oTitleOnly o = RS.ScopeTitle
+                | oBodyOnly o = RS.ScopeBody
+                | otherwise = RS.ScopeAll
+            filters =
+                RS.SearchFilters
+                    { RS.sfKind = oKind o
+                    , RS.sfDomains = oDomains o
+                    , RS.sfDisciplines = oDisciplines o
+                    , RS.sfExcludeDomains = oExcludeDomains o
+                    , RS.sfExcludeDisciplines = oExcludeDisciplines o
+                    , RS.sfScope = scope
+                    }
+        (total, hits) <- RS.searchEntries c (oQuery o) filters (oLimit o)
+        rows <- buildRows c hits
+        utf8 <- detectUtf8
+        isTty <- detectTty
+        TIO.putStr (Render.renderSearchList utf8 isTty (oNoSnippet o) (oQuery o) total rows)
+  where
+    validateCats c = do
+        forM_ (oDomains o) $ \n -> void $ requireCategory c Domain n
+        forM_ (oDisciplines o) $ \n -> void $ requireCategory c Discipline n
+        forM_ (oExcludeDomains o) $ \n -> void $ requireCategory c Domain n
+        forM_ (oExcludeDisciplines o) $ \n -> void $ requireCategory c Discipline n
 
 buildRows :: Connection -> [RS.SearchHit] -> IO [SearchHitRow]
 buildRows c hits = do

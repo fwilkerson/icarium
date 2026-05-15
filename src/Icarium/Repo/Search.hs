@@ -1,5 +1,8 @@
 module Icarium.Repo.Search (
     SearchHit (..),
+    SearchScope (..),
+    SearchFilters (..),
+    noFilters,
     Term (..),
     ParsedQuery (..),
     parseQuery,
@@ -9,7 +12,7 @@ module Icarium.Repo.Search (
 import Data.List (sortBy)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, Only (..), Query (..), query)
+import Database.SQLite.Simple (Connection, Query (..), SQLData (..), query)
 
 import Icarium.Repo.Context (ctxCols)
 import Icarium.Repo.Task (taskCols)
@@ -22,9 +25,24 @@ data SearchHit = SearchHit
     , hitBody :: Text
     , hitUpdatedAt :: Text
     , hitTitleMatch :: Bool
+    , hitBodyMatch :: Bool
     , hitState :: Maybe TaskState
     , hitStale :: Bool
     }
+
+data SearchScope = ScopeAll | ScopeTitle | ScopeBody
+
+data SearchFilters = SearchFilters
+    { sfKind :: Maybe NodeKind
+    , sfDomains :: [Text]
+    , sfDisciplines :: [Text]
+    , sfExcludeDomains :: [Text]
+    , sfExcludeDisciplines :: [Text]
+    , sfScope :: SearchScope
+    }
+
+noFilters :: SearchFilters
+noFilters = SearchFilters Nothing [] [] [] [] ScopeAll
 
 -- | A single token in a query, either an exact phrase (quoted) or a bare word.
 data Term
@@ -82,12 +100,18 @@ tokenizeRaw t
 Words and phrases are wrapped in double quotes to escape FTS5 special chars.
 AndQuery terms are joined by space (FTS5 implicit AND);
 OrQuery terms are joined by OR.
+When scope is ScopeTitle or ScopeBody, each term is prefixed with a
+column filter so FTS5 matches only that column.
 -}
-buildFts5Query :: ParsedQuery -> Text
-buildFts5Query pq = case pq of
-    AndQuery terms -> T.intercalate " " (map quoteTerm terms)
-    OrQuery terms -> T.intercalate " OR " (map quoteTerm terms)
+buildFts5Query :: SearchScope -> ParsedQuery -> Text
+buildFts5Query scope pq = case pq of
+    AndQuery terms -> T.intercalate " " (map (applyScope . quoteTerm) terms)
+    OrQuery terms -> T.intercalate " OR " (map (applyScope . quoteTerm) terms)
   where
+    applyScope t = case scope of
+        ScopeAll -> t
+        ScopeTitle -> "{title}: " <> t
+        ScopeBody -> "{body}: " <> t
     quoteTerm term = "\"" <> T.replace "\"" "\"\"" (termText term) <> "\""
 
 -- | Check whether @title@ satisfies the title-match criterion for ranking.
@@ -103,21 +127,30 @@ matchesTitle pq title = case pq of
     titleLower = T.toLower title
     termIn haystack term = T.toLower (termText term) `T.isInfixOf` haystack
 
+-- | Check whether @body@ contains any of the query terms (plain substring).
+matchesBody :: ParsedQuery -> Text -> Bool
+matchesBody pq body = case pq of
+    AndQuery terms -> all (termIn bodyLower) terms
+    OrQuery terms -> any (termIn bodyLower) terms
+  where
+    bodyLower = T.toLower body
+    termIn haystack term = T.toLower (termText term) `T.isInfixOf` haystack
+
 {- | Search tasks and context for @q@. Returns @(total, results)@ where
 @total@ is the count before the limit is applied. Results are ranked:
 title hits first, non-stale before stale within the same tier, then
-updated_at DESC. @mKind@ narrows to one table; @Nothing@ = both.
+updated_at DESC.
 -}
-searchEntries :: Connection -> Text -> Maybe NodeKind -> Int -> IO (Int, [SearchHit])
-searchEntries conn q mKind limit
+searchEntries :: Connection -> Text -> SearchFilters -> Int -> IO (Int, [SearchHit])
+searchEntries conn q filters limit
     | null (queryTerms pq) = pure (0, [])
     | otherwise = do
-        taskHits <- case mKind of
+        taskHits <- case sfKind filters of
             Just ContextNode -> pure []
-            _ -> searchTasks conn pq
-        ctxHits <- case mKind of
+            _ -> searchTasks conn pq filters
+        ctxHits <- case sfKind filters of
             Just TaskNode -> pure []
-            _ -> searchContexts conn pq
+            _ -> searchContexts conn pq filters
         let ranked = sortBy rankHit (taskHits ++ ctxHits)
             total = length ranked
         pure (total, take limit ranked)
@@ -129,18 +162,77 @@ searchEntries conn q mKind limit
             o -> o
         o -> o
 
-searchTasks :: Connection -> ParsedQuery -> IO [SearchHit]
-searchTasks conn pq = do
-    rows <- query conn sql (Only ftsQ) :: IO [Task]
+{- | Build extra WHERE clause fragments and parameters for category
+include/exclude filters. The node table must have an @id@ column that
+is the primary key; the subquery selects from @joinTable@ whose FK
+column is @fkCol@.
+-}
+buildCatClauses ::
+    -- | join table (task_categories | context_categories)
+    Text ->
+    -- | FK column in join table (task_id | context_id)
+    Text ->
+    -- | include domain names (OR within axis)
+    [Text] ->
+    -- | include discipline names (OR within axis)
+    [Text] ->
+    -- | exclude domain names
+    [Text] ->
+    -- | exclude discipline names
+    [Text] ->
+    ([Text], [SQLData])
+buildCatClauses jt fkCol inclDomains inclDiscs exclDomains exclDiscs =
+    let pairs =
+            one "domain" inclDomains True
+                ++ one "discipline" inclDiscs True
+                ++ one "domain" exclDomains False
+                ++ one "discipline" exclDiscs False
+     in (map fst pairs, concatMap snd pairs)
+  where
+    one _ [] _ = []
+    one axis names include =
+        let ph = "(" <> T.intercalate "," (replicate (length names) "?") <> ")"
+            subq =
+                "id IN (SELECT "
+                    <> fkCol
+                    <> " FROM "
+                    <> jt
+                    <> " JOIN categories c ON c.id = "
+                    <> jt
+                    <> ".category_id"
+                    <> " WHERE c.axis = '"
+                    <> axis
+                    <> "' AND c.name IN "
+                    <> ph
+                    <> ")"
+            clause = if include then subq else "NOT " <> subq
+         in [(clause, map SQLText names)]
+
+searchTasks :: Connection -> ParsedQuery -> SearchFilters -> IO [SearchHit]
+searchTasks conn pq filters = do
+    rows <- query conn sql allParams :: IO [Task]
     pure (map toHit rows)
   where
-    ftsQ = buildFts5Query pq
+    ftsQ = buildFts5Query (sfScope filters) pq
+    (catCl, catPs) =
+        buildCatClauses
+            "task_categories"
+            "task_id"
+            (sfDomains filters)
+            (sfDisciplines filters)
+            (sfExcludeDomains filters)
+            (sfExcludeDisciplines filters)
+    extraWhere
+        | null catCl = ""
+        | otherwise = " AND " <> T.intercalate " AND " catCl
     sql =
         Query $
             "SELECT "
                 <> taskCols
                 <> " FROM tasks"
                 <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'task')"
+                <> extraWhere
+    allParams = SQLText ftsQ : catPs
     toHit t =
         SearchHit
             { hitId = taskId t
@@ -149,22 +241,36 @@ searchTasks conn pq = do
             , hitBody = taskBody t
             , hitUpdatedAt = taskUpdatedAt t
             , hitTitleMatch = matchesTitle pq (taskTitle t)
+            , hitBodyMatch = matchesBody pq (taskBody t)
             , hitState = Just (taskState t)
             , hitStale = False
             }
 
-searchContexts :: Connection -> ParsedQuery -> IO [SearchHit]
-searchContexts conn pq = do
-    rows <- query conn sql (Only ftsQ) :: IO [Context]
+searchContexts :: Connection -> ParsedQuery -> SearchFilters -> IO [SearchHit]
+searchContexts conn pq filters = do
+    rows <- query conn sql allParams :: IO [Context]
     pure (map toHit rows)
   where
-    ftsQ = buildFts5Query pq
+    ftsQ = buildFts5Query (sfScope filters) pq
+    (catCl, catPs) =
+        buildCatClauses
+            "context_categories"
+            "context_id"
+            (sfDomains filters)
+            (sfDisciplines filters)
+            (sfExcludeDomains filters)
+            (sfExcludeDisciplines filters)
+    extraWhere
+        | null catCl = ""
+        | otherwise = " AND " <> T.intercalate " AND " catCl
     sql =
         Query $
             "SELECT "
                 <> ctxCols
                 <> " FROM context"
                 <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'context')"
+                <> extraWhere
+    allParams = SQLText ftsQ : catPs
     toHit cx =
         SearchHit
             { hitId = contextId cx
@@ -173,6 +279,7 @@ searchContexts conn pq = do
             , hitBody = contextBody cx
             , hitUpdatedAt = contextUpdatedAt cx
             , hitTitleMatch = matchesTitle pq (contextTitle cx)
+            , hitBodyMatch = matchesBody pq (contextBody cx)
             , hitState = Nothing
             , hitStale = contextStale cx
             }

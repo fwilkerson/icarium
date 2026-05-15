@@ -516,9 +516,10 @@ renderSearchList useUnicode isTty noSnippet q total rows =
             idPart = padr 10 (T.take 10 (hitId h)) <> "  "
             titPart = padr titleWidth (truncateTitle useUnicode titleWidth (hitTitle h))
             catPart = padr catWidth (formatCats (shrCats sr))
+            matchSrc = matchSourceLabel h
             badge = searchBadge h
             badgePart = if T.null badge then "" else "  " <> badge
-            mainLine = kindPart <> idPart <> titPart <> "  " <> catPart <> badgePart
+            mainLine = kindPart <> idPart <> titPart <> "  " <> catPart <> "  " <> matchSrc <> badgePart
             snippetLine
                 | noSnippet = []
                 | hitTitleMatch h = []
@@ -530,6 +531,13 @@ renderSearchList useUnicode isTty noSnippet q total rows =
 kindLetter :: NodeKind -> Text
 kindLetter TaskNode = "T"
 kindLetter ContextNode = "C"
+
+matchSourceLabel :: SearchHit -> Text
+matchSourceLabel h
+    | hitTitleMatch h && hitBodyMatch h = "[t+b]"
+    | hitTitleMatch h = "[t]"
+    | hitBodyMatch h = "[b]"
+    | otherwise = "[?]"
 
 searchBadge :: SearchHit -> Text
 searchBadge h = case hitKind h of

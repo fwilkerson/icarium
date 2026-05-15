@@ -98,6 +98,13 @@ tests =
         , testCase "search: --limit truncation shows footer with total count" testSearchTruncationFooter
         , testCase "search: stale context ranks below live context at same relevance" testSearchStaleLast
         , testCase "search: snippet collapses embedded newlines to single line" testSearchSnippetSingleLine
+        , testCase "search: match-source indicator [t] shown for title-only match" testSearchMatchSourceTitle
+        , testCase "search: match-source indicator [b] shown for body-only match" testSearchMatchSourceBody
+        , testCase "search: match-source indicator [t+b] shown when match in both" testSearchMatchSourceBoth
+        , testCase "search: --title-only excludes body-only matches" testSearchTitleOnlyFlag
+        , testCase "search: --body-only excludes title-only matches" testSearchBodyOnlyFlag
+        , testCase "search: --domain filters to tagged entries" testSearchDomainFlag
+        , testCase "search: --exclude-discipline removes tagged entries" testSearchExcludeDisciplineFlag
         , testCase "dispatch show: tokens line present when values set" testDispatchShowTokensPresent
         , testCase "dispatch show: tokens line absent when all NULL" testDispatchShowTokensAbsent
         , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
@@ -602,6 +609,92 @@ testSearchSnippetSingleLine = withTempDb $ \db -> do
     let snippetLines = filter ("needleXYZ" `isInfixOf`) (lines out)
     assertBool "snippet line found" (not (null snippetLines))
     assertBool "snippet is a single line (no embedded newlines)" (length snippetLines == 1)
+
+testSearchMatchSourceTitle :: IO ()
+testSearchMatchSourceTitle = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "titletoken in title", "--body", "unrelated body"]
+    let cid = take 10 (head (words addOut))
+    (code, out, _) <- runIcarium db ["search", "titletoken"]
+    code @?= ExitSuccess
+    let hitLine = head [l | l <- lines out, cid `isInfixOf` l]
+    assertBool "row carries [t] indicator" ("[t]" `isInfixOf` hitLine)
+    assertBool "row does not carry [b] indicator" (not ("[b]" `isInfixOf` hitLine))
+
+testSearchMatchSourceBody :: IO ()
+testSearchMatchSourceBody = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "neutral title", "--body", "bodytoken appears here"]
+    let cid = take 10 (head (words addOut))
+    (code, out, _) <- runIcarium db ["search", "bodytoken"]
+    code @?= ExitSuccess
+    let hitLine = head [l | l <- lines out, cid `isInfixOf` l]
+    assertBool "row carries [b] indicator" ("[b]" `isInfixOf` hitLine)
+    assertBool "row does not carry [t+b] indicator" (not ("[t+b]" `isInfixOf` hitLine))
+
+testSearchMatchSourceBoth :: IO ()
+testSearchMatchSourceBoth = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "bothtoken in title", "--body", "and bothtoken in body"]
+    let cid = take 10 (head (words addOut))
+    (code, out, _) <- runIcarium db ["search", "bothtoken"]
+    code @?= ExitSuccess
+    let hitLine = head [l | l <- lines out, cid `isInfixOf` l]
+    assertBool "row carries [t+b] indicator" ("[t+b]" `isInfixOf` hitLine)
+
+testSearchTitleOnlyFlag :: IO ()
+testSearchTitleOnlyFlag = withTempDb $ \db -> do
+    (_, titleAdd, _) <- runIcarium db ["ctx", "add", "scopetoken in title", "--body", "unrelated"]
+    let titleId = take 10 (head (words titleAdd))
+    (_, bodyAdd, _) <- runIcarium db ["ctx", "add", "unrelated heading", "--body", "scopetoken in body"]
+    let bodyId = take 10 (head (words bodyAdd))
+    (code, out, _) <- runIcarium db ["search", "scopetoken", "--title-only"]
+    code @?= ExitSuccess
+    assertBool "title-only hit retained" (titleId `isInfixOf` out)
+    assertBool "body-only hit excluded" (not (bodyId `isInfixOf` out))
+
+testSearchBodyOnlyFlag :: IO ()
+testSearchBodyOnlyFlag = withTempDb $ \db -> do
+    (_, titleAdd, _) <- runIcarium db ["ctx", "add", "btoken in title", "--body", "unrelated"]
+    let titleId = take 10 (head (words titleAdd))
+    (_, bodyAdd, _) <- runIcarium db ["ctx", "add", "unrelated heading", "--body", "btoken in body"]
+    let bodyId = take 10 (head (words bodyAdd))
+    (code, out, _) <- runIcarium db ["search", "btoken", "--body-only"]
+    code @?= ExitSuccess
+    assertBool "body-only hit retained" (bodyId `isInfixOf` out)
+    assertBool "title-only hit excluded" (not (titleId `isInfixOf` out))
+
+testSearchDomainFlag :: IO ()
+testSearchDomainFlag = withTempDb $ \db -> do
+    -- Seed an untagged ctx first so the DB and schema exist, then insert
+    -- a `domain=cli` category via raw SQL (CLI tests don't use TestHelpers).
+    (_, untaggedAdd, _) <- runIcarium db ["ctx", "add", "domtoken untagged"]
+    let untaggedId = take 10 (head (words untaggedAdd))
+    seedCategory db "domain" "cli"
+    (_, taggedAdd, _) <- runIcarium db ["ctx", "add", "domtoken tagged", "--domain", "cli"]
+    let taggedId = take 10 (head (words taggedAdd))
+    (code, out, _) <- runIcarium db ["search", "domtoken", "--domain", "cli"]
+    code @?= ExitSuccess
+    assertBool "tagged entry retained" (taggedId `isInfixOf` out)
+    assertBool "untagged entry excluded" (not (untaggedId `isInfixOf` out))
+
+testSearchExcludeDisciplineFlag :: IO ()
+testSearchExcludeDisciplineFlag = withTempDb $ \db -> do
+    (_, keptAdd, _) <- runIcarium db ["ctx", "add", "exctoken kept"]
+    let keptId = take 10 (head (words keptAdd))
+    seedCategory db "discipline" "haskell"
+    (_, noisyAdd, _) <- runIcarium db ["ctx", "add", "exctoken noisy", "--discipline", "haskell"]
+    let noisyId = take 10 (head (words noisyAdd))
+    (code, out, _) <- runIcarium db ["search", "exctoken", "--exclude-discipline", "haskell"]
+    code @?= ExitSuccess
+    assertBool "non-tagged entry retained" (keptId `isInfixOf` out)
+    assertBool "haskell-tagged entry excluded" (not (noisyId `isInfixOf` out))
+
+seedCategory :: FilePath -> String -> String -> IO ()
+seedCategory db axis name = do
+    conn <- open db
+    execute
+        conn
+        (Query "INSERT INTO categories (id, axis, name) VALUES (?, ?, ?)")
+        ("01TESTCAT" ++ replicate 14 '0' ++ take 3 (name ++ "XXX"), axis, name)
+    close conn
 
 testDispatchShowTokensPresent :: IO ()
 testDispatchShowTokensPresent = withSystemTempDirectory "icarium-test" $ \dir -> do
