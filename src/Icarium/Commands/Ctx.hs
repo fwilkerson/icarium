@@ -9,6 +9,7 @@ import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
+import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies (bodiesDir, ctxBodyPath, persistBody)
@@ -31,6 +32,7 @@ data Command
     | Cat CatOpts
     | Children ChildrenOpts
     | Tree TreeOpts
+    | Exists ExistsOpts
 
 parser :: Parser Command
 parser =
@@ -44,6 +46,7 @@ parser =
             <> subcmd "cat" "Print body of a context entry to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
             <> subcmd "children" "List direct context children of a context entry (entries that derive from, reference, or supersede it)." (Children <$> childrenP)
             <> subcmd "tree" "Recursive tree of context children, indented. Cycle-safe." (Tree <$> treeP)
+            <> subcmd "exists" "Check whether a context id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -57,6 +60,7 @@ run db = \case
     Cat o -> runCat db o
     Children o -> runChildren db o
     Tree o -> runTree db o
+    Exists o -> runExists db o
 
 -- =============================================================
 -- add
@@ -426,6 +430,37 @@ runTree db o = withDb db $ \c -> do
                                     <> "  "
                                     <> contextTitle cx
                             printBranch c (childId : visited) childId (depth + 1)
+
+-- =============================================================
+-- exists
+-- =============================================================
+
+data ExistsOpts = ExistsOpts
+    { exId :: Text
+    , exVerbose :: Bool
+    }
+
+existsP :: Parser ExistsOpts
+existsP =
+    ExistsOpts . T.pack
+        <$> strArgument (metavar "CONTEXT_ID")
+        <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
+
+runExists :: FilePath -> ExistsOpts -> IO ()
+runExists db o = withDb db $ \c -> do
+    cxs <- RCx.getContextsByPrefix c (exId o)
+    case cxs of
+        [cx] -> do
+            when (exVerbose o) $ TIO.putStrLn (contextId cx)
+        [] -> exitWith (ExitFailure 1)
+        _ -> do
+            hPutStrLn stderr $
+                "ambiguous: "
+                    <> T.unpack (exId o)
+                    <> " matches "
+                    <> show (length cxs)
+                    <> " contexts"
+            exitWith (ExitFailure 2)
 
 padr :: Int -> Text -> Text
 padr n s = s <> T.replicate (max 0 (n - T.length s)) " "

@@ -30,6 +30,7 @@ data Command
     | Next NextOpts
     | Path PathOpts
     | Cat CatOpts
+    | Exists ExistsOpts
 
 parser :: Parser Command
 parser =
@@ -42,6 +43,7 @@ parser =
             <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
             <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
             <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
+            <> subcmd "exists" "Check whether a task id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -54,6 +56,7 @@ run db = \case
     Next o -> runNext db o
     Path o -> runPath db o
     Cat o -> runCat db o
+    Exists o -> runExists db o
 
 -- =============================================================
 -- add
@@ -384,3 +387,34 @@ runCat db o = withDb db $ \c -> do
     if exists
         then TIO.putStr =<< TIO.readFile fp
         else fatal 1 ("body file missing: " <> fp)
+
+-- =============================================================
+-- exists
+-- =============================================================
+
+data ExistsOpts = ExistsOpts
+    { exId :: Text
+    , exVerbose :: Bool
+    }
+
+existsP :: Parser ExistsOpts
+existsP =
+    ExistsOpts . T.pack
+        <$> strArgument (metavar "TASK_ID")
+        <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
+
+runExists :: FilePath -> ExistsOpts -> IO ()
+runExists db o = withDb db $ \c -> do
+    ts <- RT.getTasksByPrefix c (exId o)
+    case ts of
+        [t] -> do
+            when (exVerbose o) $ TIO.putStrLn (taskId t)
+        [] -> exitWith (ExitFailure 1)
+        _ -> do
+            hPutStrLn stderr $
+                "ambiguous: "
+                    <> T.unpack (exId o)
+                    <> " matches "
+                    <> show (length ts)
+                    <> " tasks"
+            exitWith (ExitFailure 2)

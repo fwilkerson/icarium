@@ -1,5 +1,6 @@
 module CliSpec (tests) where
 
+import Control.Monad (when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Time.Calendar (fromGregorian)
@@ -124,6 +125,10 @@ tests =
         , testCase "link add ctx references ctx is accepted" testLinkAddCtxReferencesCtx
         , testCase "ctx children lists direct children by edge kind" testCtxChildren
         , testCase "ctx tree recurses and detects cycles" testCtxTree
+        , testCase "task exists: found exits 0, not-found exits 1, ambiguous exits 2" testTaskExists
+        , testCase "task exists --verbose prints full id on match" testTaskExistsVerbose
+        , testCase "ctx exists: found exits 0, not-found exits 1, ambiguous exits 2" testCtxExists
+        , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
         ]
 
 testVersion :: IO ()
@@ -1051,3 +1056,80 @@ testCtxTree = withTempDb $ \db -> do
     assertBool "cycle detected and noted" ("[cycle:" `isInfixOf` cycOut)
 
     pure ()
+
+-- =============================================================
+-- exists tests
+-- =============================================================
+
+testTaskExists :: IO ()
+testTaskExists = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Exists task"]
+    let tid = head (words addOut)
+
+    -- found: full id → exit 0
+    (foundCode, foundOut, _) <- runIcarium db ["task", "exists", tid]
+    foundCode @?= ExitSuccess
+    foundOut @?= ""
+
+    -- found: prefix → exit 0
+    (prefCode, _, _) <- runIcarium db ["task", "exists", take 10 tid]
+    prefCode @?= ExitSuccess
+
+    -- not found → exit 1
+    (missCode, _, _) <- runIcarium db ["task", "exists", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
+    missCode @?= ExitFailure 1
+
+    -- ambiguous: add a second task and use a shared prefix
+    (_, addOut2, _) <- runIcarium db ["task", "add", "Exists task 2"]
+    let tid2 = head (words addOut2)
+    let sharedPrefix = take 5 tid
+    -- only proceed with ambiguity test if the two ids actually share the prefix
+    when (sharedPrefix == take 5 tid2) $ do
+        (ambCode, _, ambErr) <- runIcarium db ["task", "exists", sharedPrefix]
+        ambCode @?= ExitFailure 2
+        assertBool "stderr mentions ambiguous" ("ambiguous" `isInfixOf` ambErr)
+
+testTaskExistsVerbose :: IO ()
+testTaskExistsVerbose = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Verbose exists task"]
+    let tid = head (words addOut)
+
+    (code, out, _) <- runIcarium db ["task", "exists", "--verbose", take 10 tid]
+    code @?= ExitSuccess
+    assertBool "verbose output contains full id" (tid `isInfixOf` out)
+
+testCtxExists :: IO ()
+testCtxExists = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Exists context"]
+    let cxid = head (words addOut)
+
+    -- found: full id → exit 0
+    (foundCode, foundOut, _) <- runIcarium db ["ctx", "exists", cxid]
+    foundCode @?= ExitSuccess
+    foundOut @?= ""
+
+    -- found: prefix → exit 0
+    (prefCode, _, _) <- runIcarium db ["ctx", "exists", take 10 cxid]
+    prefCode @?= ExitSuccess
+
+    -- not found → exit 1
+    (missCode, _, _) <- runIcarium db ["ctx", "exists", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
+    missCode @?= ExitFailure 1
+
+    -- ambiguous: add a second context and use a shared prefix
+    (_, addOut2, _) <- runIcarium db ["ctx", "add", "Exists context 2"]
+    let cxid2 = head (words addOut2)
+    let sharedPrefix = take 5 cxid
+    when (sharedPrefix == take 5 cxid2) $ do
+        (ambCode, _, ambErr) <- runIcarium db ["ctx", "exists", sharedPrefix]
+        ambCode @?= ExitFailure 2
+        assertBool "stderr mentions ambiguous" ("ambiguous" `isInfixOf` ambErr)
+
+testCtxExistsVerbose :: IO ()
+testCtxExistsVerbose = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Verbose exists context"]
+    let cxid = head (words addOut)
+
+    (code, out, _) <- runIcarium db ["ctx", "exists", "--verbose", take 10 cxid]
+    code @?= ExitSuccess
+    assertBool "verbose output contains full id" (cxid `isInfixOf` out)
