@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               icarium
-version:            0.3.0
+version:            0.4.0
 synopsis:           Task/context/dispatch tool for headless-agent workflows
 author:             frank
 maintainer:         frank.w1lk3rs0n@gmail.com
