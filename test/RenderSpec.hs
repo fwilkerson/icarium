@@ -208,6 +208,8 @@ minDispatch did tid outcome =
         , dispatchTokensIn = Nothing
         , dispatchTokensOut = Nothing
         , dispatchTokensCacheRead = Nothing
+        , dispatchReviewVerdict = Nothing
+        , dispatchReviewerLogPath = Nothing
         }
 
 testDispatchListFormat :: IO ()

@@ -5,10 +5,6 @@ module Icarium.Dispatch.Internal (
     dispatch,
     dispatchBranchName,
     applyOutcomeToTask,
-    postClaudeGuard,
-    raceTimeout,
-    timeoutSentinel,
-    handlePostClaude,
 ) where
 
 import Control.Monad (unless, void, when)
@@ -24,8 +20,9 @@ import Icarium.Config (
     Config (..),
     DispatchConfig (..),
     ProjectConfig (..),
+    ReviewConfig (..),
  )
-import Icarium.Dispatch.Claude (RunCtx (..), raceTimeout, runClaudeStreaming, timeoutSentinel)
+import Icarium.Dispatch.Claude (RunCtx (..), runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
@@ -33,7 +30,7 @@ import Icarium.Dispatch.Outcome (
     applyOutcomeToTask,
     finishWith,
  )
-import Icarium.Dispatch.PostClaude (handlePostClaude, postClaudeGuard)
+import Icarium.Dispatch.PostClaude (PostClaudeResult (..), handlePostClaudeWithReview)
 import Icarium.Git qualified as Git
 import Icarium.Id (newId)
 import Icarium.Render (renderTaskPrompt)
@@ -90,7 +87,7 @@ dispatch conn req
 
 doDryRun :: Connection -> DispatchRequest -> IO DispatchResult
 doDryRun conn req = do
-    prompt <- buildPrompt conn (drTask req)
+    prompt <- buildPrompt conn (drTask req) Nothing
     fakeId <- newId
     let dcfg = cfgDispatch (drConfig req)
         branch = dispatchBranchName fakeId
@@ -142,11 +139,14 @@ renderCmdPreview model effort tools allowed =
         ]
 
 -- =============================================================
--- Real dispatch
+-- Real dispatch (with retry loop)
 -- =============================================================
 
 doReal :: Connection -> DispatchRequest -> IO DispatchResult
-doReal conn req = do
+doReal conn req = doRealAttempt conn req 1 Nothing
+
+doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> IO DispatchResult
+doRealAttempt conn req attempt mFindings = do
     let cfg = drConfig req
         dcfg = cfgDispatch cfg
         task = drTask req
@@ -155,11 +155,11 @@ doReal conn req = do
         base = roBase opts
         model = roModel opts
         effort = roEffort opts
+        maxAttempts = maybe 1 rcMaxAttempts (cfgReview cfg)
 
     checkPreconditions base
     baseSha <- either (ioFail . show) pure =<< Git.revParse base
 
-    -- Generate id up front so branch name and log path can embed it.
     did <- newId
     let branch = dispatchBranchName did
         logDir = ".icarium" </> "logs"
@@ -189,7 +189,7 @@ doReal conn req = do
                 { RT.tuState = Just InProgress
                 }
 
-    prompt <- buildPrompt conn task
+    prompt <- buildPrompt conn task mFindings
 
     let retention = dcLogRetentionRuns (cfgDispatch cfg)
         dx =
@@ -224,7 +224,13 @@ doReal conn req = do
                         , rcLogPath = logPath
                         }
             exit <- runClaudeStreaming ctx dcfg
-            handlePostClaude dx cfg (taskNoCommit task) exit baseSha logPath
+            pcResult <- handlePostClaudeWithReview dx cfg task (taskNoCommit task) exit baseSha logPath
+            case pcResult of
+                PCDone dr -> pure dr
+                PCRetry dr findings ->
+                    if attempt < maxAttempts
+                        then doRealAttempt conn req (attempt + 1) (Just findings)
+                        else pure dr
 
 checkPreconditions :: Text -> IO ()
 checkPreconditions base = do
@@ -244,15 +250,18 @@ checkPreconditions base = do
                         <> T.unpack b
                     )
 
-buildPrompt :: Connection -> Task -> IO Text
-buildPrompt conn t = do
+buildPrompt :: Connection -> Task -> Maybe Text -> IO Text
+buildPrompt conn t mFindings = do
     refs <- RE.referencedContexts conn (taskId t)
     cats <- RC.taskCategoriesFor conn (taskId t)
     catMatch <- RCx.categoryMatchedContexts conn cats 5
     deps <- RE.dependencyTasks conn (taskId t)
     let refIds = map contextId refs
         dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-    pure (renderTaskPrompt t refs dedupedCat deps)
+        base = renderTaskPrompt t refs dedupedCat deps
+    pure $ case mFindings of
+        Nothing -> base
+        Just f -> base <> "\n## Reviewer findings from previous attempt\n\n" <> f <> "\n"
 
 ioFail :: String -> IO a
 ioFail = ioError . userError

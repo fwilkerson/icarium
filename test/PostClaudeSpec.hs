@@ -58,6 +58,7 @@ minCfg =
                 , dcRetryStormThreshold = 3
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
+        , cfgReview = Nothing
         }
 
 testCheckpointDirtyTree :: IO ()

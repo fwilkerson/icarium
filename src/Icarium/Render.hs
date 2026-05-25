@@ -381,8 +381,8 @@ categoriesBlock cats =
 -- Dispatch rendering
 -- =============================================================
 
-renderDispatch :: Dispatch -> Maybe Task -> [Context] -> Text
-renderDispatch d mt ks =
+renderDispatch :: Dispatch -> Maybe Task -> [Context] -> Maybe Text -> Text
+renderDispatch d mt ks mRetryId =
     T.unlines $
         [ field "id" (dispatchId d)
         , field "task_id" (dispatchTaskId d)
@@ -397,12 +397,15 @@ renderDispatch d mt ks =
         , field "heartbeat_at" (dispatchHeartbeat d)
         , field "ended_at" (fromMaybe "" (dispatchEndedAt d))
         , field "outcome" (maybe "open" dispatchOutcomeText (dispatchOutcome d))
+        , field "review" (maybe "" reviewVerdictText (dispatchReviewVerdict d))
         , field "merge_sha" (fromMaybe "" (dispatchMergeSha d))
         , field "last_commit" (fromMaybe "" (dispatchLastCommit d))
         , field "log_path" (fromMaybe "" (dispatchLogPath d))
+        , field "reviewer_log" (fromMaybe "" (dispatchReviewerLogPath d))
         , field "notes" (fromMaybe "" (dispatchNotes d))
         ]
             ++ tokensLine
+            ++ retryLine
             ++ [ ""
                , "Context added:"
                ]
@@ -421,6 +424,9 @@ renderDispatch d mt ks =
                     <> T.pack (show c)
                 )
             ]
+        _ -> []
+    retryLine = case (dispatchOutcome d, mRetryId) of
+        (Just OFailure, Just rid) -> [field "retry_dispatch" rid]
         _ -> []
     contextLines = case ks of
         [] -> ["  (none)"]

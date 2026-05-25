@@ -11,15 +11,16 @@ module Icarium.Repo.Dispatch (
     setLastCommit,
     setPid,
     updateNotes,
+    setReviewInfo,
     finishDispatch,
     logPathsOutsideRetention,
 ) where
 
-import Data.Text (Text, unpack)
+import Data.Text (Text, pack, unpack)
 import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
 
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Types (Dispatch (..), DispatchOutcome, Effort)
+import Icarium.Types (Dispatch (..), DispatchOutcome, Effort, ReviewVerdict)
 
 data NewDispatch = NewDispatch
     { ndTaskId :: Text
@@ -36,7 +37,8 @@ dispatchCols :: Text
 dispatchCols =
     "id, task_id, branch, base_branch, base_sha, pid, model, effort, \
     \started_at, heartbeat_at, ended_at, outcome, merge_sha, last_commit, \
-    \notes, log_path, tokens_in, tokens_out, tokens_cache_read"
+    \notes, log_path, tokens_in, tokens_out, tokens_cache_read, \
+    \review_verdict, reviewer_log_path"
 
 {- | Insert a dispatch. The caller supplies the id so that the branch
 name and log path (which both embed the id) can be computed before
@@ -152,6 +154,17 @@ updateNotes conn did notes =
         conn
         (Query "UPDATE dispatches SET notes = ? WHERE id = ?")
         (notes, did)
+
+setReviewInfo :: Connection -> Text -> ReviewVerdict -> FilePath -> IO ()
+setReviewInfo conn did verdict reviewerLogPath =
+    execute
+        conn
+        ( Query
+            "UPDATE dispatches \
+            \SET review_verdict = ?, reviewer_log_path = ? \
+            \WHERE id = ?"
+        )
+        (verdict, pack reviewerLogPath, did)
 
 {- | Log paths for dispatches outside the N most recent by started_at DESC.
 Only returns paths that are non-NULL in the DB.

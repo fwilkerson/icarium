@@ -378,7 +378,14 @@ runShow db o = withDb db $ \c -> do
                     (dispatchTaskId d)
                     (dispatchStartedAt d)
                     (dispatchEndedAt d)
-            TIO.putStr (Render.renderDispatch d mt ks)
+            mRetryId <- case dispatchOutcome d of
+                Just OFailure -> do
+                    later <- RD.listDispatches c (Just (dispatchTaskId d))
+                    pure $ case filter (\d2 -> dispatchStartedAt d2 > dispatchStartedAt d) later of
+                        (d2 : _) -> Just (dispatchId d2)
+                        [] -> Nothing
+                _ -> pure Nothing
+            TIO.putStr (Render.renderDispatch d mt ks mRetryId)
 
 -- =============================================================
 -- logs
@@ -408,19 +415,28 @@ runLogs db o = withDb db $ \c -> do
     md <- RD.getDispatch c did
     case md of
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
-        Just d -> case dispatchLogPath d of
-            Nothing -> fatal 1 ("no log recorded for dispatch " <> T.unpack did)
-            Just p -> do
-                let path = T.unpack p
-                exists <- doesFileExist path
-                unless exists $
-                    fatal 1 ("log file missing: " <> path)
-                contents <- readFile path
-                let ls = lines contents
-                    out = case gTail o of
-                        Nothing -> ls
-                        Just n -> drop (max 0 (length ls - n)) ls
-                mapM_ putStrLn out
+        Just d -> do
+            case dispatchLogPath d of
+                Nothing -> fatal 1 ("no log recorded for dispatch " <> T.unpack did)
+                Just p -> printLogFile (T.unpack p) (gTail o)
+            case dispatchReviewerLogPath d of
+                Nothing -> pure ()
+                Just rp -> do
+                    TIO.putStrLn ""
+                    TIO.putStrLn "--- reviewer log ---"
+                    printLogFile (T.unpack rp) (gTail o)
+
+printLogFile :: FilePath -> Maybe Int -> IO ()
+printLogFile path mTail = do
+    exists <- doesFileExist path
+    unless exists $
+        fatal 1 ("log file missing: " <> path)
+    contents <- readFile path
+    let ls = lines contents
+        out = case mTail of
+            Nothing -> ls
+            Just n -> drop (max 0 (length ls - n)) ls
+    mapM_ putStrLn out
 
 -- =============================================================
 -- recover  (reconcile orphaned dispatches)

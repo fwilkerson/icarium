@@ -129,6 +129,7 @@ fakeConfig =
                 , dcRetryStormThreshold = 3
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
+        , cfgReview = Nothing
         }
 
 configWith :: Int -> Config

@@ -11,6 +11,7 @@ module Icarium.Git (
     stashUntracked,
     deleteBranch,
     changedFiles,
+    diffPatch,
     commitAll,
 ) where
 
@@ -121,3 +122,11 @@ changedFiles baseSha = do
     case r of
         Left _ -> pure []
         Right out -> pure (filter (not . T.null) (T.lines out))
+
+-- | Full patch between the given base SHA and HEAD; returns empty on git error.
+diffPatch :: Text -> IO Text
+diffPatch baseSha = do
+    r <- runGit ["diff", T.unpack baseSha <> "..HEAD"]
+    pure $ case r of
+        Left _ -> ""
+        Right out -> out

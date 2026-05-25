@@ -21,6 +21,9 @@ module Icarium.Types (
     DispatchOutcome (..),
     dispatchOutcomeText,
     parseDispatchOutcome,
+    ReviewVerdict (..),
+    reviewVerdictText,
+    parseReviewVerdict,
 
     -- * Records
     Task (..),
@@ -287,6 +290,26 @@ instance FromField DispatchOutcome where
 instance ToField DispatchOutcome where
     toField = toField . dispatchOutcomeText
 
+data ReviewVerdict = RVPass | RVWarn | RVFail deriving (Show, Eq)
+
+reviewVerdictText :: ReviewVerdict -> Text
+reviewVerdictText = \case
+    RVPass -> "pass"
+    RVWarn -> "warn"
+    RVFail -> "fail"
+
+parseReviewVerdict :: Text -> Maybe ReviewVerdict
+parseReviewVerdict = \case
+    "pass" -> Just RVPass
+    "warn" -> Just RVWarn
+    "fail" -> Just RVFail
+    _ -> Nothing
+
+instance FromField ReviewVerdict where
+    fromField = enumFromField "review verdict" parseReviewVerdict
+instance ToField ReviewVerdict where
+    toField = toField . reviewVerdictText
+
 {- | A row in the @dispatches@ table. Columns kept in the order the
 schema declares them so @FromRow@ lines up with @SELECT *@.
 -}
@@ -310,6 +333,8 @@ data Dispatch = Dispatch
     , dispatchTokensIn :: Maybe Int
     , dispatchTokensOut :: Maybe Int
     , dispatchTokensCacheRead :: Maybe Int
+    , dispatchReviewVerdict :: Maybe ReviewVerdict
+    , dispatchReviewerLogPath :: Maybe Text
     }
     deriving (Show)
 
@@ -317,6 +342,8 @@ instance FromRow Dispatch where
     fromRow =
         Dispatch
             <$> field
+            <*> field
+            <*> field
             <*> field
             <*> field
             <*> field

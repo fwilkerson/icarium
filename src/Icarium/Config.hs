@@ -10,6 +10,7 @@ module Icarium.Config (
     CommandsConfig (..),
     DispatchConfig (..),
     CategoriesConfig (..),
+    ReviewConfig (..),
 
     -- * IO
     loadConfig,
@@ -34,6 +35,7 @@ data Config = Config
     , cfgCommands :: CommandsConfig
     , cfgDispatch :: DispatchConfig
     , cfgCategories :: CategoriesConfig
+    , cfgReview :: Maybe ReviewConfig
     }
     deriving (Show)
 
@@ -64,6 +66,14 @@ data DispatchConfig = DispatchConfig
 data CategoriesConfig = CategoriesConfig
     { catDomains :: [Text]
     , catDisciplines :: [Text]
+    }
+    deriving (Show)
+
+data ReviewConfig = ReviewConfig
+    { rcEnabled :: Bool
+    , rcModel :: Maybe Text
+    , rcMaxAttempts :: Int
+    , rcPromptPath :: Maybe Text
     }
     deriving (Show)
 
@@ -107,6 +117,14 @@ categoriesCodec =
         <$> Toml.arrayOf Toml._Text "domains" .= catDomains
         <*> Toml.arrayOf Toml._Text "disciplines" .= catDisciplines
 
+reviewCodec :: TomlCodec ReviewConfig
+reviewCodec =
+    ReviewConfig
+        <$> Toml.bool "enabled" .= rcEnabled
+        <*> Toml.dioptional (Toml.text "model") .= rcModel
+        <*> (fromMaybe 2 <$> Toml.dioptional (Toml.int "max_attempts")) .= (Just . rcMaxAttempts)
+        <*> Toml.dioptional (Toml.text "prompt_path") .= rcPromptPath
+
 configCodec :: TomlCodec Config
 configCodec =
     Config
@@ -114,6 +132,7 @@ configCodec =
         <*> Toml.table commandsCodec "commands" .= cfgCommands
         <*> Toml.table dispatchCodec "dispatch" .= cfgDispatch
         <*> Toml.table categoriesCodec "categories" .= cfgCategories
+        <*> Toml.dioptional (Toml.table reviewCodec "review") .= cfgReview
 
 -- =============================================================
 -- IO
@@ -171,4 +190,10 @@ defaultConfigText =
     \# `icarium category sync` to apply changes to the DB. Use --prune to\n\
     \# delete categories that have been removed from this list.\n\
     \domains     = [\"core\"]\n\
-    \disciplines = [\"development\"]\n"
+    \disciplines = [\"development\"]\n\
+    \\n\
+    \# [review]\n\
+    \# enabled      = true\n\
+    \# model        = \"claude-sonnet-4-6\"   # defaults to dispatch.model\n\
+    \# max_attempts = 2\n\
+    \# prompt_path  = \".icarium/reviewer.md\" # defaults to built-in prompt\n"

@@ -33,6 +33,7 @@ library
                       Icarium.Dispatch.LogResult
                       Icarium.Dispatch.PostClaude
                       Icarium.Dispatch.Outcome
+                      Icarium.Dispatch.Reviewer
                       Icarium.Dispatch.Tick
                       Icarium.Heartbeat
                       Icarium.Repo.Internal
