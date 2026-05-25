@@ -15,7 +15,7 @@ import Icarium.Config (
     defaultConfigText,
     loadConfig,
  )
-import Icarium.Db (initDb, withDb)
+import Icarium.Db (initDb, withDbReadOnly)
 import Icarium.Types (categoryAxisText)
 
 newtype Options = Options
@@ -55,7 +55,7 @@ run dbPath o = do
 
     -- Seed categories from toml into the fresh DB.
     config <- loadConfig defaultConfigPath >>= either (fatal 2) pure
-    withDb dbPath $ \conn -> do
+    withDbReadOnly dbPath $ \conn -> do
         rpt <- syncCategories conn (cfgCategories config) False
         mapM_
             ( \(ax, n) ->

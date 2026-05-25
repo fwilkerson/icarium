@@ -120,7 +120,8 @@ tests =
         , testCase "ctx cat prints body to stdout" testCtxCat
         , testCase "ctx cat on no-body entry prints empty and exits 0" testCtxCatNoBody
         , testCase "mtime sweep: external body edit is re-indexed" testMtimeSweepReindex
-        , testCase "orphan sweep: stray .md file is removed with warn:" testOrphanRemoval
+        , testCase "orphan sweep: stray .md file moved to trash on sync command" testOrphanRemoval
+        , testCase "orphan sweep: read-only command leaves orphan body file intact" testReadOnlyCommandPreservesOrphan
         , testCase "reindex: rebuilds FTS from DB after body_fts wipe" testReindexRestoresFts
         , testCase "link add ctx references ctx is accepted" testLinkAddCtxReferencesCtx
         , testCase "ctx children lists direct children by edge kind" testCtxChildren
@@ -895,7 +896,7 @@ testCtxCatNoBody = withTempDb $ \db -> do
 
 {- | Write new content to a body file and set its mtime to a far-future
 time so the sweep condition (file_mtime > updated_at) is guaranteed to
-fire on the next command.  The tasks_touch trigger resets updated_at on
+fire on the next sync command.  The tasks_touch trigger resets updated_at on
 every UPDATE, so we cannot rewind it via SQL; bumping the file mtime is
 the reliable alternative.
 -}
@@ -908,15 +909,16 @@ testMtimeSweepReindex = withSystemTempDirectory "icarium-test" $ \dir -> do
     -- external edit with future mtime so sweep always triggers
     writeFile bodyPath "edited xsweep2"
     setModificationTime bodyPath (UTCTime (fromGregorian 2099 1 1) 0)
-    -- any command triggers mtimeSweep
-    _ <- runIcarium db ["task", "list"]
+    -- search triggers withDbSync → mtimeSweep runs and reindexes the edited file
+    _ <- runIcarium db ["search", "xsweep1"]
     -- new content must be findable via FTS
     (code, out, _) <- runIcarium db ["search", "xsweep2"]
     code @?= ExitSuccess
     assertBool "edited body content surfaces in search" ("sweep-test task" `isInfixOf` out)
 
 {- | A .md file placed in bodies/tasks/ with no matching DB row is an
-orphan.  mtimeSweep removes it and emits a warn: line on stderr.
+orphan.  When a sync command runs, the orphan is moved to .trash/ and a
+warn: line is emitted on stderr.  The original path is vacated.
 -}
 testOrphanRemoval :: IO ()
 testOrphanRemoval = withSystemTempDirectory "icarium-test" $ \dir -> do
@@ -926,11 +928,27 @@ testOrphanRemoval = withSystemTempDirectory "icarium-test" $ \dir -> do
     _ <- runIcarium db ["task", "add", "seed task"]
     -- plant a stray file with no DB row
     writeFile orphanFile "orphan content"
-    -- any command triggers orphanScan
-    (_, _, err) <- runIcarium db ["task", "list"]
+    -- search is a sync command; triggers orphanScan
+    (_, _, err) <- runIcarium db ["search", "seed"]
     assertBool "warn: emitted for orphan" ("warn:" `isInfixOf` err)
     gone <- not <$> doesFileExist orphanFile
-    assertBool "orphan file removed" gone
+    assertBool "orphan file moved from original location" gone
+
+{- | A read-only command must NOT trigger mtimeSweep, so an orphan body file
+placed before the command must still be present afterwards.
+-}
+testReadOnlyCommandPreservesOrphan :: IO ()
+testReadOnlyCommandPreservesOrphan = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+        orphanFile = dir </> "bodies" </> "tasks" </> "01ORPHANREAD00000000000000.md"
+    -- seed the DB so that bodies/tasks/ gets created
+    _ <- runIcarium db ["task", "add", "read-only seed task"]
+    -- plant a stray file with no DB row
+    writeFile orphanFile "orphan content"
+    -- task list is a read-only command; must not run orphanScan
+    _ <- runIcarium db ["task", "list"]
+    stillThere <- doesFileExist orphanFile
+    assertBool "orphan file untouched by read-only command" stillThere
 
 {- | After wiping body_fts, search should miss (we pin updated_at to the
 future so mtimeSweep does not auto-repair it).  icarium reindex rebuilds

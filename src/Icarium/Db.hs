@@ -1,7 +1,8 @@
 module Icarium.Db (
     defaultDbPath,
     openDb,
-    withDb,
+    withDbSync,
+    withDbReadOnly,
     initDb,
     dbSchemaVersion,
     migrateDb,
@@ -27,14 +28,21 @@ openDb path = do
     createDirectoryIfMissing True (takeDirectory path)
     open path
 
-{- | Open the DB, run pending migrations, run an action, close the DB.
-Exception-safe; if migration fails the error propagates and the DB is
-left at its original schema version (the migration ran inside a transaction).
+{- | Open the DB, run pending migrations, run the mtime sweep, then the action.
+Use for commands that write to the DB or need FTS accuracy (dispatch run, search, reindex).
 -}
-withDb :: FilePath -> (Connection -> IO a) -> IO a
-withDb path action = bracket (openDb path) close $ \conn -> do
+withDbSync :: FilePath -> (Connection -> IO a) -> IO a
+withDbSync path action = bracket (openDb path) close $ \conn -> do
     migrateDb conn
     mtimeSweep conn path
+    action conn
+
+{- | Open the DB, run pending migrations, then the action — no sweep.
+Use for pure-read commands and write commands that don't need FTS sync.
+-}
+withDbReadOnly :: FilePath -> (Connection -> IO a) -> IO a
+withDbReadOnly path action = bracket (openDb path) close $ \conn -> do
+    migrateDb conn
     action conn
 
 {- | Run all pending migrations against an open connection, in version order.

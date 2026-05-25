@@ -12,9 +12,9 @@ import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Bodies (bodiesDir, ctxBodyPath, persistBody)
+import Icarium.Bodies (bodiesDir, ctxBodyPath, persistBody, readBody)
 import Icarium.Commands.Util
-import Icarium.Db (withDb)
+import Icarium.Db (withDbReadOnly)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
@@ -86,7 +86,7 @@ addP =
         <*> optional (textOption "supersedes" "CONTEXT_ID" "Mark this entry as superseding CONTEXT_ID")
 
 runAdd :: FilePath -> AddOpts -> IO ()
-runAdd db o = withDb db $ \c -> do
+runAdd db o = withDbReadOnly db $ \c -> do
     body <- resolveBody (aBody o)
 
     -- Pre-validate category names and any referenced ids.
@@ -197,7 +197,7 @@ listP =
             )
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDb db $ \c -> do
+runList db o = withDbReadOnly db $ \c -> do
     forM_ (lDomain o) $ \n -> void $ requireCategory c Domain n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let staleFilter
@@ -237,7 +237,7 @@ showP =
         <$> strArgument (metavar "CONTEXT_ID")
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = withDb db $ \c -> do
+runShow db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (sId o))
     mcx <- RCx.getContext c cxid
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
@@ -273,7 +273,7 @@ staleFlag =
         <|> pure Nothing
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
-runUpdate db o = withDb db $ \c -> do
+runUpdate db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (uId o))
     -- Validate categories before any mutation.
     mDomCat <- resolveAxisFlag c Domain (uDomain o)
@@ -306,7 +306,7 @@ rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
-runRm db o = withDb db $ \c -> do
+runRm db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (rId o))
     ok <- RCx.deleteContext c cxid
     if ok
@@ -327,7 +327,7 @@ pathP :: Parser PathOpts
 pathP = PathOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
 
 runPath :: FilePath -> PathOpts -> IO ()
-runPath db o = withDb db $ \c -> do
+runPath db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (pId o))
     TIO.putStrLn (T.pack (ctxBodyPath (bodiesDir db) cxid))
 
@@ -341,13 +341,9 @@ catP :: Parser CatOpts
 catP = CatOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
 
 runCat :: FilePath -> CatOpts -> IO ()
-runCat db o = withDb db $ \c -> do
+runCat db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (catId o))
-    let fp = ctxBodyPath (bodiesDir db) cxid
-    exists <- doesFileExist fp
-    if exists
-        then TIO.putStr =<< TIO.readFile fp
-        else fatal 1 ("body file missing: " <> fp)
+    TIO.putStr =<< readBody (ctxBodyPath (bodiesDir db) cxid)
 
 -- =============================================================
 -- children
@@ -372,7 +368,7 @@ childrenP =
             )
 
 runChildren :: FilePath -> ChildrenOpts -> IO ()
-runChildren db o = withDb db $ \c -> do
+runChildren db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (chId o))
     edges <- RE.ctxChildEdges c cxid (chKind o)
     case edges of
@@ -402,7 +398,7 @@ treeP :: Parser TreeOpts
 treeP = TreeOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
 
 runTree :: FilePath -> TreeOpts -> IO ()
-runTree db o = withDb db $ \c -> do
+runTree db o = withDbReadOnly db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (tId o))
     mcx <- RCx.getContext c cxid
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
@@ -447,7 +443,7 @@ existsP =
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
 
 runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDb db $ \c -> do
+runExists db o = withDbReadOnly db $ \c -> do
     cxs <- RCx.getContextsByPrefix c (exId o)
     case cxs of
         [cx] -> do

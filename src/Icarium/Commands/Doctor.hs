@@ -13,7 +13,7 @@ import Icarium.Config (
     defaultConfigPath,
     loadConfig,
  )
-import Icarium.Db (dbSchemaVersion, withDb)
+import Icarium.Db (dbSchemaVersion, withDbReadOnly)
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Schema (schemaVersion)
@@ -85,7 +85,7 @@ checkSchema dbPath = do
     if not e
         then pure $ Check "schema" (FAIL "no database")
         else do
-            v <- withDb dbPath dbSchemaVersion
+            v <- withDbReadOnly dbPath dbSchemaVersion
             let expected = fromIntegral schemaVersion :: Integer
                 actual = fromIntegral v :: Integer
             pure $
@@ -113,7 +113,7 @@ checkOrphanedDispatches dbPath = do
                 Just cfg -> do
                     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
                     now <- getCurrentTime
-                    withDb dbPath $ \conn -> do
+                    withDbReadOnly dbPath $ \conn -> do
                         open <- RD.listOpenDispatches conn
                         orphans <- filterM (isOrphanedDispatch now staleSec) open
                         pure $

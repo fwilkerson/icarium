@@ -24,7 +24,7 @@ import Icarium.Config (
     defaultConfigPath,
     loadConfig,
  )
-import Icarium.Db (withDb)
+import Icarium.Db (withDbReadOnly)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
 import Icarium.Types
@@ -65,7 +65,7 @@ listP =
             )
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDb db $ \c -> do
+runList db o = withDbReadOnly db $ \c -> do
     cats <- RC.listCategories c (lAxis o)
     case cats of
         [] -> TIO.putStrLn "(no categories)"
@@ -131,7 +131,7 @@ syncCategories conn cfg prune = do
 runSync :: FilePath -> SyncOpts -> IO ()
 runSync db o = do
     config <- loadConfig defaultConfigPath >>= either (fatal 2) pure
-    withDb db $ \conn -> do
+    withDbReadOnly db $ \conn -> do
         rpt <- syncCategories conn (cfgCategories config) (sPrune o)
         forM_ (srInserted rpt) $ \(ax, n) ->
             TIO.putStrLn $ "inserted  " <> categoryAxisText ax <> ":" <> n

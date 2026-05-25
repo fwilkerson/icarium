@@ -9,13 +9,14 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Database.SQLite.Simple (Connection)
 import System.Directory (
+    createDirectoryIfMissing,
     doesDirectoryExist,
     doesFileExist,
     getModificationTime,
     listDirectory,
-    removeFile,
+    renameFile,
  )
-import System.FilePath (dropExtension, takeExtension, (</>))
+import System.FilePath (dropExtension, takeDirectory, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies (bodiesDir, ctxBodyPath, ensureBodiesDirs, taskBodyPath, writeBody)
@@ -34,14 +35,18 @@ utcToSec = floor . utcTimeToPOSIXSeconds
 {- | Check all body files against DB updated_at, re-index stale files,
 create missing files from DB body column, and delete orphan files.
 -}
+trashDir :: FilePath -> FilePath
+trashDir dbPath = takeDirectory dbPath </> ".trash"
+
 mtimeSweep :: Connection -> FilePath -> IO ()
 mtimeSweep conn dbPath = do
     let bodDir = bodiesDir dbPath
+        tDir = trashDir dbPath
     ensureBodiesDirs bodDir
     sweepKind conn bodDir TaskNode
     sweepKind conn bodDir ContextNode
-    orphanScan conn bodDir TaskNode
-    orphanScan conn bodDir ContextNode
+    orphanScan conn bodDir tDir TaskNode
+    orphanScan conn bodDir tDir ContextNode
 
 sweepKind :: Connection -> FilePath -> NodeKind -> IO ()
 sweepKind conn bodDir kind = do
@@ -72,8 +77,8 @@ sweepFile conn kind eid fp updAt = do
                 Fts.indexEntry conn eid kind (fromMaybe "" titleRow) body
         _ -> pure ()
 
-orphanScan :: Connection -> FilePath -> NodeKind -> IO ()
-orphanScan conn bodDir kind = do
+orphanScan :: Connection -> FilePath -> FilePath -> NodeKind -> IO ()
+orphanScan conn bodDir tDir kind = do
     let dir = kindDir bodDir kind
     dirExists <- doesDirectoryExist dir
     when dirExists $ do
@@ -83,9 +88,10 @@ orphanScan conn bodDir kind = do
             let eid = T.pack (dropExtension f)
             exists <- rowExists conn kind eid
             unless exists $ do
+                createDirectoryIfMissing True tDir
                 hPutStrLn stderr $
-                    "warn: orphan body file removed: " ++ f
-                removeFile (dir </> f)
+                    "warn: orphan body file moved to trash: " ++ f ++ " (recoverable from " ++ tDir ++ ")"
+                renameFile (dir </> f) (tDir </> f)
 
 -- =============================================================
 -- Internal helpers

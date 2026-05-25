@@ -9,7 +9,7 @@ import Database.SQLite.Simple (Connection)
 import Options.Applicative
 
 import Icarium.Commands.Util
-import Icarium.Db (withDb)
+import Icarium.Db (withDbSync)
 import Icarium.Render (SearchHitRow (..))
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
@@ -74,7 +74,7 @@ run :: FilePath -> Options -> IO ()
 run db o = do
     when (oTitleOnly o && oBodyOnly o) $
         fatal 1 "--title-only and --body-only are mutually exclusive"
-    withDb db $ \c -> do
+    withDbSync db $ \c -> do
         validateCats c
         let scope
                 | oTitleOnly o = RS.ScopeTitle

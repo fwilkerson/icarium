@@ -13,7 +13,7 @@ import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies (bodiesDir, persistBody, readBody, taskBodyPath)
 import Icarium.Commands.Util
-import Icarium.Db (withDb)
+import Icarium.Db (withDbReadOnly, withDbSync)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
@@ -101,7 +101,7 @@ addP =
         <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
 
 runAdd :: FilePath -> AddOpts -> IO ()
-runAdd db o = withDb db $ \c -> do
+runAdd db o = withDbReadOnly db $ \c -> do
     body <- resolveBody (aBody o)
     unless (aState o `elem` [Idea, Planned, Ready]) $
         fatal 2 "on add: state must be idea | planned | ready"
@@ -177,7 +177,7 @@ defaultActiveStates :: [TaskState]
 defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDb db $ \c -> do
+runList db o = withDbReadOnly db $ \c -> do
     forM_ (lDomain o) $ \n -> void $ requireCategory c Domain n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let effectiveStates
@@ -223,7 +223,7 @@ showP =
         <*> switch (long "prompt" <> help "Render task as an LLM prompt context block")
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = withDb db $ \c -> do
+runShow db o = openDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
     mt <- RT.getTask c tid
     t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
@@ -245,6 +245,8 @@ runShow db o = withDb db $ \c -> do
             utf8 <- detectUtf8
             let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
             TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
+  where
+    openDb = if sPrompt o then withDbSync else withDbReadOnly
 
 -- =============================================================
 -- update
@@ -292,7 +294,7 @@ updateP =
             )
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
-runUpdate db o = withDb db $ \c -> do
+runUpdate db o = withDbReadOnly db $ \c -> do
     when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
     tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
@@ -329,7 +331,7 @@ rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
-runRm db o = withDb db $ \c -> do
+runRm db o = withDbReadOnly db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (rId o))
     ok <- RT.deleteTask c tid
     if ok
@@ -350,7 +352,7 @@ nextP :: Parser NextOpts
 nextP = pure NextOpts
 
 runNext :: FilePath -> NextOpts -> IO ()
-runNext db _ = withDb db $ \c -> do
+runNext db _ = withDbReadOnly db $ \c -> do
     ts <- RT.listTasks c [] True Nothing Nothing
     case ts of
         [] -> exitWith (ExitFailure 1)
@@ -366,7 +368,7 @@ pathP :: Parser PathOpts
 pathP = PathOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runPath :: FilePath -> PathOpts -> IO ()
-runPath db o = withDb db $ \c -> do
+runPath db o = withDbReadOnly db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (pId o))
     TIO.putStrLn (T.pack (taskBodyPath (bodiesDir db) tid))
 
@@ -380,13 +382,9 @@ catP :: Parser CatOpts
 catP = CatOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runCat :: FilePath -> CatOpts -> IO ()
-runCat db o = withDb db $ \c -> do
+runCat db o = withDbReadOnly db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (catId o))
-    let fp = taskBodyPath (bodiesDir db) tid
-    exists <- doesFileExist fp
-    if exists
-        then TIO.putStr =<< TIO.readFile fp
-        else fatal 1 ("body file missing: " <> fp)
+    TIO.putStr =<< readBody (taskBodyPath (bodiesDir db) tid)
 
 -- =============================================================
 -- exists
@@ -404,7 +402,7 @@ existsP =
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
 
 runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDb db $ \c -> do
+runExists db o = withDbReadOnly db $ \c -> do
     ts <- RT.getTasksByPrefix c (exId o)
     case ts of
         [t] -> do

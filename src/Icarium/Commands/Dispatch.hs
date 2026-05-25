@@ -33,7 +33,7 @@ import Icarium.Config (
     defaultConfigPath,
     loadConfig,
  )
-import Icarium.Db (parseDbTime, withDb)
+import Icarium.Db (parseDbTime, withDbReadOnly, withDbSync)
 import Icarium.Dispatch qualified as D
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Render qualified as Render
@@ -118,7 +118,7 @@ runRun db o = do
             Right c -> pure c
     case rTaskId o of
         Just rawId ->
-            withDb db $ \c -> do
+            withDbSync db $ \c -> do
                 tid <- resolveOrFatal (RT.resolveTaskId c rawId)
                 mt <- RT.getTask c tid
                 case mt of
@@ -149,7 +149,7 @@ runRun db o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
-            withDb db $ \conn -> do
+            withDbSync db $ \conn -> do
                 let ctx =
                         DrainCtx
                             { dctxDb = db
@@ -320,7 +320,7 @@ outcomeReader = eitherReader $ \s ->
         Nothing -> Left ("invalid outcome: " <> s)
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDb db $ \c -> do
+runList db o = withDbReadOnly db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <- RD.listDispatches c mTaskId
     let filtered0 = case lOutcome o of
@@ -365,7 +365,7 @@ showP =
         <$> strArgument (metavar "DISPATCH_ID")
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = withDb db $ \c -> do
+runShow db o = withDbReadOnly db $ \c -> do
     did <- resolveOrFatal (RD.resolveDispatchId c (sId o))
     md <- RD.getDispatch c did
     case md of
@@ -410,7 +410,7 @@ logsP =
             )
 
 runLogs :: FilePath -> LogsOpts -> IO ()
-runLogs db o = withDb db $ \c -> do
+runLogs db o = withDbReadOnly db $ \c -> do
     did <- resolveOrFatal (RD.resolveDispatchId c (gId o))
     md <- RD.getDispatch c did
     case md of
@@ -458,7 +458,7 @@ runRecover db o = do
             Left e -> fatal 2 ("config parse error:\n" <> e)
             Right c -> pure c
     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
-    withDb db $ \c -> do
+    withDbReadOnly db $ \c -> do
         open <- case recDispatchId o of
             Just raw -> do
                 did <- resolveOrFatal (RD.resolveDispatchId c raw)

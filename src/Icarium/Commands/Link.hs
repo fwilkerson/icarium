@@ -7,7 +7,7 @@ import Data.Text.IO qualified as TIO
 import Options.Applicative
 
 import Icarium.Commands.Util
-import Icarium.Db (withDb)
+import Icarium.Db (withDbReadOnly)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Types
@@ -81,7 +81,7 @@ expectedShape DerivedFrom = "context -> (task|context)"
 expectedShape Supersedes = "context -> context"
 
 runAdd :: FilePath -> AddOpts -> IO ()
-runAdd db o = withDb db $ \c -> do
+runAdd db o = withDbReadOnly db $ \c -> do
     (srcKind, srcId) <- resolveNode c (aSrc o)
     (dstKind, dstId) <- resolveNode c (aDst o)
     case checkTyping (aKind o) srcKind dstKind of
@@ -117,7 +117,7 @@ listP =
             )
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDb db $ \c -> do
+runList db o = withDbReadOnly db $ \c -> do
     mFrom <- traverse (fmap snd . resolveNode c) (lFrom o)
     mTo <- traverse (fmap snd . resolveNode c) (lTo o)
     es <- RE.listEdges c mFrom mTo (lKind o)
@@ -137,7 +137,7 @@ rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "EDGE_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
-runRm db o = withDb db $ \c -> do
+runRm db o = withDbReadOnly db $ \c -> do
     eid <- resolveOrFatal (RE.resolveEdgeId c (rId o))
     ok <- RE.deleteEdge c eid
     if ok
