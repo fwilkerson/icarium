@@ -1,4 +1,4 @@
--- icarium schema (draft — review before implementation)
+-- icarium schema
 -- SQLite; all IDs are ULID TEXT; all timestamps are ISO8601 TEXT in UTC.
 
 PRAGMA foreign_keys = ON;
@@ -19,11 +19,14 @@ CREATE TABLE tasks (
     -- the agent, then transitions to 'done' or 'blocked' after gates pass.
     priority    INTEGER,                             -- NULL = default
     block_reason TEXT,                               -- structured text when state='blocked'
+    no_commit   INTEGER NOT NULL DEFAULT 0 CHECK (no_commit IN (0,1)),
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE knowledge (
+CREATE INDEX tasks_state_idx ON tasks(state);
+
+CREATE TABLE context (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     body        TEXT NOT NULL DEFAULT '',            -- markdown
@@ -49,18 +52,18 @@ CREATE TABLE task_categories (
     PRIMARY KEY (task_id, category_id)
 );
 
-CREATE TABLE knowledge_categories (
-    knowledge_id TEXT NOT NULL REFERENCES knowledge(id) ON DELETE CASCADE,
-    category_id  TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
-    PRIMARY KEY (knowledge_id, category_id)
+CREATE TABLE context_categories (
+    context_id  TEXT NOT NULL REFERENCES context(id) ON DELETE CASCADE,
+    category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    PRIMARY KEY (context_id, category_id)
 );
 
 -- =============================================================
 -- Typed edges between nodes
 --   depends_on   : task -> task
---   references   : task -> knowledge
---   derived_from : knowledge -> task | knowledge
---   supersedes   : knowledge -> knowledge
+--   references   : task -> context | context -> context
+--   derived_from : context -> task | context
+--   supersedes   : context -> context
 -- Kind/endpoint rules enforced by CHECK + triggers (below).
 -- =============================================================
 
@@ -69,27 +72,28 @@ CREATE TABLE edges (
     kind       TEXT NOT NULL
                CHECK (kind IN ('depends_on','references',
                                'derived_from','supersedes')),
-    src_kind   TEXT NOT NULL CHECK (src_kind IN ('task','knowledge')),
+    src_kind   TEXT NOT NULL CHECK (src_kind IN ('task','context')),
     src_id     TEXT NOT NULL,
-    dst_kind   TEXT NOT NULL CHECK (dst_kind IN ('task','knowledge')),
+    dst_kind   TEXT NOT NULL CHECK (dst_kind IN ('task','context')),
     dst_id     TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (kind, src_kind, src_id, dst_kind, dst_id),
 
     -- Endpoint typing rules per edge kind
     CHECK (
-        (kind = 'depends_on'   AND src_kind = 'task'      AND dst_kind = 'task') OR
-        (kind = 'references'   AND src_kind = 'task'      AND dst_kind = 'knowledge') OR
-        (kind = 'derived_from' AND src_kind = 'knowledge' AND dst_kind IN ('task','knowledge')) OR
-        (kind = 'supersedes'   AND src_kind = 'knowledge' AND dst_kind = 'knowledge')
+        (kind = 'depends_on'   AND src_kind = 'task'    AND dst_kind = 'task') OR
+        (kind = 'references'   AND src_kind = 'task'    AND dst_kind = 'context') OR
+        (kind = 'references'   AND src_kind = 'context' AND dst_kind = 'context') OR
+        (kind = 'derived_from' AND src_kind = 'context' AND dst_kind IN ('task','context')) OR
+        (kind = 'supersedes'   AND src_kind = 'context' AND dst_kind = 'context')
     ),
 
     -- No self-edges
     CHECK (NOT (src_kind = dst_kind AND src_id = dst_id))
 );
 
-CREATE INDEX edges_src_idx ON edges(src_kind, src_id);
-CREATE INDEX edges_dst_idx ON edges(dst_kind, dst_id);
+CREATE INDEX edges_src_idx  ON edges(src_kind, src_id);
+CREATE INDEX edges_dst_idx  ON edges(dst_kind, dst_id);
 CREATE INDEX edges_kind_idx ON edges(kind);
 
 -- Referential integrity for polymorphic endpoints (SQLite can't express
@@ -102,12 +106,12 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE id = NEW.src_id);
 END;
 
-CREATE TRIGGER edges_src_knowledge_exists
+CREATE TRIGGER edges_src_context_exists
 BEFORE INSERT ON edges
-WHEN NEW.src_kind = 'knowledge'
+WHEN NEW.src_kind = 'context'
 BEGIN
-    SELECT RAISE(ABORT, 'edge src knowledge missing')
-    WHERE NOT EXISTS (SELECT 1 FROM knowledge WHERE id = NEW.src_id);
+    SELECT RAISE(ABORT, 'edge src context missing')
+    WHERE NOT EXISTS (SELECT 1 FROM context WHERE id = NEW.src_id);
 END;
 
 CREATE TRIGGER edges_dst_task_exists
@@ -118,12 +122,12 @@ BEGIN
     WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE id = NEW.dst_id);
 END;
 
-CREATE TRIGGER edges_dst_knowledge_exists
+CREATE TRIGGER edges_dst_context_exists
 BEFORE INSERT ON edges
-WHEN NEW.dst_kind = 'knowledge'
+WHEN NEW.dst_kind = 'context'
 BEGIN
-    SELECT RAISE(ABORT, 'edge dst knowledge missing')
-    WHERE NOT EXISTS (SELECT 1 FROM knowledge WHERE id = NEW.dst_id);
+    SELECT RAISE(ABORT, 'edge dst context missing')
+    WHERE NOT EXISTS (SELECT 1 FROM context WHERE id = NEW.dst_id);
 END;
 
 -- Cascade delete: when a node goes away, drop its edges on either side.
@@ -134,11 +138,11 @@ BEGIN
                          OR (dst_kind='task' AND dst_id=OLD.id);
 END;
 
-CREATE TRIGGER edges_cascade_knowledge_delete
-AFTER DELETE ON knowledge
+CREATE TRIGGER edges_cascade_context_delete
+AFTER DELETE ON context
 BEGIN
-    DELETE FROM edges WHERE (src_kind='knowledge' AND src_id=OLD.id)
-                         OR (dst_kind='knowledge' AND dst_id=OLD.id);
+    DELETE FROM edges WHERE (src_kind='context' AND src_id=OLD.id)
+                         OR (dst_kind='context' AND dst_id=OLD.id);
 END;
 
 -- =============================================================
@@ -147,27 +151,44 @@ END;
 -- =============================================================
 
 CREATE TABLE dispatches (
-    id             TEXT PRIMARY KEY,                 -- ULID; also used as branch suffix
-    task_id        TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    branch         TEXT NOT NULL,                    -- e.g. 'dispatch/<ulid>'
-    base_branch    TEXT NOT NULL,                    -- integration branch at cut time
-    base_sha       TEXT NOT NULL,                    -- HEAD sha of base at cut
-    pid            INTEGER,
-    model          TEXT NOT NULL,
-    effort         TEXT NOT NULL CHECK (effort IN ('low','medium','high','xhigh','max')),
-    started_at     TEXT NOT NULL DEFAULT (datetime('now')),
-    heartbeat_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    ended_at       TEXT,
-    outcome        TEXT CHECK (outcome IN ('success','failure','interrupted')),
-    merge_sha      TEXT,                             -- FF-merge sha on success
-    last_commit    TEXT,                             -- latest commit on dispatch branch
-    notes          TEXT,                             -- freeform: failure reason, etc.
-    log_path       TEXT                              -- path to jsonl event log
+    id                TEXT PRIMARY KEY,                 -- ULID; also used as branch suffix
+    task_id           TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    branch            TEXT NOT NULL,                    -- e.g. 'dispatch/<ulid>'
+    base_branch       TEXT NOT NULL,                    -- integration branch at cut time
+    base_sha          TEXT NOT NULL,                    -- HEAD sha of base at cut
+    pid               INTEGER,
+    model             TEXT NOT NULL,
+    effort            TEXT NOT NULL CHECK (effort IN ('low','medium','high','xhigh','max')),
+    started_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    heartbeat_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at          TEXT,
+    outcome           TEXT CHECK (outcome IN ('success','failure','interrupted')),
+    merge_sha         TEXT,                             -- FF-merge sha on success
+    last_commit       TEXT,                             -- latest commit on dispatch branch
+    notes             TEXT,                             -- freeform: failure reason, etc.
+    log_path          TEXT,                             -- path to jsonl event log
+    tokens_in         INTEGER,
+    tokens_out        INTEGER,
+    tokens_cache_read INTEGER,
+    review_verdict    TEXT
+                      CHECK (review_verdict IS NULL OR review_verdict IN ('pass','warn','fail')),
+    reviewer_log_path TEXT
 );
 
 CREATE INDEX dispatches_task_idx      ON dispatches(task_id);
 CREATE INDEX dispatches_open_idx      ON dispatches(outcome) WHERE outcome IS NULL;
 CREATE INDEX dispatches_heartbeat_idx ON dispatches(heartbeat_at) WHERE outcome IS NULL;
+
+-- =============================================================
+-- Full-text search
+-- =============================================================
+
+CREATE VIRTUAL TABLE body_fts USING fts5(
+    id    UNINDEXED,
+    kind  UNINDEXED,
+    title,
+    body
+);
 
 -- =============================================================
 -- Views
@@ -218,12 +239,10 @@ SELECT *
 FROM dispatches
 WHERE outcome IS NULL;
 
--- Knowledge marked stale OR derived from anything stale/superseded.
--- The `stale` column is the persisted flag; a separate recompute routine
--- (triggered by supersedes inserts or source updates) sets it.
-CREATE VIEW stale_knowledge AS
+-- Context entries marked stale.
+CREATE VIEW stale_context AS
 SELECT k.*
-FROM knowledge k
+FROM context k
 WHERE k.stale = 1;
 
 -- =============================================================
@@ -235,7 +254,7 @@ BEGIN
     UPDATE tasks SET updated_at = datetime('now') WHERE id = NEW.id;
 END;
 
-CREATE TRIGGER knowledge_touch AFTER UPDATE ON knowledge
+CREATE TRIGGER context_touch AFTER UPDATE ON context
 BEGIN
-    UPDATE knowledge SET updated_at = datetime('now') WHERE id = NEW.id;
+    UPDATE context SET updated_at = datetime('now') WHERE id = NEW.id;
 END;

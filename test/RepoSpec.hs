@@ -26,6 +26,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Search (ParsedQuery (..), Term (..), parseQuery)
 import Icarium.Repo.Search qualified as RS
 import Icarium.Repo.Task qualified as RT
+import Icarium.Schema (schemaVersion)
 import Icarium.Types
 
 import TestHelpers
@@ -50,12 +51,12 @@ tests =
             ]
         , testGroup
             "schema"
-            [ testCase "applying embedded schema produces user_version = 1 with expected tables" testInitialSchema
+            [ testCase "applying embedded schema produces user_version = schemaVersion with expected tables" testInitialSchema
             , testCase "deleting a context entry cascades to context_categories rows" testContextCategoriesCascade
             ]
         , testGroup
             "migrations"
-            [ testCase "v1 DB advances to latest version after migrateDb" testMigrateAdvances
+            [ testCase "base schema is already at schemaVersion; migrateDb is idempotent" testMigrateAdvances
             , testCase "bad SQL rolls back; user_version unchanged" testMigrateBadSqlRollback
             ]
         , testGroup
@@ -298,7 +299,7 @@ testStaleRef = withTestDb $ \c -> do
 testInitialSchema :: IO ()
 testInitialSchema = withBaseTestDb $ \conn -> do
     v <- dbSchemaVersion conn
-    v @?= (1 :: Int64)
+    v @?= fromIntegral schemaVersion
     tableRows <-
         query_
             conn
@@ -306,14 +307,12 @@ testInitialSchema = withBaseTestDb $ \conn -> do
             IO [Only Text]
     let tables = map (\(Only n) -> n) tableRows
     assertBool "tasks table exists" ("tasks" `elem` tables)
-    -- Baseline schema is v1; the rename to `context` happens in migration 0005,
-    -- so at v1 the original `knowledge` / `knowledge_categories` names apply.
-    assertBool "knowledge table exists" ("knowledge" `elem` tables)
+    assertBool "context table exists" ("context" `elem` tables)
     assertBool "categories table exists" ("categories" `elem` tables)
     assertBool "edges table exists" ("edges" `elem` tables)
     assertBool "dispatches table exists" ("dispatches" `elem` tables)
     assertBool "task_categories table exists" ("task_categories" `elem` tables)
-    assertBool "knowledge_categories table exists" ("knowledge_categories" `elem` tables)
+    assertBool "context_categories table exists" ("context_categories" `elem` tables)
 
 testContextCategoriesCascade :: IO ()
 testContextCategoriesCascade = withTestDb $ \conn -> do
@@ -333,10 +332,10 @@ testContextCategoriesCascade = withTestDb $ \conn -> do
 testMigrateAdvances :: IO ()
 testMigrateAdvances = withBaseTestDb $ \conn -> do
     v0 <- dbSchemaVersion conn
-    v0 @?= 1
+    v0 @?= fromIntegral schemaVersion
     migrateDb conn
     v1 <- dbSchemaVersion conn
-    assertBool "version advanced past 1 after migrateDb" (v1 > 1)
+    v1 @?= fromIntegral schemaVersion
 
 testMigrateBadSqlRollback :: IO ()
 testMigrateBadSqlRollback = withBaseTestDb $ \conn -> do

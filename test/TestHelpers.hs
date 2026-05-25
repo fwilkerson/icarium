@@ -31,7 +31,7 @@ withTestDb act = bracket (open ":memory:") close $ \conn -> do
     migrateDb conn
     act conn
 
--- | In-memory DB at the base schema only (user_version = 1, no migrations).
+-- | In-memory DB at the base schema only (user_version = schemaVersion, no incremental migrations).
 withBaseTestDb :: (Connection -> IO a) -> IO a
 withBaseTestDb act = bracket (open ":memory:") close $ \conn -> do
     applySchema conn
