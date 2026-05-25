@@ -6,7 +6,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute, open, query_)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
@@ -26,7 +26,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Search (ParsedQuery (..), Term (..), parseQuery)
 import Icarium.Repo.Search qualified as RS
 import Icarium.Repo.Task qualified as RT
-import Icarium.Schema (schemaVersion)
+import Icarium.Schema (execSql, schemaSql, schemaVersion)
 import Icarium.Types
 
 import TestHelpers
@@ -58,6 +58,7 @@ tests =
             "migrations"
             [ testCase "base schema is already at schemaVersion; migrateDb is idempotent" testMigrateAdvances
             , testCase "bad SQL rolls back; user_version unchanged" testMigrateBadSqlRollback
+            , testCase "user_version=0 with existing tables: stamps schemaVersion, no DDL re-run" testMigrateVersionZeroWithSchema
             ]
         , testGroup
             "dispatch token columns"
@@ -345,6 +346,20 @@ testMigrateBadSqlRollback = withBaseTestDb $ \conn -> do
     assertBool "bad migration should throw" (either (const True) (const False) result)
     v1 <- dbSchemaVersion conn
     v1 @?= v0
+
+-- Simulates a DB created by an external restore script: schema applied but
+-- user_version left at 0 (SQLite default). migrateDb should stamp the version
+-- without re-running CREATE TABLE (which would fail with "table already exists").
+testMigrateVersionZeroWithSchema :: IO ()
+testMigrateVersionZeroWithSchema = do
+    conn <- open ":memory:"
+    execSql conn schemaSql
+    v0 <- dbSchemaVersion conn
+    v0 @?= 0
+    migrateDb conn
+    v1 <- dbSchemaVersion conn
+    v1 @?= fromIntegral schemaVersion
+    close conn
 
 -- =============================================================
 -- resolveDispatchId tests

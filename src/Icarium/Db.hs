@@ -10,11 +10,13 @@ module Icarium.Db (
 ) where
 
 import Control.Exception (bracket)
+import Control.Monad (unless, when)
 import Data.Int (Int64)
-import Database.SQLite.Simple (Connection, Only (..), close, open, query_)
+import Data.Text qualified as T
+import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute_, open, query_)
 import Icarium.Bodies.Sweep (mtimeSweep)
 import Icarium.Migrations (Migration (..), migrations)
-import Icarium.Schema (applySchema)
+import Icarium.Schema (applySchema, schemaVersion)
 import Icarium.Time (parseDbTime)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory, (</>))
@@ -51,9 +53,22 @@ already-current DB.
 Re-reads the schema version after each step so a single migration that
 jumps multiple versions (e.g. applySchema stamping schemaVersion on a
 fresh DB) does not cause subsequent incremental migrations to run.
+
+Special case: when @user_version = 0@ but the @tasks@ table already exists,
+the DB was created externally (e.g. a restore script applying spec/schema.sql
+directly). Stamp the current schema version and skip migration 1 rather than
+letting it fail with "table tasks already exists".
 -}
 migrateDb :: Connection -> IO ()
-migrateDb conn = go
+migrateDb conn = do
+    v <- dbSchemaVersion conn
+    when (v == 0) $ do
+        rows <- query_ conn "SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'" :: IO [Only T.Text]
+        unless (null rows) $
+            execute_ conn $
+                Query $
+                    "PRAGMA user_version = " <> T.pack (show schemaVersion)
+    go
   where
     go = do
         current <- fromIntegral <$> dbSchemaVersion conn

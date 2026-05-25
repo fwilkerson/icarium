@@ -1,11 +1,13 @@
 module CliSpec (tests) where
 
+import Control.Exception (bracket)
 import Control.Monad (when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
 import Database.SQLite.Simple (Query (..), close, execute, execute_, open)
+import Icarium.Schema (execSql, schemaSql)
 import System.Directory (doesFileExist, makeAbsolute, setModificationTime)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -130,6 +132,7 @@ tests =
         , testCase "task exists --verbose prints full id on match" testTaskExistsVerbose
         , testCase "ctx exists: found exits 0, not-found exits 1, ambiguous exits 2" testCtxExists
         , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
+        , testCase "ctx list on externally-created DB (user_version=0) exits 0" testCtxListOnExternalDb
         ]
 
 testVersion :: IO ()
@@ -1151,3 +1154,13 @@ testCtxExistsVerbose = withTempDb $ \db -> do
     (code, out, _) <- runIcarium db ["ctx", "exists", "--verbose", take 10 cxid]
     code @?= ExitSuccess
     assertBool "verbose output contains full id" (cxid `isInfixOf` out)
+
+-- Simulate an externally-created DB: spec/schema.sql applied directly without
+-- setting user_version, so SQLite leaves it at 0. migrateDb must stamp the
+-- version instead of re-running CREATE TABLE (which would fail).
+testCtxListOnExternalDb :: IO ()
+testCtxListOnExternalDb = withSystemTempDirectory "icarium-extdb" $ \dir -> do
+    let dbPath = dir </> "external.db"
+    bracket (open dbPath) close $ \conn -> execSql conn schemaSql
+    (code, _, _) <- runIcarium dbPath ["ctx", "list"]
+    code @?= ExitSuccess
