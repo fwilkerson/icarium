@@ -21,3 +21,9 @@ log_retention_runs       = 25
 [categories]
 domains     = ["cli", "dispatch", "storage", "workflow"]
 disciplines = ["haskell", "ops", "refinement"]
+
+[review]
+enabled      = true
+model        = "claude-sonnet-4-6"
+max_attempts = 2
+prompt_path  = ".icarium/reviewer.md"
