@@ -167,7 +167,7 @@ setReviewInfo conn did verdict reviewerLogPath =
         (verdict, pack reviewerLogPath, did)
 
 {- | Log paths for dispatches outside the N most recent by started_at DESC.
-Only returns paths that are non-NULL in the DB.
+Includes both worker and reviewer log paths. Only returns non-NULL entries.
 -}
 logPathsOutsideRetention :: Connection -> Int -> IO [FilePath]
 logPathsOutsideRetention conn n = do
@@ -175,13 +175,12 @@ logPathsOutsideRetention conn n = do
         query
             conn
             ( Query
-                "SELECT log_path FROM dispatches \
-                \WHERE log_path IS NOT NULL \
+                "SELECT log_path, reviewer_log_path FROM dispatches \
                 \ORDER BY started_at DESC \
                 \LIMIT -1 OFFSET ?"
             )
             (Only n)
-    pure [unpack lp | Only lp <- rows]
+    pure [unpack p | (mW, mR) <- rows, Just p <- [mW, mR]]
 
 -- | Terminal update: outcome, ended_at, optional merge sha, optional notes.
 finishDispatch ::
