@@ -44,7 +44,7 @@ minCfg :: Config
 minCfg =
     Config
         { cfgProject = ProjectConfig{pcIntegrationBranch = "main"}
-        , cfgCommands = CommandsConfig{ccBuild = "true", ccTest = "true"}
+        , cfgCommands = Just CommandsConfig{ccBuild = "true", ccTest = "true"}
         , cfgDispatch =
             DispatchConfig
                 { dcModel = "claude-sonnet-4-6"

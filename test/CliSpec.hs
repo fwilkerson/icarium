@@ -133,6 +133,7 @@ tests =
         , testCase "ctx exists: found exits 0, not-found exits 1, ambiguous exits 2" testCtxExists
         , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
         , testCase "ctx list on externally-created DB (user_version=0) exits 0" testCtxListOnExternalDb
+        , testCase "doctor: no [commands] section does not FAIL config" testDoctorNoCommandsSection
         ]
 
 testVersion :: IO ()
@@ -1164,3 +1165,31 @@ testCtxListOnExternalDb = withSystemTempDirectory "icarium-extdb" $ \dir -> do
     bracket (open dbPath) close $ \conn -> execSql conn schemaSql
     (code, _, _) <- runIcarium dbPath ["ctx", "list"]
     code @?= ExitSuccess
+
+noCommandsIcariumToml :: String
+noCommandsIcariumToml =
+    unlines
+        [ "[project]"
+        , "integration_branch = \"main\""
+        , ""
+        , "[dispatch]"
+        , "model  = \"claude-sonnet-4-6\""
+        , "effort = \"high\""
+        , "tools = []"
+        , "allowed_tools = []"
+        , "scratch_dir = \".icarium/scratch\""
+        , "max_minutes_per_dispatch = 30"
+        , "heartbeat_stale_seconds  = 300"
+        , "log_retention_runs       = 25"
+        , ""
+        , "[categories]"
+        , "domains     = [\"core\"]"
+        , "disciplines = [\"development\"]"
+        ]
+
+testDoctorNoCommandsSection :: IO ()
+testDoctorNoCommandsSection = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") noCommandsIcariumToml
+    (_, out, _) <- runIcariumIn dir db ["doctor"]
+    assertBool "config check passes with no [commands] section" (not ("FAIL  config" `isInfixOf` out))

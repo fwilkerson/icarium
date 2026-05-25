@@ -81,7 +81,6 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
         base = dxBase dx
         ret = dcLogRetentionRuns (cfgDispatch cfg)
         maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
-        cc = cfgCommands cfg
         finish o mSha notes =
             finishWith
                 dx
@@ -124,6 +123,7 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
                 liftIO $ case mBranchSha of
                     Right sha -> RD.setLastCommit conn did sha
                     Left _ -> pure ()
+                cc <- maybe (throwE "no [commands] section configured") pure (cfgCommands cfg)
                 liftIO (runGate (ccBuild cc)) >>= either throwE pure
                 liftIO (runGate (ccTest cc)) >>= either throwE pure
                 pure (Just ())

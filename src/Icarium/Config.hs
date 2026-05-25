@@ -32,7 +32,7 @@ import Icarium.Types (Effort, effortText, parseEffort)
 
 data Config = Config
     { cfgProject :: ProjectConfig
-    , cfgCommands :: CommandsConfig
+    , cfgCommands :: Maybe CommandsConfig
     , cfgDispatch :: DispatchConfig
     , cfgCategories :: CategoriesConfig
     , cfgReview :: Maybe ReviewConfig
@@ -129,7 +129,7 @@ configCodec :: TomlCodec Config
 configCodec =
     Config
         <$> Toml.table projectCodec "project" .= cfgProject
-        <*> Toml.table commandsCodec "commands" .= cfgCommands
+        <*> Toml.dioptional (Toml.table commandsCodec "commands") .= cfgCommands
         <*> Toml.table dispatchCodec "dispatch" .= cfgDispatch
         <*> Toml.table categoriesCodec "categories" .= cfgCategories
         <*> Toml.dioptional (Toml.table reviewCodec "review") .= cfgReview

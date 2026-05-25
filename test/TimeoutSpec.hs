@@ -115,7 +115,7 @@ fakeConfig :: Config
 fakeConfig =
     Config
         { cfgProject = ProjectConfig{pcIntegrationBranch = "main"}
-        , cfgCommands = CommandsConfig{ccBuild = "", ccTest = ""}
+        , cfgCommands = Just CommandsConfig{ccBuild = "", ccTest = ""}
         , cfgDispatch =
             DispatchConfig
                 { dcModel = "test"
