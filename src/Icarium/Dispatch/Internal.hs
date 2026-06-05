@@ -195,6 +195,7 @@ doRealAttempt conn req attempt mFindings = do
         dx =
             DispatchCtx
                 { dxConn = conn
+                , dxDbPath = dbPath
                 , dxDid = did
                 , dxBranch = branch
                 , dxBase = base

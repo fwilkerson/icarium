@@ -93,6 +93,7 @@ testTimeoutOutcome = withTestRepo $ \dir -> withTestDb $ \conn -> withCwdLock $ 
     let dx =
             DispatchCtx
                 { dxConn = conn
+                , dxDbPath = ":memory:"
                 , dxDid = did
                 , dxBranch = "dispatch/" <> did
                 , dxBase = "main"

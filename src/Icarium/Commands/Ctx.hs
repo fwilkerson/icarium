@@ -12,9 +12,10 @@ import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Bodies (bodiesDir, ctxBodyPath, persistBody, readBody)
+import Icarium.Bodies (bodiesDir, ctxBodyPath, readBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDbReadOnly)
+import Icarium.Node (createContextWithBody)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
@@ -107,9 +108,10 @@ runAdd db o = withDbReadOnly db $ \c -> do
     -- Auto-derive from ICARIUM_TASK_ID when no --derived-from was given.
     autoDerived <- autoDeriveDeps c (aDerivedFrom o) mTaskId
 
-    cxid <-
-        RCx.insertContext
+    (cxid, fp) <-
+        createContextWithBody
             c
+            db
             RCx.NewContext
                 { RCx.ncTitle = aTitle o
                 , RCx.ncBody = body
@@ -122,7 +124,6 @@ runAdd db o = withDbReadOnly db $ \c -> do
         Just target ->
             void $ RE.insertEdge c Supersedes ContextNode cxid ContextNode target
         Nothing -> pure ()
-    fp <- persistBody db ContextNode cxid body
     TIO.putStrLn cxid
     TIO.putStrLn (T.pack fp)
     when (T.null body) $ do

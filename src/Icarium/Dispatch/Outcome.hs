@@ -19,6 +19,7 @@ import Icarium.Types
 
 data DispatchCtx = DispatchCtx
     { dxConn :: Connection
+    , dxDbPath :: FilePath
     , dxDid :: Text
     , dxBranch :: Text
     , dxBase :: Text

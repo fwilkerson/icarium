@@ -23,6 +23,7 @@ import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), Re
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
 import Icarium.Dispatch.Reviewer (ReviewResult (..), loadReviewerPrompt, runReviewer)
 import Icarium.Git qualified as Git
+import Icarium.Node (createContextWithBody)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
@@ -76,6 +77,7 @@ handlePostClaudeImpl ::
     IO PostClaudeResult
 handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
     let conn = dxConn dx
+        db = dxDbPath dx
         did = dxDid dx
         branch = dxBranch dx
         base = dxBase dx
@@ -135,10 +137,11 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
         Right Nothing ->
             PCDone <$> finish OSuccess Nothing "no-commit task"
         Right (Just ()) ->
-            runReviewThenMerge conn cfg mTask finish did branch base logPath maxMins baseSha
+            runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins baseSha
 
 runReviewThenMerge ::
     Connection ->
+    FilePath ->
     Config ->
     Maybe Task ->
     (DispatchOutcome -> Maybe Text -> Text -> IO DispatchResult) ->
@@ -149,7 +152,7 @@ runReviewThenMerge ::
     Int ->
     Text ->
     IO PostClaudeResult
-runReviewThenMerge conn cfg mTask finish did branch base logPath maxMins baseSha = do
+runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins baseSha = do
     let activeReview = do
             task <- mTask
             rc <- cfgReview cfg
@@ -186,7 +189,7 @@ runReviewThenMerge conn cfg mTask finish did branch base logPath maxMins baseSha
                     case mReviewResult of
                         Just (task, rr) | rrVerdict rr == RVWarn -> do
                             cats <- RC.taskCategoriesFor conn (taskId task)
-                            writeWarnContextEntry conn task cats (rrFindings rr)
+                            writeWarnContextEntry conn db task cats (rrFindings rr)
                         _ -> pure ()
                     pure (PCDone dr)
   where
@@ -197,11 +200,12 @@ runReviewThenMerge conn cfg mTask finish did branch base logPath maxMins baseSha
         liftIO (void (Git.deleteBranch branch))
         either (const Nothing) Just <$> liftIO (Git.revParse base)
 
-writeWarnContextEntry :: Connection -> Task -> [Category] -> Text -> IO ()
-writeWarnContextEntry conn task cats findings = do
-    cid <-
-        RCx.insertContext
+writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> Text -> IO ()
+writeWarnContextEntry conn db task cats findings = do
+    (cid, _) <-
+        createContextWithBody
             conn
+            db
             RCx.NewContext
                 { RCx.ncTitle = "reviewer warn: " <> taskTitle task
                 , RCx.ncBody = findings

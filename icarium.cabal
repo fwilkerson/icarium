@@ -36,6 +36,7 @@ library
                       Icarium.Dispatch.Reviewer
                       Icarium.Dispatch.Tick
                       Icarium.Heartbeat
+                      Icarium.Node
                       Icarium.Repo.Internal
                       Icarium.Repo.Task
                       Icarium.Repo.Context
@@ -96,6 +97,7 @@ test-suite icarium-test
                       GuardSpec
                       HeartbeatSpec
                       LogResultSpec
+                      NodeSpec
                       PostClaudeSpec
                       RenderSpec
                       RepoSpec

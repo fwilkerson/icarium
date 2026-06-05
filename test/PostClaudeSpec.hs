@@ -124,6 +124,7 @@ testHandlePostClaudeFailureCheckpoints =
                 let dx =
                         DispatchCtx
                             { dxConn = conn
+                            , dxDbPath = ":memory:"
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
@@ -182,6 +183,7 @@ testFinishWithWipCheckpoint =
                 let dx =
                         DispatchCtx
                             { dxConn = conn
+                            , dxDbPath = ":memory:"
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
@@ -241,6 +243,7 @@ testNoCommitAgentCommittedAnyway =
                 let dx =
                         DispatchCtx
                             { dxConn = conn
+                            , dxDbPath = ":memory:"
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"

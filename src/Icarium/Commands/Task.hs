@@ -11,9 +11,10 @@ import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Bodies (bodiesDir, persistBody, readBody, taskBodyPath)
+import Icarium.Bodies (bodiesDir, readBody, taskBodyPath)
 import Icarium.Commands.Util
 import Icarium.Db (withDbReadOnly, withDbSync)
+import Icarium.Node (createTaskWithBody)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
@@ -112,9 +113,10 @@ runAdd db o = withDbReadOnly db $ \c -> do
     depIds <- mapM (requireTask c) (aDependsOn o)
     refIds <- mapM (requireContext c) (aReferences o)
 
-    tid <-
-        RT.insertTask
+    (tid, fp) <-
+        createTaskWithBody
             c
+            db
             RT.NewTask
                 { RT.ntTitle = aTitle o
                 , RT.ntBody = body
@@ -128,7 +130,6 @@ runAdd db o = withDbReadOnly db $ \c -> do
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
         void $ RE.insertEdge c References TaskNode tid ContextNode refId
-    fp <- persistBody db TaskNode tid body
     TIO.putStrLn tid
     TIO.putStrLn (T.pack fp)
     when (T.null body) $ do
