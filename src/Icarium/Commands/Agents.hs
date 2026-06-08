@@ -48,10 +48,13 @@ guide =
     \Inspecting\n\
     \  icarium task show <id>                 # metadata only; body NOT printed.\n\
     \                                         # To see the body, Read the path.\n\
+    \  icarium task cat <id>                  # print body to stdout (read-only)\n\
     \  icarium task next                      # print next ready task id (loop primitive)\n\
     \  icarium task list --state ready        # actionable queue\n\
+    \  icarium task exists <id>               # exit 0 found / 1 missing / 2 ambiguous\n\
     \  icarium search \"query\"                 # FTS5; \"phrase\", UPPERCASE OR,\n\
     \                                         # --kind task|ctx, --limit N\n\
+    \  Same cat/exists on `icarium ctx`.\n\
     \\n\
     \IDs\n\
     \  ULIDs. Any unique prefix works on the command line.\n\
@@ -61,9 +64,16 @@ guide =
     \  icarium link add <task> references <ctx>\n\
     \\n\
     \Task lifecycle\n\
-    \  planned -> ready -> in-progress -> done\n\
-    \                                  \\-> blocked  (requires --block-reason)\n\
-    \  Dispatch picks up ready tasks whose dependencies are done.\n\
+    \  idea -> planned -> ready -> in-progress -> done\n\
+    \                                         \\-> blocked  (requires --block-reason)\n\
+    \  (abandoned is the dead-end state.) Dispatch picks up ready tasks whose\n\
+    \  dependencies are done.\n\
+    \\n\
+    \Reviewers (if [review] is enabled in icarium.toml)\n\
+    \  A reviewer agent grades your diff. If it returns `fail`, its findings are\n\
+    \  appended to your next attempt under `## Reviewer findings from previous\n\
+    \  attempt` - fix them. A `warn` merges but is saved as a `reviewer warn:`\n\
+    \  context entry worth reading.\n\
     \\n\
     \More\n\
     \  icarium <cmd> --help                   # every subcommand has --help\n\

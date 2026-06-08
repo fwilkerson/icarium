@@ -1,22 +1,29 @@
 module PostClaudeSpec (tests) where
 
+import Control.Exception (bracket)
 import Data.List (isInfixOf)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Database.SQLite.Simple (close, open)
 import System.Directory (withCurrentDirectory)
 import System.Exit (ExitCode (..))
+import System.FilePath ((</>))
+import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (proc, readProcess, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Config (CategoriesConfig (..), CommandsConfig (..), Config (..), DispatchConfig (..), ProjectConfig (..))
+import Icarium.Db (migrateDb)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult (..), FinishArgs (..), finishWith)
-import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude)
+import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude, writeWarnContextEntry)
 import Icarium.Git qualified as Git
 import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
+import Icarium.Schema (applySchema)
 import Icarium.Types
-import TestHelpers (withCwdLock, withTestDb, withTestRepo)
+import TestHelpers (minTask, mkCat, withCwdLock, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -27,7 +34,38 @@ tests =
         , testCase "handlePostClaude failure leaves wip commit on dispatch branch" testHandlePostClaudeFailureCheckpoints
         , testCase "handlePostClaude no-commit success with agent commits is failure; branch retained" testNoCommitAgentCommittedAnyway
         , testCase "finishWith OFailure checkpoints staged changes and leaves base clean" testFinishWithWipCheckpoint
+        , testCase "writeWarnContextEntry links the note back to its task" testWarnEntryLinksTask
         ]
+
+{- | A reviewer-warn note must carry full provenance: besides matching the
+task's categories, it gets a `references` edge from the task so it is
+reachable from the task in the graph, not only via shared tags.
+-}
+testWarnEntryLinksTask :: IO ()
+testWarnEntryLinksTask =
+    withSystemTempDirectory "icarium-warn" $ \dir -> do
+        let db = dir </> "icarium.db"
+        bracket (open db) close $ \c -> do
+            applySchema c
+            migrateDb c
+            tid <-
+                RT.insertTask
+                    c
+                    RT.NewTask
+                        { RT.ntTitle = "Parser task"
+                        , RT.ntBody = ""
+                        , RT.ntState = Ready
+                        , RT.ntPriority = Nothing
+                        , RT.ntNoCommit = False
+                        }
+            cat <- mkCat c Domain "cli"
+            writeWarnContextEntry c db minTask{taskId = tid} [cat] "status: warn\nfindings: []\n"
+            edges <- RE.listEdges c (Just tid) Nothing (Just References)
+            case edges of
+                [e] -> do
+                    edgeSrcId e @?= tid
+                    edgeDstKind e @?= ContextNode
+                other -> assertBool ("expected one references edge, got " <> show (length other)) False
 
 -- | Run git in a specific directory; return raw stdout bytes as String.
 gitIn :: FilePath -> [String] -> IO String

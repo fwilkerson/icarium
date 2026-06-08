@@ -2,6 +2,7 @@ module Icarium.Dispatch.PostClaude (
     PostClaudeResult (..),
     handlePostClaude,
     handlePostClaudeWithReview,
+    writeWarnContextEntry,
     checkpointDirtyTree,
     postClaudeGuard,
     runGate,
@@ -27,6 +28,7 @@ import Icarium.Node (createContextWithBody)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Repo.Edge qualified as RE
 import Icarium.Types
 
 data PostClaudeResult
@@ -211,6 +213,8 @@ writeWarnContextEntry conn db task cats findings = do
                 , RCx.ncBody = findings
                 }
     forM_ cats $ \cat -> RC.attachContextCategory conn cid (categoryId cat)
+    -- Link the note back to its task for provenance (task references ctx).
+    void $ RE.insertEdge conn References TaskNode (taskId task) ContextNode cid
 
 {- | If the working tree is dirty, commit everything to the current branch with
 a wip message. Preserves in-flight work on the dispatch branch so a human
