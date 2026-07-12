@@ -55,10 +55,12 @@ case "$mode" in
             commit_work
             result
         else
-            # Reviewer: prompt already captured above; verdict pass.
+            # Reviewer: prompt already captured above; verdict pass. The
+            # verdict must sit in a fenced yaml block — bare status lines
+            # are ignored by the anchored parser.
             # printf %s: sh's echo would expand the \n inside the JSON.
             init
-            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"status: pass\nfindings: []","num_turns":1}'
+            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
         fi
         exit 0
         ;;
