@@ -176,6 +176,7 @@ tests =
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
         , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
+        , testCase "dispatch stats: byte-for-byte summary, --since filters" testDispatchStats
         ]
 
 testVersion :: IO ()
@@ -831,6 +832,71 @@ testDispatchShowTokensAbsent = withSystemTempDirectory "icarium-test" $ \dir -> 
     (code, out, _) <- runIcarium db ["dispatch", "show", did]
     code @?= ExitSuccess
     assertBool "tokens line absent" (not ("tokens:" `isInfixOf` out))
+
+testDispatchStats :: IO ()
+testDispatchStats = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    (_, addOut, _) <- runIcarium db ["task", "add", "Stats task", "--state", "ready"]
+    let tid = head (words addOut)
+    conn <- open db
+    let insertRow did startedAt mOutcome mIn mOut mCache = do
+            execute
+                conn
+                ( Query
+                    "INSERT INTO dispatches \
+                    \(id, task_id, branch, base_branch, base_sha, model, effort, started_at) \
+                    \VALUES (?,?,?,?,?,?,?,?)"
+                )
+                ( did :: String
+                , tid
+                , "dispatch/" ++ did
+                , "main" :: String
+                , "abc123" :: String
+                , "claude-sonnet-4-6" :: String
+                , "medium" :: String
+                , startedAt :: String
+                )
+            execute
+                conn
+                ( Query
+                    "UPDATE dispatches \
+                    \SET outcome = ?, tokens_in = ?, tokens_out = ?, tokens_cache_read = ? \
+                    \WHERE id = ?"
+                )
+                ( mOutcome :: Maybe String
+                , mIn :: Maybe Int
+                , mOut :: Maybe Int
+                , mCache :: Maybe Int
+                , did :: String
+                )
+    insertRow "01STATS0000000000000000001" "2026-01-01 00:00:00" (Just "success") (Just 100) (Just 20) (Just 5)
+    insertRow "01STATS0000000000000000002" "2026-01-02 00:00:00" (Just "failure") (Just 50) (Just 10) (Just 1)
+    insertRow "01STATS0000000000000000003" "2026-01-03 00:00:00" (Just "interrupted") Nothing Nothing Nothing
+    insertRow "01STATS0000000000000000004" "2026-01-04 00:00:00" Nothing Nothing Nothing Nothing
+    close conn
+
+    (code, out, _) <- runIcarium db ["dispatch", "stats"]
+    code @?= ExitSuccess
+    out
+        @?= unlines
+            [ "since:             (all)"
+            , "dispatches:        4"
+            , "success:           1"
+            , "failure:           1"
+            , "interrupted:       1"
+            , "open:              1"
+            , "tokens_in:         150"
+            , "tokens_out:        30"
+            , "tokens_cache_read: 6"
+            , "missing_tokens:    2"
+            ]
+
+    (sinceCode, sinceOut, _) <- runIcarium db ["dispatch", "stats", "--since", "2026-01-02 00:00:00"]
+    sinceCode @?= ExitSuccess
+    assertBool
+        "since filters to the 3 dispatches started on/after the cutoff"
+        ("dispatches:        3" `isInfixOf` sinceOut)
+    assertBool "since echoes back the given timestamp" ("since:             2026-01-02 00:00:00" `isInfixOf` sinceOut)
 
 testTaskNoCommitAddShow :: IO ()
 testTaskNoCommitAddShow = withTempDb $ \db -> do

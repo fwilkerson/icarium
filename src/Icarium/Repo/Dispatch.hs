@@ -16,10 +16,12 @@ module Icarium.Repo.Dispatch (
     setMerged,
     finishDispatch,
     logPathsOutsideRetention,
+    DispatchStats (..),
+    getDispatchStats,
 ) where
 
 import Data.Text (Text, pack, unpack)
-import Database.SQLite.Simple (Connection, Only (..), Query (..), execute, query, query_)
+import Database.SQLite.Simple (Connection, FromRow (..), Only (..), Query (..), execute, field, query, query_)
 
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
 import Icarium.Types (Dispatch (..), DispatchOutcome, Effort, ReviewVerdict)
@@ -207,6 +209,64 @@ logPathsOutsideRetention conn n = do
             )
             (Only n)
     pure [unpack p | (mW, mR) <- rows, Just p <- [mW, mR]]
+
+-- | Aggregate spend/outcome summary for @dispatch stats@.
+data DispatchStats = DispatchStats
+    { dsTotal :: Int
+    , dsSuccess :: Int
+    , dsFailure :: Int
+    , dsInterrupted :: Int
+    , dsOpen :: Int
+    , dsTokensIn :: Int
+    , dsTokensOut :: Int
+    , dsTokensCacheRead :: Int
+    , dsMissingTokens :: Int
+    }
+    deriving (Show, Eq)
+
+instance FromRow DispatchStats where
+    fromRow =
+        DispatchStats
+            <$> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
+
+statsCols :: Text
+statsCols =
+    "COUNT(*), \
+    \COALESCE(SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END), 0), \
+    \COALESCE(SUM(CASE WHEN outcome = 'failure' THEN 1 ELSE 0 END), 0), \
+    \COALESCE(SUM(CASE WHEN outcome = 'interrupted' THEN 1 ELSE 0 END), 0), \
+    \COALESCE(SUM(CASE WHEN outcome IS NULL THEN 1 ELSE 0 END), 0), \
+    \COALESCE(SUM(tokens_in), 0), \
+    \COALESCE(SUM(tokens_out), 0), \
+    \COALESCE(SUM(tokens_cache_read), 0), \
+    \COALESCE(SUM(CASE WHEN tokens_in IS NULL THEN 1 ELSE 0 END), 0)"
+
+{- | Spend/outcome summary over dispatches started at or after @since@
+(all dispatches when @Nothing@). @dsMissingTokens@ counts runs whose
+token columns are still NULL (pre-token-accounting-fix rows), so a
+caller knows when the token sums are incomplete.
+-}
+getDispatchStats :: Connection -> Maybe Text -> IO DispatchStats
+getDispatchStats conn mSince = do
+    rows <- case mSince of
+        Nothing ->
+            query_ conn (Query $ "SELECT " <> statsCols <> " FROM dispatches")
+        Just since ->
+            query
+                conn
+                (Query $ "SELECT " <> statsCols <> " FROM dispatches WHERE started_at >= ?")
+                (Only since)
+    pure $ case rows of
+        (s : _) -> s
+        [] -> DispatchStats 0 0 0 0 0 0 0 0 0
 
 -- | Terminal update: outcome, ended_at, optional merge sha, optional notes.
 finishDispatch ::

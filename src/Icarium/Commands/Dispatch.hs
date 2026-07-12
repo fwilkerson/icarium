@@ -51,6 +51,7 @@ data Command
     | Logs LogsOpts
     | Recover RecoverOpts
     | Merge MergeOpts
+    | Stats StatsOpts
 
 parser :: Parser Command
 parser =
@@ -70,6 +71,10 @@ parser =
                 "merge"
                 "Land a parked dispatch branch on its base: fast-forward when possible, else rebase + re-run gates."
                 (Merge <$> mergeP)
+            <> subcmd
+                "stats"
+                "Spend and outcome summary (run counts, token sums) for budget checks."
+                (Stats <$> statsP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -80,6 +85,7 @@ run db = \case
     Logs o -> runLogs db o
     Recover o -> runRecover db o
     Merge o -> runMerge db o
+    Stats o -> runStats db o
 
 -- =============================================================
 -- run  (single-task dispatch or queue drain)
@@ -639,3 +645,24 @@ landedLine d sha =
         <> dispatchBaseBranch d
         <> " -> "
         <> T.take 10 sha
+
+-- =============================================================
+-- stats  (spend/outcome summary for budget checks)
+-- =============================================================
+
+newtype StatsOpts = StatsOpts {stSince :: Maybe Text}
+
+statsP :: Parser StatsOpts
+statsP =
+    StatsOpts
+        <$> optional
+            ( textOption
+                "since"
+                "TIMESTAMP"
+                "Only dispatches started at or after this UTC timestamp (storage format: YYYY-MM-DD HH:MM:SS); omit for all dispatches"
+            )
+
+runStats :: FilePath -> StatsOpts -> IO ()
+runStats db o = withDb db $ \c -> do
+    stats <- RD.getDispatchStats c (stSince o)
+    TIO.putStr (Render.renderDispatchStats (stSince o) stats)

@@ -68,6 +68,12 @@ tests =
             , testCase "FromRow reads NULL token columns as Nothing" testDispatchTokensNull
             ]
         , testGroup
+            "dispatch stats"
+            [ testCase "empty DB: all zeros" testDispatchStatsEmpty
+            , testCase "counts by outcome, sums tokens, counts NULL-token rows" testDispatchStatsAggregates
+            , testCase "--since filters to dispatches started at/after the timestamp" testDispatchStatsSince
+            ]
+        , testGroup
             "dispatch merge tracking"
             [ testCase "migration 9 adds merged_at column to a pre-migration dispatches table" testMigration9AddsMergedAt
             , testCase "setMerged round-trips merge_sha and a non-null merged_at" testSetMergedRoundTrips
@@ -1202,6 +1208,99 @@ testDispatchTokensNull = withTestDb $ \c -> do
     dispatchTokensIn d @?= Nothing
     dispatchTokensOut d @?= Nothing
     dispatchTokensCacheRead d @?= Nothing
+
+-- =============================================================
+-- dispatch stats tests
+-- =============================================================
+
+insertDispatchFull ::
+    Connection -> Text -> Text -> Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Int -> IO ()
+insertDispatchFull c did tid startedAt mOutcome mIn mOut mCache = do
+    execute
+        c
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, model, effort, started_at) \
+            \VALUES (?,?,?,?,?,?,?,?)"
+        )
+        ( did
+        , tid
+        , "dispatch/" <> did
+        , "main" :: Text
+        , "0000000000000000000000000000000000000000" :: Text
+        , "claude-sonnet-4-6" :: Text
+        , "medium" :: Text
+        , startedAt
+        )
+    execute
+        c
+        ( Query
+            "UPDATE dispatches \
+            \SET outcome = ?, tokens_in = ?, tokens_out = ?, tokens_cache_read = ? \
+            \WHERE id = ?"
+        )
+        (mOutcome, mIn, mOut, mCache, did)
+
+testDispatchStatsEmpty :: IO ()
+testDispatchStatsEmpty = withTestDb $ \c -> do
+    s <- RD.getDispatchStats c Nothing
+    s
+        @?= RD.DispatchStats
+            { RD.dsTotal = 0
+            , RD.dsSuccess = 0
+            , RD.dsFailure = 0
+            , RD.dsInterrupted = 0
+            , RD.dsOpen = 0
+            , RD.dsTokensIn = 0
+            , RD.dsTokensOut = 0
+            , RD.dsTokensCacheRead = 0
+            , RD.dsMissingTokens = 0
+            }
+
+testDispatchStatsAggregates :: IO ()
+testDispatchStatsAggregates = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Stats task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    insertDispatchFull c "01STATS000000000000000001S" tid "2026-01-01 00:00:00" (Just "success") (Just 100) (Just 20) (Just 5)
+    insertDispatchFull c "01STATS000000000000000002S" tid "2026-01-01 00:00:00" (Just "failure") (Just 50) (Just 10) (Just 1)
+    insertDispatchFull c "01STATS000000000000000003S" tid "2026-01-01 00:00:00" (Just "interrupted") Nothing Nothing Nothing
+    insertDispatchFull c "01STATS000000000000000004S" tid "2026-01-01 00:00:00" Nothing Nothing Nothing Nothing
+    s <- RD.getDispatchStats c Nothing
+    RD.dsTotal s @?= 4
+    RD.dsSuccess s @?= 1
+    RD.dsFailure s @?= 1
+    RD.dsInterrupted s @?= 1
+    RD.dsOpen s @?= 1
+    RD.dsTokensIn s @?= 150
+    RD.dsTokensOut s @?= 30
+    RD.dsTokensCacheRead s @?= 6
+    RD.dsMissingTokens s @?= 2
+
+testDispatchStatsSince :: IO ()
+testDispatchStatsSince = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Stats since task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    insertDispatchFull c "01SINCE000000000000000001S" tid "2026-01-01 00:00:00" (Just "success") (Just 10) (Just 1) (Just 0)
+    insertDispatchFull c "01SINCE000000000000000002S" tid "2026-01-03 00:00:00" (Just "success") (Just 20) (Just 2) (Just 0)
+    s <- RD.getDispatchStats c (Just "2026-01-02 00:00:00")
+    RD.dsTotal s @?= 1
+    RD.dsTokensIn s @?= 20
 
 -- =============================================================
 -- dispatch merge tracking tests

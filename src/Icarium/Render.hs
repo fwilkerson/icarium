@@ -14,6 +14,7 @@ module Icarium.Render (
     renderDispatch,
     DispatchRow (..),
     renderDispatchList,
+    renderDispatchStats,
     fmtSecs,
     SearchHitRow (..),
     renderSearchList,
@@ -24,6 +25,7 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 
+import Icarium.Repo.Dispatch (DispatchStats (..))
 import Icarium.Repo.Search (SearchHit (..))
 import Icarium.Types
 
@@ -478,6 +480,25 @@ outcomeBadge d = case dispatchOutcome d of
         | otherwise -> "[success]"
     Just OFailure -> "[failure]"
     Just OInterrupted -> "[interrupted]"
+
+-- | Script-friendly spend/outcome summary for @dispatch stats@.
+renderDispatchStats :: Maybe Text -> DispatchStats -> Text
+renderDispatchStats mSince s =
+    T.unlines
+        [ field "since" (fromMaybe "(all)" mSince)
+        , field "dispatches" (tshow (dsTotal s))
+        , field "success" (tshow (dsSuccess s))
+        , field "failure" (tshow (dsFailure s))
+        , field "interrupted" (tshow (dsInterrupted s))
+        , field "open" (tshow (dsOpen s))
+        , field "tokens_in" (tshow (dsTokensIn s))
+        , field "tokens_out" (tshow (dsTokensOut s))
+        , field "tokens_cache_read" (tshow (dsTokensCacheRead s))
+        , field "missing_tokens" (tshow (dsMissingTokens s))
+        ]
+  where
+    field k v = padr 18 (k <> ":") <> " " <> v
+    tshow = T.pack . show
 
 fmtSecs :: Int -> Text
 fmtSecs s
