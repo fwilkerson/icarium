@@ -99,15 +99,27 @@ dispatch conn req
 -- Dry run
 -- =============================================================
 
+{- | Loads the reviewer system prompt and working agreement, the two
+externally-named files that must fail closed before a worker starts.
+Shared by the dry-run and real-run preflights so they can't drift.
+-}
+loadPreflight :: Config -> IO (Either Text (Maybe Text, Maybe Text))
+loadPreflight cfg = do
+    mSysPromptResult <- case cfgReview cfg of
+        Just rc | rcEnabled rc -> loadReviewerPrompt (rcPromptPath rc)
+        _ -> pure (Right Nothing)
+    mAgreementResult <- loadAgreementFile (dcAgreementPath (cfgDispatch cfg))
+    pure ((,) <$> mSysPromptResult <*> mAgreementResult)
+
 doDryRun :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 doDryRun conn req = do
     task <- refreshTaskBody conn (drDbPath req) (drTask req)
     -- Same fail-closed posture as the real run: a dry run previewing a
     -- prompt the real run would refuse to build is a lie.
-    mAgreementResult <- loadAgreementFile (dcAgreementPath (cfgDispatch (drConfig req)))
-    case mAgreementResult of
+    preflightResult <- loadPreflight (drConfig req)
+    case preflightResult of
         Left err -> pure (Left (WtPreflightFailed err))
-        Right mAgreement -> Right <$> dryRunPreview conn req task mAgreement
+        Right (_mSysPrompt, mAgreement) -> Right <$> dryRunPreview conn req task mAgreement
 
 dryRunPreview :: Connection -> DispatchRequest -> Task -> Maybe Text -> IO DispatchResult
 dryRunPreview conn req task mAgreement = do
@@ -195,12 +207,9 @@ doRealAttempt conn req attempt mFindings mBaseline = do
     -- the worker starts (and before any dispatch row/task state exists):
     -- an unreadable prompt_path or agreement_path must fail closed, not
     -- silently degrade to a weaker built-in after the worker has run.
-    mSysPromptResult <- case cfgReview cfg of
-        Just rc | rcEnabled rc -> loadReviewerPrompt (rcPromptPath rc)
-        _ -> pure (Right Nothing)
-    mAgreementResult <- loadAgreementFile (dcAgreementPath dcfg)
+    preflightResult <- loadPreflight cfg
 
-    case (,) <$> mSysPromptResult <*> mAgreementResult of
+    case preflightResult of
         Left err -> pure (Left (WtPreflightFailed err))
         Right (mSysPrompt, mAgreement) -> do
             did <- newId

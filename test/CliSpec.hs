@@ -180,7 +180,7 @@ tests =
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
         , testCase "dispatch review: body tamper reported to reviewer, flag persisted" testReviewerBodyTamperReport
         , testCase "dispatch review: retry diffs against first-attempt baseline (no laundering)" testReviewerRetryKeepsTamperBaseline
-        , testCase "dispatch review: unreadable prompt_path fails closed before worker starts" testReviewerPromptUnreadableFailsClosed
+        , testCase "dispatch review: unreadable prompt_path fails closed before worker starts, dry-run too" testReviewerPromptUnreadableFailsClosed
         , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
         , testCase "dispatch stats: byte-for-byte summary, --since filters" testDispatchStats
         ]
@@ -2058,13 +2058,17 @@ testReviewerRetryKeepsTamperBaseline = withDispatchRepo $ \dir db -> do
         (any (\l -> words l == ["body_changed:", "yes"]) (lines showOut))
 
 -- Scenario: an unreadable [review] prompt_path must fail closed before the
--- worker starts, not silently fall back to the built-in prompt.
+-- worker starts, not silently fall back to the built-in prompt — and in
+-- dry-run too, which must not preview a run the real run would refuse.
 testReviewerPromptUnreadableFailsClosed :: IO ()
 testReviewerPromptUnreadableFailsClosed = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "prompt-path task"
     writeFile
         (dir </> "icarium.toml")
         (stubToml <> unlines ["[review]", "enabled = true", "prompt_path = \"missing-reviewer-prompt.md\""])
+    (dCode, _, dErr) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    dCode @?= ExitFailure 3
+    assertBool "dry-run error names the unreadable path" ("missing-reviewer-prompt.md" `isInfixOf` dErr)
     (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
     code @?= ExitFailure 3
     assertBool "error names the unreadable path" ("missing-reviewer-prompt.md" `isInfixOf` err)
