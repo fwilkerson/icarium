@@ -152,6 +152,8 @@ runReviewer model mSysPrompt taskTitle taskBody diffText reviewerLogPath maxMinu
             , "--allowedTools"
             , "Read"
             , "--disable-slash-commands"
+            , "--permission-mode"
+            , "dontAsk"
             ]
     hPutStrLn stderr "[reviewer] running..."
     exit <- runReviewerProcess stdinBytes args reviewerLogPath maxMinutes

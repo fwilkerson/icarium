@@ -22,7 +22,7 @@ import Icarium.Config (
     ProjectConfig (..),
     ReviewConfig (..),
  )
-import Icarium.Dispatch.Claude (RunCtx (..), runClaudeStreaming)
+import Icarium.Dispatch.Claude (RunCtx (..), claudeArgs, runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
@@ -123,20 +123,18 @@ doDryRun conn req = do
             , dresBaseSha = Nothing
             }
 
+{- | Renders 'claudeArgs', quoting the comma-joined tool lists for
+human readability.
+-}
 renderCmdPreview :: Text -> Effort -> [Text] -> [Text] -> Text
 renderCmdPreview model effort tools allowed =
-    T.unwords
-        [ "claude -p"
-        , "--model"
-        , model
-        , "--effort"
-        , effortText effort
-        , "--output-format stream-json"
-        , "--verbose"
-        , "--tools \"" <> T.intercalate "," tools <> "\""
-        , "--disable-slash-commands"
-        , "--allowedTools \"" <> T.intercalate "," allowed <> "\""
-        ]
+    T.unwords ("claude" : quoteToolLists (claudeArgs model effort tools allowed))
+  where
+    quoteToolLists (flag : val : rest)
+        | flag `elem` ["--tools", "--allowedTools"] =
+            flag : ("\"" <> val <> "\"") : quoteToolLists rest
+        | otherwise = flag : quoteToolLists (val : rest)
+    quoteToolLists xs = xs
 
 -- =============================================================
 -- Real dispatch (with retry loop)

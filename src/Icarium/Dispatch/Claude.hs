@@ -2,6 +2,7 @@
 
 module Icarium.Dispatch.Claude (
     RunCtx (..),
+    claudeArgs,
     raceTimeout,
     timeoutSentinel,
     killGroupGracefully,
@@ -87,6 +88,28 @@ data RunCtx = RunCtx
     , rcLogPath :: FilePath
     }
 
+{- | Full claude(1) worker argument list. Shared with the dry-run preview
+so the two can't drift out of sync with each other.
+-}
+claudeArgs :: Text -> Effort -> [Text] -> [Text] -> [Text]
+claudeArgs model effort tools allowed =
+    [ "-p"
+    , "--model"
+    , model
+    , "--effort"
+    , effortText effort
+    , "--output-format"
+    , "stream-json"
+    , "--verbose"
+    , "--tools"
+    , T.intercalate "," tools
+    , "--disable-slash-commands"
+    , "--allowedTools"
+    , T.intercalate "," allowed
+    , "--permission-mode"
+    , "dontAsk"
+    ]
+
 runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode
 runClaudeStreaming ctx dcfg = do
     let dbPath = rcDbPath ctx
@@ -102,21 +125,7 @@ runClaudeStreaming ctx dcfg = do
         maxMinutes = dcMaxMinutesPerDispatch dcfg
     parentEnv <- getEnvironment
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
-        args =
-            [ "-p"
-            , "--model"
-            , T.unpack model
-            , "--effort"
-            , T.unpack (effortText effort)
-            , "--output-format"
-            , "stream-json"
-            , "--verbose"
-            , "--tools"
-            , T.unpack (T.intercalate "," tools)
-            , "--disable-slash-commands"
-            , "--allowedTools"
-            , T.unpack (T.intercalate "," allowed)
-            ]
+        args = map T.unpack (claudeArgs model effort tools allowed)
         -- Inherit parent env so claude can find ~/.claude credentials
         -- via $HOME; append icarium's own vars.
         env =
