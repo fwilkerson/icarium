@@ -59,7 +59,7 @@ test  = "cabal test all"
 [dispatch]
 # Defaults for the headless agent; override per-run with
 # `dispatch run --model / --effort`.
-model  = "claude-sonnet-4-6"
+model  = "claude-sonnet-5"
 effort = "high"
 
 # `tools` is what claude is told about; `allowed_tools` is the permission
@@ -94,7 +94,7 @@ disciplines = ["development"]
 # Optional reviewer gate (see "Reviewers" below). Omit the section to disable.
 # [review]
 # enabled      = true
-# model        = "claude-sonnet-4-6"    # defaults to dispatch.model
+# model        = "claude-sonnet-5"    # defaults to dispatch.model
 # max_attempts = 2                      # total attempts incl. first
 # prompt_path  = ".icarium/reviewer.md" # defaults to built-in prompt
 ```

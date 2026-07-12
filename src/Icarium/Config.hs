@@ -172,7 +172,7 @@ defaultConfigText =
     \test  = \"cabal test all\"\n\
     \\n\
     \[dispatch]\n\
-    \model  = \"claude-sonnet-4-6\"\n\
+    \model  = \"claude-sonnet-5\"\n\
     \effort = \"high\"\n\
     \tools = [\"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\", \"Bash\"]\n\
     \allowed_tools = [\n\
@@ -203,6 +203,6 @@ defaultConfigText =
     \\n\
     \# [review]\n\
     \# enabled      = true\n\
-    \# model        = \"claude-sonnet-4-6\"   # defaults to dispatch.model\n\
+    \# model        = \"claude-sonnet-5\"     # defaults to dispatch.model\n\
     \# max_attempts = 2\n\
     \# prompt_path  = \".icarium/reviewer.md\" # defaults to built-in prompt\n"

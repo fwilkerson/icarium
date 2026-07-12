@@ -6,7 +6,7 @@ build = "cabal build all"
 test  = "cabal test all"
 
 [dispatch]
-model  = "claude-sonnet-4-6"
+model  = "claude-sonnet-5"
 effort = "medium"
 tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
 allowed_tools = [
@@ -24,6 +24,6 @@ disciplines = ["haskell", "ops", "refinement"]
 
 [review]
 enabled      = true
-model        = "claude-sonnet-4-6"
+model        = "claude-sonnet-5"
 max_attempts = 2
 prompt_path  = ".icarium/reviewer.md"
