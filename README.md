@@ -85,6 +85,11 @@ retry_storm_threshold    = 3
 # worktree_setup    = "scripts/worktree-init.sh"
 # worktree_teardown = "scripts/worktree-free.sh"
 
+# Replace the built-in working agreement in dispatch prompts with this file's
+# content (icarium still appends the task-specific escalation lines).
+# Unreadable file = fatal before the worker starts.
+# agreement_path = ".icarium/agreement.md"
+
 [categories]
 # Controlled vocabulary for tagging tasks and context entries. After editing,
 # run `icarium category sync` (add `--prune` to remove deleted ones).
@@ -148,6 +153,16 @@ is never touched (you can dispatch from a dirty feature branch). The agent works
 `build`/`test` gates and the optional reviewer run against it. Worker and reviewer both run with
 `--permission-mode dontAsk`: a denied tool call is fed back as the tool result rather than aborting
 the session, and nothing inherits the user's `~/.claude` default mode.
+
+**The dispatch prompt.** The worker's prompt is the shared task content — title, body, completed
+dependencies, referenced and category-matched context; exactly what `task show --prompt` prints —
+plus a **working agreement** appended only in the dispatch lane. `task show --prompt` carries no
+agreement, so interactive builders consume it without inheriting headless lane rules. The agreement
+body is the built-in default or a project-owned file named by `[dispatch] agreement_path`; either
+way icarium appends the task-specific escalation lines (the `--state blocked` command with the task
+id), so a project file can't drop the escalation protocol. An unreadable `agreement_path` is fatal
+before the worker starts, same as the reviewer's `prompt_path`. Preview the full prompt with
+`dispatch run <id> --dry-run`.
 
 **Park by default.** On success the branch is *parked*, not merged: the task moves to `done`, the
 worktree is torn down (the branch is retained), and `dispatch list --parked` shows what's waiting to

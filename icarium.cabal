@@ -29,6 +29,7 @@ library
                       Icarium.Git
                       Icarium.Dispatch
                       Icarium.Dispatch.Internal
+                      Icarium.Dispatch.Agreement
                       Icarium.Dispatch.Claude
                       Icarium.Dispatch.LogResult
                       Icarium.Dispatch.Merge

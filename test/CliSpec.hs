@@ -172,6 +172,9 @@ tests =
         , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
         , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
         , testCase "dispatch --dry-run previews --mcp-config when set" testDispatchDryRunMcpConfig
+        , testCase "dispatch --dry-run prompt carries built-in agreement with no-user rules" testDryRunBuiltInAgreement
+        , testCase "dispatch: agreement_path file replaces built-in body, escalation appended" testDispatchAgreementFile
+        , testCase "dispatch: unreadable agreement_path fails closed before worker starts" testAgreementPathUnreadableFailsClosed
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
@@ -411,6 +414,9 @@ testTaskShowPrompt = withTempDb $ \db -> do
     code @?= ExitSuccess
     assertBool "prompt output contains task id" (tid `isInfixOf` out)
     assertBool "prompt output contains title" ("Prompt test task" `isInfixOf` out)
+    -- The agreement is dispatch-only; interactive builders consume this
+    -- output and must not inherit headless lane rules (issue #11).
+    assertBool "no working agreement in shared prompt" (not ("## Working agreement" `isInfixOf` out))
 
 testCtxShowBody :: IO ()
 testCtxShowBody = withTempDb $ \db -> do
@@ -1839,6 +1845,82 @@ testDispatchDryRunMcpConfig = withDispatchRepo $ \dir db -> do
     code @?= ExitSuccess
     assertBool "preview shows --strict-mcp-config" ("--strict-mcp-config" `isInfixOf` out)
     assertBool "preview shows --mcp-config .mcp.json" ("--mcp-config .mcp.json" `isInfixOf` out)
+
+-- Scenario: with no agreement_path the dispatch prompt carries the built-in
+-- agreement, including the no-user counterweight and the task-specific
+-- escalation command. (Its absence from `task show --prompt` is asserted
+-- in testTaskShowPrompt.)
+testDryRunBuiltInAgreement :: IO ()
+testDryRunBuiltInAgreement = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "agreement task"
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "prompt carries the agreement" ("## Working agreement" `isInfixOf` out)
+    assertBool "no-user counterweight present" ("Permission denials are policy" `isInfixOf` out)
+    assertBool
+        "escalation command carries the task id"
+        (("icarium task update " <> tid <> " --state blocked") `isInfixOf` out)
+
+{- | stubToml with a [dispatch] agreement_path entry (tomland has no
+append-into-table story, so the whole file is spelled out; same
+precedent as testDispatchDryRunMcpConfig).
+-}
+agreementToml :: String -> String
+agreementToml path =
+    unlines
+        [ "[project]"
+        , "integration_branch = \"main\""
+        , "[commands]"
+        , "build = \"true\""
+        , "test  = \"true\""
+        , "[dispatch]"
+        , "model  = \"stub\""
+        , "effort = \"low\""
+        , "tools = [\"Bash\"]"
+        , "allowed_tools = [\"Bash\"]"
+        , "scratch_dir = \".icarium/scratch\""
+        , "max_minutes_per_dispatch = 2"
+        , "heartbeat_stale_seconds  = 300"
+        , "log_retention_runs       = 5"
+        , "agreement_path = " <> show path
+        , "[categories]"
+        , "domains     = [\"core\"]"
+        , "disciplines = [\"development\"]"
+        ]
+
+-- Scenario: agreement_path file content replaces the built-in agreement
+-- body; the task-specific escalation lines are appended regardless, so a
+-- project file that omits the protocol cannot drop it.
+testDispatchAgreementFile :: IO ()
+testDispatchAgreementFile = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "custom agreement task"
+    writeFile (dir </> "agreement.md") "Custom lane contract xagree1.\n"
+    writeFile (dir </> "icarium.toml") (agreementToml "agreement.md")
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "file content in prompt" ("Custom lane contract xagree1" `isInfixOf` out)
+    assertBool "built-in body replaced" (not ("headless dispatch working on this task" `isInfixOf` out))
+    assertBool
+        "task-specific escalation still appended"
+        (("icarium task update " <> tid <> " --state blocked") `isInfixOf` out)
+
+-- Scenario: an unreadable agreement_path must fail closed before the worker
+-- starts (same posture as reviewer prompt_path) — and in dry-run too, which
+-- must not preview a prompt the real run would refuse to build.
+testAgreementPathUnreadableFailsClosed :: IO ()
+testAgreementPathUnreadableFailsClosed = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "agreement-path task"
+    writeFile (dir </> "icarium.toml") (agreementToml "missing-agreement.md")
+    (dCode, _, dErr) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    dCode @?= ExitFailure 3
+    assertBool "dry-run error names the unreadable path" ("missing-agreement.md" `isInfixOf` dErr)
+    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitFailure 3
+    assertBool "error names the unreadable path" ("missing-agreement.md" `isInfixOf` err)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
 
 -- Scenario 9: recover reconciles an orphaned open dispatch whose worktree
 -- survived a crash: dirty state is checkpointed, the worktree is removed,

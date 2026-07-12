@@ -132,6 +132,7 @@ fakeConfig =
                 , dcWorktreeSetup = Nothing
                 , dcWorktreeTeardown = Nothing
                 , dcMcpConfig = Nothing
+                , dcAgreementPath = Nothing
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         , cfgReview = Nothing

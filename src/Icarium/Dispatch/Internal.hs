@@ -25,6 +25,7 @@ import Icarium.Config (
     ProjectConfig (..),
     ReviewConfig (..),
  )
+import Icarium.Dispatch.Agreement (agreementSection, loadAgreementFile)
 import Icarium.Dispatch.Claude (RunCtx (..), claudeArgs, runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
@@ -91,17 +92,26 @@ untouched and the caller decides whether to stop or fail loudly.
 -}
 dispatch :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 dispatch conn req
-    | drDryRun req = Right <$> doDryRun conn req
+    | drDryRun req = doDryRun conn req
     | otherwise = doReal conn req
 
 -- =============================================================
 -- Dry run
 -- =============================================================
 
-doDryRun :: Connection -> DispatchRequest -> IO DispatchResult
+doDryRun :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 doDryRun conn req = do
     task <- refreshTaskBody conn (drDbPath req) (drTask req)
-    prompt <- buildPrompt conn task Nothing
+    -- Same fail-closed posture as the real run: a dry run previewing a
+    -- prompt the real run would refuse to build is a lie.
+    mAgreementResult <- loadAgreementFile (dcAgreementPath (cfgDispatch (drConfig req)))
+    case mAgreementResult of
+        Left err -> pure (Left (WtPreflightFailed err))
+        Right mAgreement -> Right <$> dryRunPreview conn req task mAgreement
+
+dryRunPreview :: Connection -> DispatchRequest -> Task -> Maybe Text -> IO DispatchResult
+dryRunPreview conn req task mAgreement = do
+    prompt <- buildPrompt conn task mAgreement Nothing
     fakeId <- newId
     let dcfg = cfgDispatch (drConfig req)
         branch = dispatchBranchName fakeId
@@ -176,17 +186,18 @@ doRealAttempt conn req attempt mFindings = do
     task <- refreshTaskBody conn dbPath (drTask req)
     baseSha <- either (ioFail . show) pure =<< Git.revParse "." base
 
-    -- Load the reviewer's system prompt before the worker starts (and
-    -- before any dispatch row/task state exists): an unreadable
-    -- prompt_path must fail closed, not silently weaken the merge gate
-    -- after the worker has already run.
+    -- Load the reviewer's system prompt and the working agreement before
+    -- the worker starts (and before any dispatch row/task state exists):
+    -- an unreadable prompt_path or agreement_path must fail closed, not
+    -- silently degrade to a weaker built-in after the worker has run.
     mSysPromptResult <- case cfgReview cfg of
         Just rc | rcEnabled rc -> loadReviewerPrompt (rcPromptPath rc)
         _ -> pure (Right Nothing)
+    mAgreementResult <- loadAgreementFile (dcAgreementPath dcfg)
 
-    case mSysPromptResult of
+    case (,) <$> mSysPromptResult <*> mAgreementResult of
         Left err -> pure (Left (WtPreflightFailed err))
-        Right mSysPrompt -> do
+        Right (mSysPrompt, mAgreement) -> do
             did <- newId
             let branch = dispatchBranchName did
                 logDir = ".icarium" </> "logs"
@@ -221,7 +232,7 @@ doRealAttempt conn req attempt mFindings = do
                                 { RT.tuState = Just InProgress
                                 }
 
-                    prompt <- buildPrompt conn task mFindings
+                    prompt <- buildPrompt conn task mAgreement mFindings
 
                     let dx =
                             DispatchCtx
@@ -277,15 +288,18 @@ doRealAttempt conn req attempt mFindings = do
                                         pure (Right dr)
                             | otherwise -> pure (Right dr)
 
-buildPrompt :: Connection -> Task -> Maybe Text -> IO Text
-buildPrompt conn t mFindings = do
+{- | @mAgreement@ is the loaded agreement_path content (Nothing = built-in),
+appended after the shared task content — see 'agreementSection'.
+-}
+buildPrompt :: Connection -> Task -> Maybe Text -> Maybe Text -> IO Text
+buildPrompt conn t mAgreement mFindings = do
     refs <- RE.referencedContexts conn (taskId t)
     cats <- RC.taskCategoriesFor conn (taskId t)
     catMatch <- RCx.categoryMatchedContexts conn cats 5
     deps <- RE.dependencyTasks conn (taskId t)
     let refIds = map contextId refs
         dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-        base = renderTaskPrompt t refs dedupedCat deps
+        base = renderTaskPrompt t refs dedupedCat deps <> agreementSection mAgreement t
     pure $ case mFindings of
         Nothing -> base
         Just f -> base <> "\n## Reviewer findings from previous attempt\n\n" <> f <> "\n"

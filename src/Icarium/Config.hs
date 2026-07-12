@@ -63,6 +63,7 @@ data DispatchConfig = DispatchConfig
     , dcWorktreeSetup :: Maybe Text
     , dcWorktreeTeardown :: Maybe Text
     , dcMcpConfig :: Maybe Text
+    , dcAgreementPath :: Maybe Text
     }
     deriving (Show)
 
@@ -116,6 +117,7 @@ dispatchCodec =
         <*> Toml.dioptional (Toml.text "worktree_setup") .= dcWorktreeSetup
         <*> Toml.dioptional (Toml.text "worktree_teardown") .= dcWorktreeTeardown
         <*> Toml.dioptional (Toml.text "mcp_config") .= dcMcpConfig
+        <*> Toml.dioptional (Toml.text "agreement_path") .= dcAgreementPath
 
 categoriesCodec :: TomlCodec CategoriesConfig
 categoriesCodec =
@@ -198,6 +200,10 @@ defaultConfigText =
     \# Workers run with --strict-mcp-config, so no MCP servers load unless this\n\
     \# is set. Reviewers never get MCP servers regardless of this key.\n\
     \# mcp_config = \".mcp.json\"\n\
+    \# Replace the built-in working agreement in dispatch prompts with this\n\
+    \# file's content (icarium still appends the task-specific escalation\n\
+    \# lines). Unreadable file = fatal before the worker starts.\n\
+    \# agreement_path = \".icarium/agreement.md\"\n\
     \\n\
     \[categories]\n\
     \# Source of truth for the category vocabulary. Edit here, then run\n\

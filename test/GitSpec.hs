@@ -154,6 +154,7 @@ minDispatchConfig =
         , dcWorktreeSetup = Nothing
         , dcWorktreeTeardown = Nothing
         , dcMcpConfig = Nothing
+        , dcAgreementPath = Nothing
         }
 
 {- | Regression: a tracked icarium.toml diverged in the invoking checkout

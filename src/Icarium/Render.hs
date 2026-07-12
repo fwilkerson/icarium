@@ -117,8 +117,10 @@ linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
 
     edgeLines = zipWith mkEdge [0 ..] allEdges
 
-{- | The exact prompt the dispatcher will send to the headless agent.
-Sharing this with @task show --prompt@ keeps the two in lockstep.
+{- | The shared task-content block: @task show --prompt@ prints it verbatim,
+and the dispatch prompt builds on it (appending the working agreement —
+'Icarium.Dispatch.Agreement' — which is deliberately absent here so
+interactive builders never inherit headless lane rules).
 Callers must pass a Task whose body reflects the on-disk body file
 (dispatch: 'Icarium.Bodies.Sweep.refreshTaskBody'; @task show --prompt@:
 'Icarium.Bodies.readBody' overlay).
@@ -138,7 +140,6 @@ renderTaskPrompt t refs catMatched deps =
             <> promptDeps deps
             <> promptRefs refs
             <> promptRelated catMatched
-            <> workingAgreement t
 
 promptDeps :: [Task] -> [Text]
 promptDeps [] = []
@@ -180,24 +181,6 @@ promptRelated ks =
                 ]
             )
             ks
-
-workingAgreement :: Task -> [Text]
-workingAgreement t =
-    [ "## Working agreement"
-    , ""
-    , "You are a headless dispatch working on this task. Guardrails:"
-    , ""
-    , "- All task/context mutation MUST go through the `icarium` CLI."
-    , "- If blocked:  `icarium task update " <> taskId t <> " --state blocked --block-reason '<why>'`"
-    , "- Record anything you learn that future tasks would benefit from as a context entry:"
-    , "    `icarium ctx add '<title>' --body-stdin <<'EOF'"
-    , "       ...markdown..."
-    , "     EOF`"
-    , "- Commit your code before exiting; after the gates pass the program parks your branch for merge."
-    , "- Test artifacts (snapshots, fixtures, scratch files) MUST go in `$ICARIUM_SCRATCH_DIR`,"
-    , "  never in the working tree. The post-claude gate refuses to accept a dirty tree."
-    , ""
-    ]
 
 {- | Recommended maximum title length (matches git commit subject convention).
 Titles exceeding this are truncated with an ellipsis in list views.
