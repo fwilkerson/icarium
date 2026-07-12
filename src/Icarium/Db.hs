@@ -2,7 +2,7 @@ module Icarium.Db (
     defaultDbPath,
     openDb,
     withDbSync,
-    withDbReadOnly,
+    withDb,
     initDb,
     dbSchemaVersion,
     migrateDb,
@@ -46,11 +46,11 @@ withDbSync path action = bracket (openDb path) close $ \conn -> do
     mtimeSweep conn path
     action conn
 
-{- | Open the DB, run pending migrations, then the action — no sweep.
-Use for pure-read commands and write commands that don't need FTS sync.
+{- | Open the DB, run pending migrations, then the action — no FTS mtime
+sweep — use for commands that don't need FTS accuracy (reads and plain writes).
 -}
-withDbReadOnly :: FilePath -> (Connection -> IO a) -> IO a
-withDbReadOnly path action = bracket (openDb path) close $ \conn -> do
+withDb :: FilePath -> (Connection -> IO a) -> IO a
+withDb path action = bracket (openDb path) close $ \conn -> do
     migrateDb conn
     action conn
 

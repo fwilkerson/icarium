@@ -18,6 +18,9 @@ tests =
         , testCase "dirty tree takes priority over empty diff" testGuardDirtyFirst
         , testCase "clean tree with new commit passes" testGuardPasses
         , testCase "revParse error does not fire empty-diff" testGuardRevParseError
+        , testCase "no-commit: dirty tree fires dirty-tree note" testGuardNoCommitDirty
+        , testCase "no-commit: commits on branch fire left-commits note" testGuardNoCommitLeftCommits
+        , testCase "no-commit: clean tree with no commits passes" testGuardNoCommitPasses
         , testCase "claudeArgs includes --permission-mode dontAsk plus existing flags" testClaudeArgsPermissionMode
         , testCase "setup exit 75 is back-pressure, others are failures" testSetupExitClassifier
         , testCase "worktreePath embeds the dispatch id under .icarium/wt" testWorktreePath
@@ -31,7 +34,7 @@ newSha = "bbbb1111"
 
 testGuardDirtyTree :: IO ()
 testGuardDirtyTree =
-    postClaudeGuard "?? snapshot-test.json\n M src/Foo.hs" (Right newSha) baseSha
+    postClaudeGuard False "?? snapshot-test.json\n M src/Foo.hs" (Right newSha) baseSha
         @?= Just
             "agent left uncommitted changes; refusing to accept\n\
             \uncommitted:\n\
@@ -40,12 +43,12 @@ testGuardDirtyTree =
 
 testGuardEmptyDiff :: IO ()
 testGuardEmptyDiff =
-    postClaudeGuard "" (Right baseSha) baseSha
+    postClaudeGuard False "" (Right baseSha) baseSha
         @?= Just "agent made no commits on dispatch branch"
 
 testGuardDirtyFirst :: IO ()
 testGuardDirtyFirst =
-    postClaudeGuard "?? leftover.txt" (Right baseSha) baseSha
+    postClaudeGuard False "?? leftover.txt" (Right baseSha) baseSha
         @?= Just
             "agent left uncommitted changes; refusing to accept\n\
             \uncommitted:\n\
@@ -53,11 +56,31 @@ testGuardDirtyFirst =
 
 testGuardPasses :: IO ()
 testGuardPasses =
-    postClaudeGuard "" (Right newSha) baseSha @?= Nothing
+    postClaudeGuard False "" (Right newSha) baseSha @?= Nothing
 
 testGuardRevParseError :: IO ()
 testGuardRevParseError =
-    postClaudeGuard "" (Left ("git error" :: String)) baseSha @?= Nothing
+    postClaudeGuard False "" (Left ("git error" :: String)) baseSha @?= Nothing
+
+-- | No-commit mode fires the same dirty-tree note as commit mode.
+testGuardNoCommitDirty :: IO ()
+testGuardNoCommitDirty =
+    postClaudeGuard True "?? leftover.txt" (Right baseSha) baseSha
+        @?= Just
+            "agent left uncommitted changes; refusing to accept\n\
+            \uncommitted:\n\
+            \  ?? leftover.txt"
+
+-- | No-commit mode: a commit on the branch (sha /= base) is a failure.
+testGuardNoCommitLeftCommits :: IO ()
+testGuardNoCommitLeftCommits =
+    postClaudeGuard True "" (Right newSha) baseSha
+        @?= Just "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
+
+-- | No-commit mode: clean tree, branch still at base — the expected outcome.
+testGuardNoCommitPasses :: IO ()
+testGuardNoCommitPasses =
+    postClaudeGuard True "" (Right baseSha) baseSha @?= Nothing
 
 -- | True when @x@, @y@ appear as two consecutive elements of @xs@.
 hasAdjacentPair :: (Eq a) => a -> a -> [a] -> Bool

@@ -8,8 +8,8 @@ import Data.List (dropWhileEnd, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
-import Database.SQLite.Simple (Query (..), close, execute, execute_, open)
-import Icarium.Schema (execSql, schemaSql)
+import Database.SQLite.Simple (Only (..), Query (..), close, execute, execute_, open, query_)
+import Icarium.Schema (execSql, schemaSql, schemaVersion)
 import System.Directory (createDirectoryIfMissing, doesFileExist, makeAbsolute, setModificationTime)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -149,6 +149,7 @@ tests =
         , testCase "ctx exists: found exits 0, not-found exits 1, ambiguous exits 2" testCtxExists
         , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
         , testCase "ctx list on externally-created DB (user_version=0) exits 0" testCtxListOnExternalDb
+        , testCase "init: creates a DB at the current schema with no pending migrations" testInitCreatesCurrentSchema
         , testCase "doctor: no [commands] section does not FAIL config" testDoctorNoCommandsSection
         , testCase "ICARIUM_DB env resolves db path when --db is not given" testDbEnvFallback
         , testCase "explicit --db wins over ICARIUM_DB" testDbFlagOverridesEnv
@@ -1229,6 +1230,23 @@ testCtxListOnExternalDb = withSystemTempDirectory "icarium-extdb" $ \dir -> do
     bracket (open dbPath) close $ \conn -> execSql conn schemaSql
     (code, _, _) <- runIcarium dbPath ["ctx", "list"]
     code @?= ExitSuccess
+
+-- `icarium init` must ship the current schema: after init, user_version equals
+-- the library's schemaVersion, so a fresh DB has no pending migrations. Runs in
+-- the temp dir so init's icarium.toml write and config load resolve there.
+testInitCreatesCurrentSchema :: IO ()
+testInitCreatesCurrentSchema = withSystemTempDirectory "icarium-init" $ \dir -> do
+    let db = dir </> "icarium.db"
+    (initCode, _, _) <- runIcariumIn dir db ["init"]
+    initCode @?= ExitSuccess
+
+    (listCode, _, _) <- runIcariumIn dir db ["ctx", "list"]
+    listCode @?= ExitSuccess
+
+    conn <- open db
+    [Only v] <- query_ conn "PRAGMA user_version" :: IO [Only Int]
+    close conn
+    v @?= schemaVersion
 
 noCommandsIcariumToml :: String
 noCommandsIcariumToml =

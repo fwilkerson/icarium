@@ -27,7 +27,7 @@ import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
 import Icarium.Config (Config, DispatchConfig (..), cfgDispatch)
-import Icarium.Db (parseDbTime, withDbReadOnly, withDbSync)
+import Icarium.Db (parseDbTime, withDb, withDbSync)
 import Icarium.Dispatch qualified as D
 import Icarium.Dispatch.Merge (MergeOutcome (..), mergeParked)
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree)
@@ -341,7 +341,7 @@ outcomeReader = eitherReader $ \s ->
         Nothing -> Left ("invalid outcome: " <> s)
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDbReadOnly db $ \c -> do
+runList db o = withDb db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
     ds <-
         if lParked o
@@ -391,7 +391,7 @@ showP =
         <$> strArgument (metavar "DISPATCH_ID")
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = withDbReadOnly db $ \c -> do
+runShow db o = withDb db $ \c -> do
     did <- resolveOrFatal (RD.resolveDispatchId c (sId o))
     md <- RD.getDispatch c did
     case md of
@@ -436,7 +436,7 @@ logsP =
             )
 
 runLogs :: FilePath -> LogsOpts -> IO ()
-runLogs db o = withDbReadOnly db $ \c -> do
+runLogs db o = withDb db $ \c -> do
     did <- resolveOrFatal (RD.resolveDispatchId c (gId o))
     md <- RD.getDispatch c did
     case md of
@@ -481,7 +481,7 @@ runRecover :: FilePath -> RecoverOpts -> IO ()
 runRecover db o = do
     cfg <- requireConfig
     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
-    withDbReadOnly db $ \c -> do
+    withDb db $ \c -> do
         open <- case recDispatchId o of
             Just raw -> do
                 did <- resolveOrFatal (RD.resolveDispatchId c raw)

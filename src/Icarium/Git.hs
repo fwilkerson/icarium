@@ -3,13 +3,9 @@ module Icarium.Git (
     runGit,
     isClean,
     statusPorcelain,
-    currentBranch,
     topLevel,
     revParse,
-    createBranch,
-    checkout,
     ffMerge,
-    stashUntracked,
     deleteBranch,
     deleteBranchForce,
     changedFiles,
@@ -77,9 +73,6 @@ statusPorcelain dir = do
         Right out -> out
         Left _ -> "?? <git status failed>"
 
-currentBranch :: FilePath -> IO (Either GitError Text)
-currentBranch dir = runGit dir ["rev-parse", "--abbrev-ref", "HEAD"]
-
 -- | Absolute path of the checkout root containing @dir@.
 topLevel :: FilePath -> IO (Either GitError Text)
 topLevel dir = runGit dir ["rev-parse", "--show-toplevel"]
@@ -88,15 +81,6 @@ topLevel dir = runGit dir ["rev-parse", "--show-toplevel"]
 revParse :: FilePath -> Text -> IO (Either GitError Text)
 revParse dir ref = runGit dir ["rev-parse", "--verify", T.unpack ref]
 
--- | Create and check out a new branch from the given base.
-createBranch :: FilePath -> Text -> Text -> IO (Either GitError ())
-createBranch dir name base =
-    void
-        <$> runGit dir ["checkout", "-b", T.unpack name, T.unpack base]
-
-checkout :: FilePath -> Text -> IO (Either GitError ())
-checkout dir branch = void <$> runGit dir ["checkout", T.unpack branch]
-
 {- | Fast-forward the current branch to the named branch. Fails if
 the FF isn't possible — we never want a merge commit.
 -}
@@ -104,14 +88,6 @@ ffMerge :: FilePath -> Text -> IO (Either GitError ())
 ffMerge dir branch =
     void
         <$> runGit dir ["merge", "--ff-only", T.unpack branch]
-
-{- | Stash working-tree changes including untracked files with a
-deterministic message. Used by recovery to preserve in-flight work.
--}
-stashUntracked :: FilePath -> Text -> IO (Either GitError ())
-stashUntracked dir msg =
-    void
-        <$> runGit dir ["stash", "push", "-u", "-m", T.unpack msg]
 
 {- | Delete a fully-merged local branch. Uses -d (safe delete) so git
 will refuse if the branch has unmerged commits. Note git checks
@@ -172,11 +148,11 @@ worktreeAddExisting repo path branch =
     void
         <$> runGit repo ["worktree", "add", path, T.unpack branch]
 
--- | Remove the worktree at @path@. @force@ discards dirty state.
-worktreeRemove :: FilePath -> FilePath -> Bool -> IO (Either GitError ())
-worktreeRemove repo path force =
+-- | Remove the worktree at @path@, discarding any dirty state (always @--force@).
+worktreeRemove :: FilePath -> FilePath -> IO (Either GitError ())
+worktreeRemove repo path =
     void
-        <$> runGit repo (["worktree", "remove"] <> ["--force" | force] <> [path])
+        <$> runGit repo ["worktree", "remove", "--force", path]
 
 -- | Prune stale worktree admin entries. Best-effort.
 worktreePrune :: FilePath -> IO ()

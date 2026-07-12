@@ -9,7 +9,7 @@ module Icarium.Dispatch.PostClaude (
     runGates,
 ) where
 
-import Control.Monad (forM_, unless, void)
+import Control.Monad (forM_, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Data.Maybe (fromMaybe)
@@ -102,32 +102,19 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
             ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
             ExitSuccess -> pure ()
         -- Returns Nothing for no-commit success, Just () when gates passed.
-        preStep
-            | noCommit = do
-                checkExit
-                porcelain <- liftIO (Git.statusPorcelain wt)
-                let porcStripped = T.strip porcelain
-                unless (T.null porcStripped) $
-                    throwE $
-                        "agent left uncommitted changes; refusing to accept\nuncommitted:\n"
-                            <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
-                mBranchSha <- liftIO (Git.revParse wt branch)
-                case mBranchSha of
-                    Right sha
-                        | sha /= baseSha ->
-                            throwE "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
-                    _ -> pure ()
-                pure Nothing
-            | otherwise = do
-                checkExit
-                porcelain <- liftIO (Git.statusPorcelain wt)
-                mBranchSha <- liftIO (Git.revParse wt branch)
-                mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)
-                liftIO $ case mBranchSha of
-                    Right sha -> RD.setLastCommit conn did sha
-                    Left _ -> pure ()
-                liftIO (runGates wt cfg) >>= either throwE pure
-                pure (Just ())
+        preStep = do
+            checkExit
+            porcelain <- liftIO (Git.statusPorcelain wt)
+            mBranchSha <- liftIO (Git.revParse wt branch)
+            mapM_ throwE (postClaudeGuard noCommit porcelain mBranchSha baseSha)
+            if noCommit
+                then pure Nothing
+                else do
+                    liftIO $ case mBranchSha of
+                        Right sha -> RD.setLastCommit conn did sha
+                        Left _ -> pure ()
+                    liftIO (runGates wt cfg) >>= either throwE pure
+                    pure (Just ())
 
     runExceptT preStep >>= \case
         Left notes -> do
@@ -227,15 +214,21 @@ checkpointDirtyTree wt did note = do
             pure True
 
 {- | Pure guard logic for the post-claude checks. Returns Just an error
-message if a guard fires, Nothing if both pass.
-  * Dirty-tree guard fires when @porcelain@ (raw `git status --porcelain`
-    output) is non-empty after stripping.
-  * Empty-diff guard fires when the dispatch branch SHA equals baseSha
-    (agent exited success but made no commits).
+message if a guard fires, Nothing if all pass. The Bool is whether this is
+a no-commit task.
+  * Dirty-tree guard fires in both modes when @porcelain@ (raw
+    `git status --porcelain` output) is non-empty after stripping.
+  * No-commit mode: fires when the branch SHA resolved and differs from
+    baseSha — the agent committed despite being told not to.
+  * Commit mode: fires when the branch SHA equals baseSha (agent exited
+    success but made no commits).
 -}
-postClaudeGuard :: Text -> Either e Text -> Text -> Maybe Text
-postClaudeGuard porcelain mBranchSha baseSha
+postClaudeGuard :: Bool -> Text -> Either e Text -> Text -> Maybe Text
+postClaudeGuard noCommit porcelain mBranchSha baseSha
     | not (T.null porcStripped) = Just dirtyMsg
+    | noCommit = case branchSha of
+        Just sha | sha /= baseSha -> Just "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
+        _ -> Nothing
     | branchSha == Just baseSha = Just "agent made no commits on dispatch branch"
     | otherwise = Nothing
   where

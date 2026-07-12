@@ -60,6 +60,7 @@ tests =
             [ testCase "base schema is already at schemaVersion; migrateDb is idempotent" testMigrateAdvances
             , testCase "bad SQL rolls back; user_version unchanged" testMigrateBadSqlRollback
             , testCase "user_version=0 with existing tables: stamps schemaVersion, no DDL re-run" testMigrateVersionZeroWithSchema
+            , testCase "full migration chain runs from an empty DB to schemaVersion" testMigrateChainFromEmpty
             ]
         , testGroup
             "dispatch token columns"
@@ -374,6 +375,30 @@ testMigrateVersionZeroWithSchema = do
     v1 <- dbSchemaVersion conn
     v1 @?= fromIntegral schemaVersion
     close conn
+
+-- Fresh file with no schema applied: migrateDb must run the whole chain from
+-- migration 1, landing at schemaVersion with a working task surface.
+testMigrateChainFromEmpty :: IO ()
+testMigrateChainFromEmpty =
+    withSystemTempFile "icarium-chain.db" $ \fp h -> do
+        hClose h
+        conn <- open fp
+        migrateDb conn
+        v <- dbSchemaVersion conn
+        v @?= fromIntegral schemaVersion
+        tid <-
+            RT.insertTask
+                conn
+                RT.NewTask
+                    { RT.ntTitle = "Chain task"
+                    , RT.ntBody = ""
+                    , RT.ntState = Ready
+                    , RT.ntPriority = Nothing
+                    , RT.ntNoCommit = False
+                    }
+        Just t <- RT.getTask conn tid
+        taskId t @?= tid
+        close conn
 
 -- =============================================================
 -- resolveDispatchId tests

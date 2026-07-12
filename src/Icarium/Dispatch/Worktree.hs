@@ -123,7 +123,7 @@ teardownWorktree repo dcfg wt = do
 -- | Force-remove a worktree, clear any leftover directory, and prune.
 removeQuietly :: FilePath -> FilePath -> IO ()
 removeQuietly repo wt = do
-    void (Git.worktreeRemove repo wt True)
+    void (Git.worktreeRemove repo wt)
     -- worktree remove can refuse (e.g. locked); make sure the path is gone
     -- so a later rebuild never collides, then let git forget the entry.
     leftover <- doesDirectoryExist wt

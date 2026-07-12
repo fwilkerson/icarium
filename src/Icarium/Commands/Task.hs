@@ -13,7 +13,7 @@ import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies (bodiesDir, readBody, taskBodyPath)
 import Icarium.Commands.Util
-import Icarium.Db (withDbReadOnly, withDbSync)
+import Icarium.Db (withDb, withDbSync)
 import Icarium.Node (createTaskWithBody)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
@@ -102,7 +102,7 @@ addP =
         <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
 
 runAdd :: FilePath -> AddOpts -> IO ()
-runAdd db o = withDbReadOnly db $ \c -> do
+runAdd db o = withDb db $ \c -> do
     body <- resolveBody (aBody o)
     unless (aState o `elem` [Idea, Planned, Ready]) $
         fatal 2 "on add: state must be idea | planned | ready"
@@ -178,7 +178,7 @@ defaultActiveStates :: [TaskState]
 defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
 
 runList :: FilePath -> ListOpts -> IO ()
-runList db o = withDbReadOnly db $ \c -> do
+runList db o = withDb db $ \c -> do
     forM_ (lDomain o) $ \n -> void $ requireCategory c Domain n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
     let effectiveStates
@@ -247,7 +247,7 @@ runShow db o = openDb db $ \c -> do
             let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
             TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
   where
-    openDb = if sPrompt o then withDbSync else withDbReadOnly
+    openDb = if sPrompt o then withDbSync else withDb
 
 -- =============================================================
 -- update
@@ -295,7 +295,7 @@ updateP =
             )
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
-runUpdate db o = withDbReadOnly db $ \c -> do
+runUpdate db o = withDb db $ \c -> do
     when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
     tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
@@ -332,7 +332,7 @@ rmP :: Parser RmOpts
 rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runRm :: FilePath -> RmOpts -> IO ()
-runRm db o = withDbReadOnly db $ \c -> do
+runRm db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (rId o))
     ok <- RT.deleteTask c tid
     if ok
@@ -353,7 +353,7 @@ nextP :: Parser NextOpts
 nextP = pure NextOpts
 
 runNext :: FilePath -> NextOpts -> IO ()
-runNext db _ = withDbReadOnly db $ \c -> do
+runNext db _ = withDb db $ \c -> do
     ts <- RT.listTasks c [] True Nothing Nothing
     case ts of
         [] -> exitWith (ExitFailure 1)
@@ -369,7 +369,7 @@ pathP :: Parser PathOpts
 pathP = PathOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runPath :: FilePath -> PathOpts -> IO ()
-runPath db o = withDbReadOnly db $ \c -> do
+runPath db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (pId o))
     TIO.putStrLn (T.pack (taskBodyPath (bodiesDir db) tid))
 
@@ -383,7 +383,7 @@ catP :: Parser CatOpts
 catP = CatOpts . T.pack <$> strArgument (metavar "TASK_ID")
 
 runCat :: FilePath -> CatOpts -> IO ()
-runCat db o = withDbReadOnly db $ \c -> do
+runCat db o = withDb db $ \c -> do
     tid <- resolveOrFatal (RT.resolveTaskId c (catId o))
     TIO.putStr =<< readBody (taskBodyPath (bodiesDir db) tid)
 
@@ -403,7 +403,7 @@ existsP =
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
 
 runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDbReadOnly db $ \c -> do
+runExists db o = withDb db $ \c -> do
     ts <- RT.getTasksByPrefix c (exId o)
     case ts of
         [t] -> do

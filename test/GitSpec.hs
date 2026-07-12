@@ -129,7 +129,7 @@ testRemove =
     withTestRepo $ \repo -> do
         let wt = repo </> "wt-rm"
         expectRight =<< Git.worktreeAdd repo wt "tmp-branch" "main"
-        expectRight =<< Git.worktreeRemove repo wt False
+        expectRight =<< Git.worktreeRemove repo wt
         Git.worktreePrune repo
         out <- expectRight =<< Git.runGit repo ["worktree", "list", "--porcelain"]
         length (Git.parseWorktreeList out) @?= 1

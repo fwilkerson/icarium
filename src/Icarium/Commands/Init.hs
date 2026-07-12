@@ -9,13 +9,13 @@ import System.IO (hPutStrLn, stderr)
 
 import Data.Text qualified as T
 import Icarium.Commands.Category (SyncReport (..), syncCategories)
+import Icarium.Commands.Util (requireConfig)
 import Icarium.Config (
     Config (..),
     defaultConfigPath,
     defaultConfigText,
-    loadConfig,
  )
-import Icarium.Db (initDb, withDbReadOnly)
+import Icarium.Db (initDb, withDb)
 import Icarium.Types (categoryAxisText)
 
 newtype Options = Options
@@ -54,8 +54,8 @@ run dbPath o = do
             putStrLn $ "created  " <> defaultConfigPath
 
     -- Seed categories from toml into the fresh DB.
-    config <- loadConfig defaultConfigPath >>= either (fatal 2) pure
-    withDbReadOnly dbPath $ \conn -> do
+    config <- requireConfig
+    withDb dbPath $ \conn -> do
         rpt <- syncCategories conn (cfgCategories config) False
         mapM_
             ( \(ax, n) ->
