@@ -4,7 +4,7 @@ icarium gives you three things in one local CLI:
 
 - **Tasks** — a small backlog with states, priorities, and dependencies.
 - **Knowledge** — context entries (domain notes) you attach to tasks; the dispatcher pulls relevant ones into the agent's prompt.
-- **Dispatch** — runs a headless Claude agent against a ready task on its own branch; if `build`/`test` (and an optional reviewer) pass, the orchestrator fast-forward-merges into the integration branch.
+- **Dispatch** — runs a headless Claude agent against a ready task in its own git worktree; if `build`/`test` (and an optional reviewer) pass, the branch is parked, and `dispatch merge` lands it on the integration branch.
 
 Storage is a local SQLite DB. It's a tool for one developer, or a small team.
 
@@ -47,7 +47,7 @@ current heads by default.
 
 ```toml
 [project]
-# Branch dispatches FF-merge into.
+# Branch parked dispatches land on via `dispatch merge`.
 integration_branch = "main"
 
 [commands]
@@ -79,6 +79,12 @@ log_retention_runs       = 25
 # Retry-storm watchdog: kill a dispatch after this many consecutive api_retry events.
 retry_storm_threshold    = 3
 
+# Optional commands run inside each dispatch worktree, after it's created and
+# before it's removed. A worktree_setup exit of 75 means "no capacity, try
+# later" — a queue drain stops cleanly; any other nonzero exit is an error.
+# worktree_setup    = "scripts/worktree-init.sh"
+# worktree_teardown = "scripts/worktree-free.sh"
+
 [categories]
 # Controlled vocabulary for tagging tasks and context entries. After editing,
 # run `icarium category sync` (add `--prune` to remove deleted ones).
@@ -93,6 +99,10 @@ disciplines = ["development"]
 # prompt_path  = ".icarium/reviewer.md" # defaults to built-in prompt
 ```
 
+Every command takes `--db`; set `ICARIUM_DB` to point at the store without the flag (an explicit
+`--db` still wins). The dispatcher exports it — as an absolute path — into the agent's environment,
+so a child `icarium` run from inside a worktree writes to the same store instead of a nested one.
+
 ## Reviewers
 
 A reviewer is an optional post-commit gate. When `[review] enabled = true`, after the worker
@@ -100,7 +110,7 @@ commits, the orchestrator runs a second Claude agent — given **only the `Read`
 task title, task body, and the git diff, and asks it to judge the work.
 
 ```
-worker → diff → reviewer ─┬─ pass / warn → FF-merge
+worker → diff → reviewer ─┬─ pass / warn → park (land with `dispatch merge`)
                           └─ fail        → retry (findings injected) or block
 ```
 
@@ -117,8 +127,8 @@ findings:
 
 **Verdicts.**
 
-- **`pass`** — merge proceeds.
-- **`warn`** — merge proceeds, but the findings are captured as a context entry titled
+- **`pass`** — the branch is parked for `dispatch merge`.
+- **`warn`** — the branch is parked, but the findings are captured as a context entry titled
   `reviewer warn: <task title>` (body = the YAML), tagged with the task's categories and linked
   back to it with a `references` edge for provenance. Surfaces via `icarium ctx list`,
   `icarium search`, and `icarium link list --from <task>` so the concern isn't lost.
@@ -132,12 +142,32 @@ The default reviewer prompt is built in; override it with `prompt_path`. See
 
 ## Dispatch & drain semantics
 
-A dispatch cuts a task branch, runs the agent, then runs the `build`/`test` gates and the optional
-reviewer; on success it fast-forward-merges into `integration_branch` and deletes the branch.
+Each dispatch runs in its own git worktree under `.icarium/wt/<dispatch-id>`, cut fresh from the
+integration branch — so there's no clean-tree or on-branch precondition, and the invoking checkout
+is never touched (you can dispatch from a dirty feature branch). The agent works there; the
+`build`/`test` gates and the optional reviewer run against it. Worker and reviewer both run with
+`--permission-mode dontAsk`: a denied tool call is fed back as the tool result rather than aborting
+the session, and nothing inherits the user's `~/.claude` default mode.
+
+**Park by default.** On success the branch is *parked*, not merged: the task moves to `done`, the
+worktree is torn down (the branch is retained), and `dispatch list --parked` shows what's waiting to
+land. On failure the task moves to `blocked`, any dirty tree is checkpointed as a `wip:` commit on
+the retained branch, and the worktree is removed.
+
+**Landing — `dispatch merge <id>`.** Merge-queue semantics:
+
+- Base unmoved since the park → fast-forward. If the integration branch is checked out and clean the
+  tree advances in place; otherwise its ref is fast-forwarded via a throwaway worktree.
+- Base moved → the branch is rebased in a rebuilt worktree, the `build`/`test` gates are **re-run**
+  there (the reviewer is not), then it fast-forwards. A rebase conflict or a re-run gate failure
+  leaves the dispatch parked with a note and exits non-zero — fix it and run `dispatch merge` again.
+
+On a successful land the merge sha is recorded and the branch deleted.
 
 `dispatch run` (no task ID) drains the ready queue in priority order. "Ready" is stricter than
 `state='ready'`: the `ready_tasks` view also requires every `depends_on` upstream to be `done`.
-In-progress or blocked upstreams are not satisfied.
+In-progress or blocked upstreams are not satisfied. If `worktree_setup` exits 75 (no capacity) the
+drain stops cleanly, leaving the task untouched; any other setup failure stops with an error.
 
 **Failure quarantine.** When a dispatch fails, the task is moved to `state='blocked'`. Because
 `blocked` is not `done`, any task depending on it drops out of the ready queue — quarantined with no
@@ -158,7 +188,7 @@ Every command has `--help`; agents should start with `icarium agents`.
 | `ctx` | Manage context entries: `add`, `list`, `show`, `update`, `rm`, `path`, `cat`, `children`, `tree`, `exists`. |
 | `link` | Typed edges between nodes: `add`, `list`, `rm`. |
 | `category` | Manage the domain/discipline vocabulary: `list`, `sync`. |
-| `dispatch` | Run and inspect dispatches: `run`, `list`, `show`, `logs`, `recover`. |
+| `dispatch` | Run and inspect dispatches: `run`, `list` (`--parked`), `show`, `logs`, `merge`, `recover`. |
 | `search` | FTS5 search over titles and bodies (`--kind`, `--domain`, phrase/`OR` queries). |
 | `reindex` | Rebuild the FTS5 body index. |
 | `doctor` | Health check: config, DB, schema version, `claude`/`git` binaries, orphaned dispatches. |
