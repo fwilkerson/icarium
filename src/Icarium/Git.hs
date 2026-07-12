@@ -13,10 +13,20 @@ module Icarium.Git (
     changedFiles,
     diffPatch,
     commitAll,
+    worktreeAdd,
+    worktreeAddExisting,
+    worktreeRemove,
+    worktreePrune,
+    rebase,
+    rebaseAbort,
+    mergeBaseIsAncestor,
+    branchCheckedOutAt,
+    parseWorktreeList,
 ) where
 
 import Control.Monad (void)
 import Data.ByteString.Lazy qualified as BL
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
@@ -128,3 +138,90 @@ diffPatch dir baseSha = do
     pure $ case r of
         Left _ -> ""
         Right out -> out
+
+-- =============================================================
+-- Worktrees
+-- =============================================================
+
+-- | Add a worktree at @path@ on a new branch cut from @base@.
+worktreeAdd :: FilePath -> FilePath -> Text -> Text -> IO (Either GitError ())
+worktreeAdd repo path branch base =
+    void
+        <$> runGit repo ["worktree", "add", path, "-b", T.unpack branch, T.unpack base]
+
+-- | Add a worktree at @path@ checking out an existing branch.
+worktreeAddExisting :: FilePath -> FilePath -> Text -> IO (Either GitError ())
+worktreeAddExisting repo path branch =
+    void
+        <$> runGit repo ["worktree", "add", path, T.unpack branch]
+
+-- | Remove the worktree at @path@. @force@ discards dirty state.
+worktreeRemove :: FilePath -> FilePath -> Bool -> IO (Either GitError ())
+worktreeRemove repo path force =
+    void
+        <$> runGit repo (["worktree", "remove"] <> ["--force" | force] <> [path])
+
+-- | Prune stale worktree admin entries. Best-effort.
+worktreePrune :: FilePath -> IO ()
+worktreePrune repo = void (runGit repo ["worktree", "prune"])
+
+-- =============================================================
+-- Rebase / ancestry
+-- =============================================================
+
+-- | Rebase the current branch onto @onto@.
+rebase :: FilePath -> Text -> IO (Either GitError ())
+rebase dir onto = void <$> runGit dir ["rebase", T.unpack onto]
+
+-- | Abort an in-progress rebase. Best-effort.
+rebaseAbort :: FilePath -> IO ()
+rebaseAbort dir = void (runGit dir ["rebase", "--abort"])
+
+{- | True when @a@ is an ancestor of @b@ (i.e. @b@ can fast-forward from
+@a@). Exit 0 = ancestor; any other exit (not-ancestor, bad ref) = False.
+-}
+mergeBaseIsAncestor :: FilePath -> Text -> Text -> IO Bool
+mergeBaseIsAncestor dir a b = do
+    r <- runGit dir ["merge-base", "--is-ancestor", T.unpack a, T.unpack b]
+    pure $ case r of
+        Right _ -> True
+        Left _ -> False
+
+{- | The worktree path where @branch@ is checked out, if any. Drives
+merge-case selection (land in place vs. temp worktree).
+-}
+branchCheckedOutAt :: FilePath -> Text -> IO (Maybe FilePath)
+branchCheckedOutAt repo branch = do
+    r <- runGit repo ["worktree", "list", "--porcelain"]
+    pure $ case r of
+        Left _ -> Nothing
+        Right out ->
+            listToMaybe
+                [ path
+                | (path, Just ref) <- parseWorktreeList out
+                , stripRefsHeads ref == branch
+                ]
+  where
+    stripRefsHeads ref = fromMaybe ref (T.stripPrefix "refs/heads/" ref)
+
+{- | Parse @git worktree list --porcelain@ into @(path, branch)@ pairs.
+Stanzas are separated by blank lines; each has a @worktree \<path\>@ line
+and optionally a @branch refs/heads/\<name\>@ line. Detached-HEAD and bare
+stanzas have no branch line, so their branch is 'Nothing'. The branch
+value is the raw ref (e.g. @refs/heads/main@).
+-}
+parseWorktreeList :: Text -> [(FilePath, Maybe Text)]
+parseWorktreeList = concatMap stanza . splitStanzas . T.lines
+  where
+    splitStanzas ls =
+        case break blank (dropWhile blank ls) of
+            ([], _) -> []
+            (s, rest) -> s : splitStanzas rest
+    blank = T.null . T.strip
+    stanza sLines =
+        [ (T.unpack path, field "branch ")
+        | path <- take 1 (values "worktree ")
+        ]
+      where
+        field key = listToMaybe (values key)
+        values key = [v | l <- sLines, Just v <- [T.stripPrefix key l]]
