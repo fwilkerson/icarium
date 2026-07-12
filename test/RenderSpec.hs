@@ -215,22 +215,25 @@ minDispatch did tid outcome =
 
 testDispatchListFormat :: IO ()
 testDispatchListFormat = do
-    let d1 = minDispatch "01AAA0000000000000000000AA" "01TTT0000000000000000000AA" (Just OSuccess)
+    let d1 = (minDispatch "01AAA0000000000000000000AA" "01TTT0000000000000000000AA" (Just OSuccess)){dispatchMergeSha = Just "def456"}
         d2 = minDispatch "01BBB0000000000000000000BB" "01TTT0000000000000000000BB" (Just OFailure)
         d3 = minDispatch "01CCC0000000000000000000CC" "01TTT0000000000000000000CC" Nothing
+        d4 = minDispatch "01DDD0000000000000000000DD" "01TTT0000000000000000000DD" (Just OSuccess)
         rows =
             [ Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d1, Icarium.Render.drTaskTitle = "Add unified search", Icarium.Render.drCtxCount = 1, Icarium.Render.drDuration = "12m"}
             , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d2, Icarium.Render.drTaskTitle = "FTS5 backend decision", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "47m"}
             , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d3, Icarium.Render.drTaskTitle = "Search CLI shape", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "3m (running)"}
+            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d4, Icarium.Render.drTaskTitle = "Parked run", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "9m"}
             ]
         out = Icarium.Render.renderDispatchList True rows
     assertBool "dispatch-id prefix in output" ("01AAA00000" `T.isInfixOf` out)
     assertBool "task title present" ("Add unified search" `T.isInfixOf` out)
     assertBool "[ctx:1] badge shown" ("[ctx:1]" `T.isInfixOf` out)
     assertBool "no [ctx:0] badge" (not ("[ctx:0]" `T.isInfixOf` out))
-    assertBool "[success] outcome badge" ("[success]" `T.isInfixOf` out)
+    assertBool "[success] outcome badge (merged)" ("[success]" `T.isInfixOf` out)
     assertBool "[failure] outcome badge" ("[failure]" `T.isInfixOf` out)
     assertBool "[open] outcome badge" ("[open]" `T.isInfixOf` out)
+    assertBool "[parked] badge for unmerged success" ("[parked]" `T.isInfixOf` out)
     assertBool "branch column absent" (not ("dispatch/01AAA" `T.isInfixOf` out))
     assertBool "no column header row" (not ("task_id" `T.isInfixOf` out))
     assertBool "duration shown" ("12m" `T.isInfixOf` out)

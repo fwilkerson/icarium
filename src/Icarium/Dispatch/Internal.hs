@@ -234,12 +234,14 @@ doRealAttempt conn req attempt mFindings = do
                 )
                     `onException` teardownWorktree "." dcfg wt
             teardownWorktree "." dcfg wt
-            -- A no-commit success leaves an empty branch (sha == baseSha);
-            -- delete it once the worktree no longer has it checked out.
+            -- A no-commit success leaves an empty branch (sha == baseSha,
+            -- verified by the post-claude guard); delete it once the worktree
+            -- no longer has it checked out. Force: `-d` checks merged-ness
+            -- against HEAD, which may be an unrelated checkout.
             case pcResult of
                 PCDone dr
                     | dresOutcome dr == OSuccess && taskNoCommit task ->
-                        void (Git.deleteBranch "." branch)
+                        void (Git.deleteBranchForce "." branch)
                 _ -> pure ()
             case pcResult of
                 PCDone dr -> pure (Right dr)

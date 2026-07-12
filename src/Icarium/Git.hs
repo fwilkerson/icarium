@@ -4,12 +4,14 @@ module Icarium.Git (
     isClean,
     statusPorcelain,
     currentBranch,
+    topLevel,
     revParse,
     createBranch,
     checkout,
     ffMerge,
     stashUntracked,
     deleteBranch,
+    deleteBranchForce,
     changedFiles,
     diffPatch,
     commitAll,
@@ -78,6 +80,10 @@ statusPorcelain dir = do
 currentBranch :: FilePath -> IO (Either GitError Text)
 currentBranch dir = runGit dir ["rev-parse", "--abbrev-ref", "HEAD"]
 
+-- | Absolute path of the checkout root containing @dir@.
+topLevel :: FilePath -> IO (Either GitError Text)
+topLevel dir = runGit dir ["rev-parse", "--show-toplevel"]
+
 -- | Resolve a ref to its full SHA.
 revParse :: FilePath -> Text -> IO (Either GitError Text)
 revParse dir ref = runGit dir ["rev-parse", "--verify", T.unpack ref]
@@ -108,12 +114,23 @@ stashUntracked dir msg =
         <$> runGit dir ["stash", "push", "-u", "-m", T.unpack msg]
 
 {- | Delete a fully-merged local branch. Uses -d (safe delete) so git
-will refuse if the branch has unmerged commits.
+will refuse if the branch has unmerged commits. Note git checks
+merged-ness against HEAD — from a checkout that doesn't contain the
+branch this refuses even when the branch is merged into base; callers
+that have verified the sha themselves use 'deleteBranchForce'.
 -}
 deleteBranch :: FilePath -> Text -> IO (Either GitError ())
 deleteBranch dir name =
     void
         <$> runGit dir ["branch", "-d", T.unpack name]
+
+{- | Force-delete a branch (-D). Only for callers that have already
+proven the branch's commits are reachable elsewhere.
+-}
+deleteBranchForce :: FilePath -> Text -> IO (Either GitError ())
+deleteBranchForce dir name =
+    void
+        <$> runGit dir ["branch", "-D", T.unpack name]
 
 -- | Stage all changes and create a commit with the given message.
 commitAll :: FilePath -> Text -> IO (Either GitError ())

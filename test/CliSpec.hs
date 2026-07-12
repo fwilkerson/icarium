@@ -232,8 +232,8 @@ testDispatchListLimit = withSystemTempDirectory "icarium-test" $ \dir -> do
                 conn
                 ( Query
                     "INSERT INTO dispatches \
-                    \(id, task_id, branch, base_branch, base_sha, model, effort, outcome) \
-                    \VALUES (?,?,?,?,?,?,?,?)"
+                    \(id, task_id, branch, base_branch, base_sha, model, effort, outcome, merge_sha) \
+                    \VALUES (?,?,?,?,?,?,?,?,?)"
                 )
                 ( "01TESTLIMIT0000000000000" ++ show (i :: Int) ++ "X"
                 , tid
@@ -243,6 +243,7 @@ testDispatchListLimit = withSystemTempDirectory "icarium-test" $ \dir -> do
                 , "claude-sonnet-4-6" :: String
                 , "medium" :: String
                 , "success" :: String
+                , "def456" :: String
                 )
         )
         [1 .. 5 :: Int]

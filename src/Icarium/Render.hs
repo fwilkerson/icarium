@@ -398,6 +398,7 @@ renderDispatch d mt ks mRetryId =
         , field "ended_at" (fromMaybe "" (dispatchEndedAt d))
         , field "outcome" (maybe "open" dispatchOutcomeText (dispatchOutcome d))
         , field "review" (maybe "" reviewVerdictText (dispatchReviewVerdict d))
+        , field "merged" mergedField
         , field "merge_sha" (fromMaybe "" (dispatchMergeSha d))
         , field "last_commit" (fromMaybe "" (dispatchLastCommit d))
         , field "log_path" (fromMaybe "" (dispatchLogPath d))
@@ -412,6 +413,10 @@ renderDispatch d mt ks mRetryId =
             ++ contextLines
   where
     field k v = padr 14 (k <> ":") <> " " <> v
+    mergedField = case (dispatchOutcome d, dispatchMergeSha d) of
+        (Just OSuccess, Nothing) -> "no (parked; land with `icarium dispatch merge`)"
+        (_, Just _) -> fromMaybe "yes" (dispatchMergedAt d)
+        _ -> ""
     tokensLine = case (dispatchTokensIn d, dispatchTokensOut d, dispatchTokensCacheRead d) of
         (Just i, Just o, Just c) ->
             [ field
@@ -458,14 +463,18 @@ renderDispatchList utf8 rows = T.unlines $ map renderRow rows
             durPart = padr durWidth (drDuration dr)
             ctx = fmtCtx (drCtxCount dr)
             ctxPart = if ctxWidth == 0 then "" else "  " <> padr ctxWidth ctx
-            badge = outcomeBadge (dispatchOutcome d)
+            badge = outcomeBadge d
          in didPart <> "   " <> tidPart <> "  " <> titPart <> "  " <> durPart <> ctxPart <> "  " <> badge
 
-outcomeBadge :: Maybe DispatchOutcome -> Text
-outcomeBadge Nothing = "[open]"
-outcomeBadge (Just OSuccess) = "[success]"
-outcomeBadge (Just OFailure) = "[failure]"
-outcomeBadge (Just OInterrupted) = "[interrupted]"
+-- | Parked = succeeded but not yet landed on base.
+outcomeBadge :: Dispatch -> Text
+outcomeBadge d = case dispatchOutcome d of
+    Nothing -> "[open]"
+    Just OSuccess
+        | Nothing <- dispatchMergeSha d -> "[parked]"
+        | otherwise -> "[success]"
+    Just OFailure -> "[failure]"
+    Just OInterrupted -> "[interrupted]"
 
 fmtSecs :: Int -> Text
 fmtSecs s

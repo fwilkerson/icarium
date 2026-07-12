@@ -1,6 +1,7 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
 import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT)
 import Data.Either (fromRight)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.List (nub)
@@ -27,15 +28,23 @@ import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
 import Icarium.Config (
+    CommandsConfig (..),
     Config,
     DispatchConfig (..),
+    cfgCommands,
     cfgDispatch,
     defaultConfigPath,
     loadConfig,
  )
 import Icarium.Db (parseDbTime, withDbReadOnly, withDbSync)
 import Icarium.Dispatch qualified as D
-import Icarium.Dispatch.Worktree (WorktreeError (..), worktreeErrorText)
+import Icarium.Dispatch.PostClaude (runGate)
+import Icarium.Dispatch.Worktree (
+    WorktreeError (..),
+    rebuildWorktree,
+    teardownWorktree,
+    worktreeErrorText,
+ )
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Dispatch qualified as RD
@@ -49,6 +58,7 @@ data Command
     | Show ShowOpts
     | Logs LogsOpts
     | Recover RecoverOpts
+    | Merge MergeOpts
 
 parser :: Parser Command
 parser =
@@ -64,6 +74,10 @@ parser =
                 "recover"
                 "Reconcile dispatches whose orchestrator died mid-run: mark outcome interrupted, move task to blocked with structured notes."
                 (Recover <$> recoverP)
+            <> subcmd
+                "merge"
+                "Land a parked dispatch branch on its base: fast-forward when possible, else rebase + re-run gates."
+                (Merge <$> mergeP)
         )
 
 run :: FilePath -> Command -> IO ()
@@ -73,6 +87,7 @@ run db = \case
     Show o -> runShow db o
     Logs o -> runLogs db o
     Recover o -> runRecover db o
+    Merge o -> runMerge db o
 
 -- =============================================================
 -- run  (single-task dispatch or queue drain)
@@ -305,6 +320,7 @@ data ListOpts = ListOpts
     { lTask :: Maybe Text
     , lOutcome :: Maybe DispatchOutcome
     , lLimit :: Maybe Int
+    , lParked :: Bool
     }
 
 listP :: Parser ListOpts
@@ -327,6 +343,7 @@ listP =
                     <> help "Return at most N dispatches"
                 )
             )
+        <*> switch (long "parked" <> help "Only parked dispatches (successful, not yet merged)")
 
 outcomeReader :: ReadM DispatchOutcome
 outcomeReader = eitherReader $ \s ->
@@ -337,7 +354,12 @@ outcomeReader = eitherReader $ \s ->
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDbReadOnly db $ \c -> do
     mTaskId <- traverse (resolveOrFatal . RT.resolveTaskId c) (lTask o)
-    ds <- RD.listDispatches c mTaskId
+    ds <-
+        if lParked o
+            then do
+                parked <- RD.listParkedDispatches c
+                pure $ maybe parked (\tid -> filter ((== tid) . dispatchTaskId) parked) mTaskId
+            else RD.listDispatches c mTaskId
     let filtered0 = case lOutcome o of
             Nothing -> ds
             Just want -> filter ((Just want ==) . dispatchOutcome) ds
@@ -528,3 +550,118 @@ reconcileDispatch c now staleSec d = do
 boolText :: Bool -> Text
 boolText True = "yes"
 boolText False = "no"
+
+-- =============================================================
+-- merge  (land a parked dispatch on its base)
+-- =============================================================
+
+newtype MergeOpts = MergeOpts {mId :: Text}
+
+mergeP :: Parser MergeOpts
+mergeP =
+    MergeOpts . T.pack
+        <$> strArgument (metavar "DISPATCH_ID")
+
+{- | Merge-queue semantics: fast-forward when the base hasn't moved since
+the park; otherwise rebase the branch in a rebuilt worktree, re-run the
+gates against the post-rebase state, then fast-forward. A conflict or
+gate failure leaves the dispatch parked with updated notes.
+-}
+runMerge :: FilePath -> MergeOpts -> IO ()
+runMerge db o = do
+    cfg <-
+        loadConfig defaultConfigPath >>= \case
+            Left e -> fatal 2 ("config parse error:\n" <> e)
+            Right c -> pure c
+    withDbSync db $ \c -> do
+        did <- resolveOrFatal (RD.resolveDispatchId c (mId o))
+        md <- RD.getDispatch c did
+        d <- maybe (fatal 1 ("dispatch not found: " <> T.unpack did)) pure md
+        case dispatchOutcome d of
+            Just OSuccess -> pure ()
+            other ->
+                fatal 1 $
+                    "not a successful dispatch (outcome: "
+                        <> maybe "open" (T.unpack . dispatchOutcomeText) other
+                        <> ")"
+        forM_ (dispatchMergeSha d) $ \sha ->
+            fatal 1 ("already merged: " <> T.unpack sha)
+        let branch = dispatchBranch d
+            base = dispatchBaseBranch d
+        Git.revParse "." branch >>= \case
+            Left _ -> fatal 1 ("branch missing (deleted manually?): " <> T.unpack branch)
+            Right _ -> pure ()
+        ffPossible <- Git.mergeBaseIsAncestor "." base branch
+        unless ffPossible $ rebaseThenGate cfg c did branch base
+        landFF did base branch
+        newSha <- either (fatal 1 . show) pure =<< Git.revParse "." base
+        RD.setMerged c did newSha
+        -- `branch -d` checks merged-ness against HEAD, which may be an
+        -- unrelated checkout; the sha equality proves the branch landed.
+        branchSha <- fromRight "" <$> Git.revParse "." branch
+        when (branchSha == newSha) $ void (Git.deleteBranchForce "." branch)
+        TIO.putStrLn $
+            "merged " <> T.take 10 did <> ": " <> base <> " -> " <> T.take 10 newSha
+
+{- | Rebase the parked branch onto the current base tip and re-run the
+gates there. On success the branch fast-forwards from base. Note the
+rebase rewrites the parked branch even when the gates then fail — the
+pre-rebase commits stay reachable via the reflog, and retrying the merge
+after a fix is a plain FF.
+-}
+rebaseThenGate :: Config -> Connection -> Text -> Text -> Text -> IO ()
+rebaseThenGate cfg conn did branch base = do
+    let dcfg = cfgDispatch cfg
+    hPutStrLn stderr ("icarium: base moved since park; rebasing " <> T.unpack branch)
+    wt <-
+        rebuildWorktree "." dcfg did branch
+            >>= either (fatal 3 . T.unpack . worktreeErrorText) pure
+    Git.rebase wt base >>= \case
+        Left _ -> do
+            Git.rebaseAbort wt
+            teardownWorktree "." dcfg wt
+            RD.updateNotes conn did ("merge conflict; needs manual rebase onto " <> base)
+            fatal 3 ("rebase onto " <> T.unpack base <> " failed; dispatch stays parked")
+        Right () -> do
+            cc <- maybe (fatal 2 "no [commands] section configured") pure (cfgCommands cfg)
+            gateResult <- runExceptT $ do
+                ExceptT (runGate wt (ccBuild cc))
+                ExceptT (runGate wt (ccTest cc))
+            case gateResult of
+                Left note -> do
+                    teardownWorktree "." dcfg wt
+                    RD.updateNotes conn did ("gates failed after rebase: " <> note)
+                    fatal 3 ("gates failed after rebase; dispatch stays parked: " <> T.unpack note)
+                Right () -> teardownWorktree "." dcfg wt
+
+-- | Fast-forward base to the dispatch branch, wherever base lives.
+landFF :: Text -> Text -> Text -> IO ()
+landFF did base branch = do
+    mWhere <- Git.branchCheckedOutAt "." base
+    here <- either (const Nothing) (Just . T.unpack) <$> Git.topLevel "."
+    case mWhere of
+        -- Base checked out nowhere: FF its ref via a throwaway worktree.
+        Nothing -> do
+            let path = ".icarium/wt/merge-" <> T.unpack did
+            void (Git.worktreeRemove "." path True)
+            Git.worktreePrune "."
+            Git.worktreeAddExisting "." path base
+                >>= either (fatal 1 . ("cannot create merge worktree: " <>) . show) pure
+            r <- Git.ffMerge path branch
+            void (Git.worktreeRemove "." path True)
+            Git.worktreePrune "."
+            either (fatal 1 . ("ff-merge failed: " <>) . show) pure r
+        Just wtPath
+            | Just wtPath == here -> do
+                clean <- Git.isClean "."
+                unless clean $
+                    fatal 1 "base is checked out here with a dirty tree; commit or stash first"
+                Git.ffMerge "." branch
+                    >>= either (fatal 1 . ("ff-merge failed: " <>) . show) pure
+            | otherwise ->
+                fatal 1 $
+                    "base branch "
+                        <> T.unpack base
+                        <> " is checked out at "
+                        <> wtPath
+                        <> "; merge there or free it first"
