@@ -97,6 +97,7 @@ testTimeoutOutcome = withTestRepo $ \dir -> withTestDb $ \conn -> withCwdLock $ 
                 , dxDid = did
                 , dxBranch = "dispatch/" <> did
                 , dxBase = "main"
+                , dxWorkDir = dir
                 }
     res <- handlePostClaude dx fakeConfig False timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
     dresOutcome res @?= OFailure
@@ -128,6 +129,8 @@ fakeConfig =
                 , dcHeartbeatStaleSeconds = 300
                 , dcLogRetentionRuns = 1
                 , dcRetryStormThreshold = 3
+                , dcWorktreeSetup = Nothing
+                , dcWorktreeTeardown = Nothing
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         , cfgReview = Nothing

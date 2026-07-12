@@ -123,10 +123,10 @@ commitAll dir msg = do
         Left e -> pure (Left e)
         Right _ -> void <$> runGit dir ["commit", "-m", T.unpack msg]
 
--- | Files changed between the given base SHA and HEAD; returns [] on git error.
-changedFiles :: FilePath -> Text -> IO [Text]
-changedFiles dir baseSha = do
-    r <- runGit dir ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
+-- | Files changed between the given base SHA and @tip@; returns [] on git error.
+changedFiles :: FilePath -> Text -> Text -> IO [Text]
+changedFiles dir baseSha tip = do
+    r <- runGit dir ["diff", "--name-only", T.unpack baseSha <> ".." <> T.unpack tip]
     case r of
         Left _ -> pure []
         Right out -> pure (filter (not . T.null) (T.lines out))

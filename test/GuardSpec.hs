@@ -6,6 +6,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Dispatch.Claude (claudeArgs)
 import Icarium.Dispatch.PostClaude (postClaudeGuard)
+import Icarium.Dispatch.Worktree (WorktreeError (..), setupExitError, worktreePath)
 import Icarium.Types (Effort (..))
 
 tests :: TestTree
@@ -18,6 +19,8 @@ tests =
         , testCase "clean tree with new commit passes" testGuardPasses
         , testCase "revParse error does not fire empty-diff" testGuardRevParseError
         , testCase "claudeArgs includes --permission-mode dontAsk plus existing flags" testClaudeArgsPermissionMode
+        , testCase "setup exit 75 is back-pressure, others are failures" testSetupExitClassifier
+        , testCase "worktreePath embeds the dispatch id under .icarium/wt" testWorktreePath
         ]
 
 baseSha :: Text
@@ -30,7 +33,7 @@ testGuardDirtyTree :: IO ()
 testGuardDirtyTree =
     postClaudeGuard "?? snapshot-test.json\n M src/Foo.hs" (Right newSha) baseSha
         @?= Just
-            "agent left uncommitted changes; refusing to merge\n\
+            "agent left uncommitted changes; refusing to accept\n\
             \uncommitted:\n\
             \  ?? snapshot-test.json\n\
             \   M src/Foo.hs"
@@ -44,7 +47,7 @@ testGuardDirtyFirst :: IO ()
 testGuardDirtyFirst =
     postClaudeGuard "?? leftover.txt" (Right baseSha) baseSha
         @?= Just
-            "agent left uncommitted changes; refusing to merge\n\
+            "agent left uncommitted changes; refusing to accept\n\
             \uncommitted:\n\
             \  ?? leftover.txt"
 
@@ -66,3 +69,13 @@ testClaudeArgsPermissionMode = do
     assertBool "adjacent --permission-mode dontAsk" (hasAdjacentPair "--permission-mode" "dontAsk" args)
     assertBool "-p present" ("-p" `elem` args)
     assertBool "adjacent --output-format stream-json" (hasAdjacentPair "--output-format" "stream-json" args)
+
+testSetupExitClassifier :: IO ()
+testSetupExitClassifier = do
+    setupExitError "init.sh" 75 @?= WtNoCapacity "init.sh -> exit 75"
+    setupExitError "init.sh" 1 @?= WtSetupFailed "init.sh -> exit 1"
+    setupExitError "init.sh" 74 @?= WtSetupFailed "init.sh -> exit 74"
+
+testWorktreePath :: IO ()
+testWorktreePath =
+    worktreePath "01ABCDEF" @?= ".icarium/wt/01ABCDEF"

@@ -188,9 +188,9 @@ workingAgreement t =
     , "    `icarium ctx add '<title>' --body-stdin <<'EOF'"
     , "       ...markdown..."
     , "     EOF`"
-    , "- Commit your code before exiting; the program marks the task done after the gates pass and the FF-merge succeeds."
+    , "- Commit your code before exiting; after the gates pass the program parks your branch for merge."
     , "- Test artifacts (snapshots, fixtures, scratch files) MUST go in `$ICARIUM_SCRATCH_DIR`,"
-    , "  never in the working tree. The post-claude gate refuses to merge when the tree is dirty."
+    , "  never in the working tree. The post-claude gate refuses to accept a dirty tree."
     , ""
     ]
 

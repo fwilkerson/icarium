@@ -5,7 +5,6 @@ import Data.List (isInfixOf)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (close, open)
-import System.Directory (withCurrentDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -23,7 +22,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Schema (applySchema)
 import Icarium.Types
-import TestHelpers (minTask, mkCat, withCwdLock, withTestDb, withTestRepo)
+import TestHelpers (minTask, mkCat, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -94,6 +93,8 @@ minCfg =
                 , dcHeartbeatStaleSeconds = 300
                 , dcLogRetentionRuns = 25
                 , dcRetryStormThreshold = 3
+                , dcWorktreeSetup = Nothing
+                , dcWorktreeTeardown = Nothing
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         , cfgReview = Nothing
@@ -101,28 +102,26 @@ minCfg =
 
 testCheckpointDirtyTree :: IO ()
 testCheckpointDirtyTree =
-    withTestRepo $ \dir ->
-        withCwdLock $ withCurrentDirectory dir $ do
-            writeFile (dir <> "/dirty.txt") "uncommitted work"
-            checkpointDirtyTree "TESTDID" "claude exited 1"
-            logOut <- gitIn dir ["log", "--oneline", "-1"]
-            assertBool "wip commit message present" ("wip: dispatch TESTDID" `isInfixOf` logOut)
-            assertBool "failed: note in commit" ("failed:" `isInfixOf` logOut)
+    withTestRepo $ \dir -> do
+        writeFile (dir <> "/dirty.txt") "uncommitted work"
+        checkpointDirtyTree dir "TESTDID" "claude exited 1"
+        logOut <- gitIn dir ["log", "--oneline", "-1"]
+        assertBool "wip commit message present" ("wip: dispatch TESTDID" `isInfixOf` logOut)
+        assertBool "failed: note in commit" ("failed:" `isInfixOf` logOut)
 
 testCheckpointCleanTree :: IO ()
 testCheckpointCleanTree =
-    withTestRepo $ \dir ->
-        withCwdLock $ withCurrentDirectory dir $ do
-            before <- gitIn dir ["rev-parse", "HEAD"]
-            checkpointDirtyTree "TESTDID" "some error"
-            after <- gitIn dir ["rev-parse", "HEAD"]
-            before @?= after
+    withTestRepo $ \dir -> do
+        before <- gitIn dir ["rev-parse", "HEAD"]
+        checkpointDirtyTree dir "TESTDID" "some error"
+        after <- gitIn dir ["rev-parse", "HEAD"]
+        before @?= after
 
 testHandlePostClaudeFailureCheckpoints :: IO ()
 testHandlePostClaudeFailureCheckpoints =
     withTestRepo $ \dir ->
         withTestDb $ \conn ->
-            withCwdLock $ withCurrentDirectory dir $ do
+            do
                 let did = "01TESTDISPATCH0000000000AA" :: Text
                     branch = "dispatch/" <> did
                 -- create dispatch branch with one commit so it diverges from main
@@ -166,6 +165,7 @@ testHandlePostClaudeFailureCheckpoints =
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
+                            , dxWorkDir = dir
                             }
                 res <- handlePostClaude dx minCfg False (ExitFailure 1) baseSha "/dev/null"
                 -- outcome is failure
@@ -178,15 +178,16 @@ testHandlePostClaudeFailureCheckpoints =
                 assertBool "wip commit on dispatch branch" ("wip: dispatch" `isInfixOf` logOut)
 
 {- | finishWith with OFailure must snapshot staged/unstaged changes onto the
-dispatch branch before switching to base, so those changes never leak to main.
-Asserts (a) base worktree is clean, (b) dispatch branch carries the WIP commit,
-(c) the WIP commit SHA is embedded in dresNotes for easy recovery.
+dispatch branch before the worktree is torn down — the branch is what
+survives. Asserts (a) the worktree is clean after the checkpoint (everything
+committed), (b) the dispatch branch carries the WIP commit, (c) the WIP
+commit SHA is embedded in dresNotes for easy recovery.
 -}
 testFinishWithWipCheckpoint :: IO ()
 testFinishWithWipCheckpoint =
     withTestRepo $ \dir ->
         withTestDb $ \conn ->
-            withCwdLock $ withCurrentDirectory dir $ do
+            do
                 let did = "01TESTWIPCHECKPOINT000000A" :: Text
                     branch = "dispatch/" <> did
                 gitIn_ dir ["checkout", "-b", T.unpack branch]
@@ -225,11 +226,12 @@ testFinishWithWipCheckpoint =
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
+                            , dxWorkDir = dir
                             }
                 res <- finishWith dx FinishArgs{faOutcome = OFailure, faSha = Nothing, faNotes = "agent timed out", faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha}
-                -- (a) base branch worktree is clean after teardown
+                -- (a) worktree is clean: the staged change went into the WIP commit
                 clean <- Git.isClean dir
-                assertBool "base branch worktree is clean after teardown" clean
+                assertBool "worktree clean after WIP checkpoint" clean
                 -- (b) dispatch branch carries the WIP commit
                 logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
                 assertBool "WIP commit on dispatch branch" ("WIP: dispatch" `isInfixOf` logOut)
@@ -245,7 +247,7 @@ testNoCommitAgentCommittedAnyway :: IO ()
 testNoCommitAgentCommittedAnyway =
     withTestRepo $ \dir ->
         withTestDb $ \conn ->
-            withCwdLock $ withCurrentDirectory dir $ do
+            do
                 let did = "01TESTNCBRANCH0000000000AA" :: Text
                     branch = "dispatch/" <> did
                 -- agent commits on the dispatch branch despite no-commit flag
@@ -285,6 +287,7 @@ testNoCommitAgentCommittedAnyway =
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
+                            , dxWorkDir = dir
                             }
                 -- agent exited cleanly, tree is clean — but the branch has commits
                 res <- handlePostClaude dx minCfg True ExitSuccess baseSha "/dev/null"

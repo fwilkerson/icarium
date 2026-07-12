@@ -35,6 +35,7 @@ import Icarium.Config (
  )
 import Icarium.Db (parseDbTime, withDbReadOnly, withDbSync)
 import Icarium.Dispatch qualified as D
+import Icarium.Dispatch.Worktree (WorktreeError (..), worktreeErrorText)
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Dispatch qualified as RD
@@ -124,7 +125,7 @@ runRun db o = do
                 case mt of
                     Nothing -> fatal 1 ("task not found: " <> T.unpack tid)
                     Just task -> do
-                        res <-
+                        eres <-
                             D.dispatch
                                 c
                                 D.DispatchRequest
@@ -136,8 +137,11 @@ runRun db o = do
                                     , D.drEffortOverride = rEffort o
                                     , D.drBaseOverride = rBase o
                                     }
-                        D.applyOutcomeToTask c task res
-                        summarize res
+                        case eres of
+                            Left err -> fatal 3 (T.unpack (worktreeErrorText err))
+                            Right res -> do
+                                D.applyOutcomeToTask c task res
+                                summarize res
         Nothing -> do
             forM_ (rMax o) $ \n ->
                 when (n <= 0) $ fatal 2 "max must be > 0"
@@ -185,7 +189,7 @@ drainLoop ctx !i
             [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
             (t : _) -> do
                 hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
-                res <-
+                eres <-
                     D.dispatch
                         conn
                         D.DispatchRequest
@@ -197,20 +201,28 @@ drainLoop ctx !i
                             , D.drEffortOverride = rEffort opts
                             , D.drBaseOverride = rBase opts
                             }
-                D.applyOutcomeToTask conn t res
-                TIO.hPutStrLn stderr $
-                    "icarium: "
-                        <> dispatchOutcomeText (D.dresOutcome res)
-                        <> " \x2014 "
-                        <> D.dresNotes res
-                printSummary res
-                n <- readIORef (dctxSigCount ctx)
-                if n >= 1
-                    then
-                        hPutStrLn
-                            stderr
-                            "icarium: SIGINT received; stopping after current dispatch"
-                    else drainLoop ctx (i + 1)
+                case eres of
+                    -- The task was never touched; capacity may free up later
+                    -- (back-pressure), while a setup error would just repeat.
+                    Left err@(WtNoCapacity _) ->
+                        hPutStrLn stderr $
+                            "icarium: " <> T.unpack (worktreeErrorText err) <> "; stopping"
+                    Left err -> fatal 3 (T.unpack (worktreeErrorText err))
+                    Right res -> do
+                        D.applyOutcomeToTask conn t res
+                        TIO.hPutStrLn stderr $
+                            "icarium: "
+                                <> dispatchOutcomeText (D.dresOutcome res)
+                                <> " \x2014 "
+                                <> D.dresNotes res
+                        printSummary res
+                        n <- readIORef (dctxSigCount ctx)
+                        if n >= 1
+                            then
+                                hPutStrLn
+                                    stderr
+                                    "icarium: SIGINT received; stopping after current dispatch"
+                            else drainLoop ctx (i + 1)
 
 -- | Print the enriched summary block; does not exit on failure.
 printSummary :: D.DispatchResult -> IO ()
@@ -243,7 +255,10 @@ printSummary r = do
     case D.dresBaseSha r of
         Nothing -> pure ()
         Just sha -> do
-            files <- Git.changedFiles "." sha
+            -- Diff against the dispatch branch: the invoking checkout's HEAD
+            -- never advances now that successful runs park. The branch may
+            -- already be gone (no-commit) — changedFiles returns [] then.
+            files <- Git.changedFiles "." sha (D.dresBranch r)
             case files of
                 [] -> pure ()
                 _ -> do

@@ -21,8 +21,10 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Database.SQLite.Simple (close)
+import System.Directory (makeAbsolute)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
+import System.FilePath ((</>))
 import System.IO (
     BufferMode (..),
     Handle,
@@ -45,6 +47,7 @@ import System.Process.Typed (
     setEnv,
     setStdin,
     setStdout,
+    setWorkingDir,
     waitExitCode,
     withProcessWait,
  )
@@ -86,6 +89,8 @@ data RunCtx = RunCtx
     , rcModel :: Text
     , rcEffort :: Effort
     , rcLogPath :: FilePath
+    , rcWorkDir :: FilePath
+    -- ^ The dispatch worktree the worker runs in.
     }
 
 {- | Full claude(1) worker argument list. Shared with the dry-run preview
@@ -124,6 +129,11 @@ runClaudeStreaming ctx dcfg = do
         scratchDir = dcScratchDir dcfg
         maxMinutes = dcMaxMinutesPerDispatch dcfg
     parentEnv <- getEnvironment
+    -- Absolute paths: the worker's cwd is the worktree, and child `icarium`
+    -- invocations resolve ICARIUM_DB/scratch against it — a relative db
+    -- path would silently create a nested store inside the worktree.
+    absDb <- makeAbsolute dbPath
+    absScratch <- makeAbsolute (rcWorkDir ctx </> T.unpack scratchDir)
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args = map T.unpack (claudeArgs model effort tools allowed)
         -- Inherit parent env so claude can find ~/.claude credentials
@@ -132,14 +142,16 @@ runClaudeStreaming ctx dcfg = do
             parentEnv
                 ++ [ ("ICARIUM_DISPATCH_ID", T.unpack did)
                    , ("ICARIUM_TASK_ID", T.unpack (taskId task))
-                   , ("ICARIUM_SCRATCH_DIR", T.unpack scratchDir)
+                   , ("ICARIUM_SCRATCH_DIR", absScratch)
+                   , ("ICARIUM_DB", absDb)
                    ]
         pcfg =
             setStdin (byteStringInput promptBytes) $
                 setStdout createPipe $
                     setEnv env $
                         setCreateGroup True $
-                            proc "claude" args
+                            setWorkingDir (rcWorkDir ctx) $
+                                proc "claude" args
         maxUsecs = maxMinutes * 60 * 1_000_000
         retryThreshold = dcRetryStormThreshold dcfg
 

@@ -8,9 +8,9 @@ module Icarium.Dispatch.PostClaude (
     runGate,
 ) where
 
-import Control.Monad (forM_, unless, void, (>=>))
+import Control.Monad (forM_, unless, void)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (ExceptT, runExceptT, throwE)
+import Control.Monad.Trans.Except (runExceptT, throwE)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -18,7 +18,7 @@ import Database.SQLite.Simple (Connection)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory)
 import System.IO (hPutStrLn, stderr)
-import System.Process.Typed (runProcess, shell)
+import System.Process.Typed (runProcess, setWorkingDir, shell)
 
 import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), ReviewConfig (..))
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
@@ -79,10 +79,9 @@ handlePostClaudeImpl ::
     IO PostClaudeResult
 handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
     let conn = dxConn dx
-        db = dxDbPath dx
         did = dxDid dx
         branch = dxBranch dx
-        base = dxBase dx
+        wt = dxWorkDir dx
         ret = dcLogRetentionRuns (cfgDispatch cfg)
         maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
         finish o mSha notes =
@@ -104,58 +103,63 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
         preStep
             | noCommit = do
                 checkExit
-                porcelain <- liftIO (Git.statusPorcelain ".")
+                porcelain <- liftIO (Git.statusPorcelain wt)
                 let porcStripped = T.strip porcelain
                 unless (T.null porcStripped) $
                     throwE $
-                        "agent left uncommitted changes; refusing to merge\nuncommitted:\n"
+                        "agent left uncommitted changes; refusing to accept\nuncommitted:\n"
                             <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
-                mBranchSha <- liftIO (Git.revParse "." branch)
+                mBranchSha <- liftIO (Git.revParse wt branch)
                 case mBranchSha of
                     Right sha
                         | sha /= baseSha ->
                             throwE "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
                     _ -> pure ()
-                gitStep "checkout base" (Git.checkout "." base)
-                liftIO (void (Git.deleteBranch "." branch))
                 pure Nothing
             | otherwise = do
                 checkExit
-                porcelain <- liftIO (Git.statusPorcelain ".")
-                mBranchSha <- liftIO (Git.revParse "." branch)
+                porcelain <- liftIO (Git.statusPorcelain wt)
+                mBranchSha <- liftIO (Git.revParse wt branch)
                 mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)
                 liftIO $ case mBranchSha of
                     Right sha -> RD.setLastCommit conn did sha
                     Left _ -> pure ()
                 cc <- maybe (throwE "no [commands] section configured") pure (cfgCommands cfg)
-                liftIO (runGate (ccBuild cc)) >>= either throwE pure
-                liftIO (runGate (ccTest cc)) >>= either throwE pure
+                liftIO (runGate wt (ccBuild cc)) >>= either throwE pure
+                liftIO (runGate wt (ccTest cc)) >>= either throwE pure
                 pure (Just ())
 
     runExceptT preStep >>= \case
         Left notes -> do
-            checkpointDirtyTree did notes
+            checkpointDirtyTree wt did notes
             PCDone <$> finish OFailure Nothing notes
-        Right Nothing ->
-            PCDone <$> finish OSuccess Nothing "no-commit task"
+        Right Nothing -> do
+            -- Nothing to land: stamp merged so the dispatch never shows as
+            -- parked. Ordered after finish, which writes merge_sha = NULL.
+            dr <- finish OSuccess Nothing "no-commit task"
+            RD.setMerged conn did baseSha
+            pure (PCDone dr)
         Right (Just ()) ->
-            runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins baseSha
+            runReviewThenPark dx cfg mTask finish logPath maxMins baseSha
 
-runReviewThenMerge ::
-    Connection ->
-    FilePath ->
+{- | Reviewer gate, then park: the dispatch branch is left for
+@icarium dispatch merge@ to land. Nothing here touches the base branch.
+-}
+runReviewThenPark ::
+    DispatchCtx ->
     Config ->
     Maybe Task ->
     (DispatchOutcome -> Maybe Text -> Text -> IO DispatchResult) ->
-    Text ->
-    Text ->
-    Text ->
     FilePath ->
     Int ->
     Text ->
     IO PostClaudeResult
-runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins baseSha = do
-    let activeReview = do
+runReviewThenPark dx cfg mTask finish logPath maxMins baseSha = do
+    let conn = dxConn dx
+        db = dxDbPath dx
+        did = dxDid dx
+        wt = dxWorkDir dx
+        activeReview = do
             task <- mTask
             rc <- cfgReview cfg
             if rcEnabled rc then Just (task, rc) else Nothing
@@ -165,8 +169,8 @@ runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins base
             let reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
                 reviewerLogPath = takeDirectory logPath <> "/" <> T.unpack did <> "-reviewer.jsonl"
             mSysPrompt <- loadReviewerPrompt (rcPromptPath rcfg)
-            diffText <- Git.diffPatch "." baseSha
-            rr <- runReviewer reviewModel mSysPrompt (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
+            diffText <- Git.diffPatch wt baseSha
+            rr <- runReviewer wt reviewModel mSysPrompt (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
             RD.setReviewInfo conn did (rrVerdict rr) (rrLogPath rr)
             hPutStrLn stderr ("[reviewer] verdict: " <> T.unpack (reviewVerdictText (rrVerdict rr)))
             pure (Just (task, rr))
@@ -176,31 +180,18 @@ runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins base
             dr <- finish OFailure Nothing ("reviewer: fail\n" <> findings)
             pure (PCRetry dr findings)
         _ -> do
-            mergeResult <- runExceptT doMerge
-            case mergeResult of
-                Left notes -> do
-                    checkpointDirtyTree did notes
-                    PCDone <$> finish OFailure Nothing notes
-                Right mSha -> do
-                    let notes = case mReviewResult of
-                            Just (_, rr)
-                                | rrVerdict rr == RVWarn ->
-                                    "merged; reviewer warn\n" <> rrFindings rr
-                            _ -> "merged"
-                    dr <- finish OSuccess mSha notes
-                    case mReviewResult of
-                        Just (task, rr) | rrVerdict rr == RVWarn -> do
-                            cats <- RC.taskCategoriesFor conn (taskId task)
-                            writeWarnContextEntry conn db task cats (rrFindings rr)
-                        _ -> pure ()
-                    pure (PCDone dr)
-  where
-    doMerge :: ExceptT Text IO (Maybe Text)
-    doMerge = do
-        gitStep "checkout base" (Git.checkout "." base)
-        gitStep "ff-merge" (Git.ffMerge "." branch)
-        liftIO (void (Git.deleteBranch "." branch))
-        either (const Nothing) Just <$> liftIO (Git.revParse "." base)
+            let notes = case mReviewResult of
+                    Just (_, rr)
+                        | rrVerdict rr == RVWarn ->
+                            "parked; reviewer warn\n" <> rrFindings rr
+                    _ -> "parked"
+            dr <- finish OSuccess Nothing notes
+            case mReviewResult of
+                Just (task, rr) | rrVerdict rr == RVWarn -> do
+                    cats <- RC.taskCategoriesFor conn (taskId task)
+                    writeWarnContextEntry conn db task cats (rrFindings rr)
+                _ -> pure ()
+            pure (PCDone dr)
 
 writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> Text -> IO ()
 writeWarnContextEntry conn db task cats findings = do
@@ -216,22 +207,17 @@ writeWarnContextEntry conn db task cats findings = do
     -- Link the note back to its task for provenance (task references ctx).
     void $ RE.insertEdge conn References TaskNode (taskId task) ContextNode cid
 
-{- | If the working tree is dirty, commit everything to the current branch with
-a wip message. Preserves in-flight work on the dispatch branch so a human
-can inspect it after a failure.
+{- | If the given worktree is dirty, commit everything to its current branch
+with a wip message. Preserves in-flight work on the dispatch branch so a
+human can inspect it after a failure.
 -}
-checkpointDirtyTree :: Text -> Text -> IO ()
-checkpointDirtyTree did note = do
-    porcelain <- Git.statusPorcelain "."
+checkpointDirtyTree :: FilePath -> Text -> Text -> IO ()
+checkpointDirtyTree wt did note = do
+    porcelain <- Git.statusPorcelain wt
     unless (T.null (T.strip porcelain)) $ do
         let shortNote = T.take 60 (T.takeWhile (/= '\n') note)
             msg = "wip: dispatch " <> did <> " (failed: " <> shortNote <> ")"
-        void $ Git.commitAll "." msg
-
-gitStep :: (Show e) => Text -> IO (Either e a) -> ExceptT Text IO a
-gitStep label = liftIO >=> either (throwE . tag) pure
-  where
-    tag e = label <> ": " <> T.pack (show e)
+        void $ Git.commitAll wt msg
 
 {- | Pure guard logic for the post-claude checks. Returns Just an error
 message if a guard fires, Nothing if both pass.
@@ -249,17 +235,18 @@ postClaudeGuard porcelain mBranchSha baseSha
     porcStripped = T.strip porcelain
     branchSha = either (const Nothing) Just mBranchSha
     dirtyMsg =
-        "agent left uncommitted changes; refusing to merge\nuncommitted:\n"
+        "agent left uncommitted changes; refusing to accept\nuncommitted:\n"
             <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
 
 {- | Run a shell command (as a single string, so users can include
-pipes and &&). Returns () on exit 0; otherwise a short note.
+pipes and &&) inside the given directory. Returns () on exit 0;
+otherwise a short note.
 -}
-runGate :: Text -> IO (Either Text ())
-runGate cmdText
+runGate :: FilePath -> Text -> IO (Either Text ())
+runGate dir cmdText
     | T.null (T.strip cmdText) = pure (Right ())
     | otherwise = do
-        code <- runProcess (shell (T.unpack cmdText))
+        code <- runProcess (setWorkingDir dir (shell (T.unpack cmdText)))
         pure $ case code of
             ExitSuccess -> Right ()
             ExitFailure c -> Left (cmdText <> " -> exit " <> T.pack (show c))

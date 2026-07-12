@@ -7,7 +7,8 @@ module Icarium.Dispatch.Internal (
     applyOutcomeToTask,
 ) where
 
-import Control.Monad (unless, void, when)
+import Control.Exception (onException)
+import Control.Monad (void)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -15,6 +16,7 @@ import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
+import System.IO (hPutStrLn, stderr)
 
 import Icarium.Config (
     Config (..),
@@ -26,11 +28,16 @@ import Icarium.Dispatch.Claude (RunCtx (..), claudeArgs, runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
-    FinishArgs (..),
     applyOutcomeToTask,
-    finishWith,
  )
 import Icarium.Dispatch.PostClaude (PostClaudeResult (..), handlePostClaudeWithReview)
+import Icarium.Dispatch.Worktree (
+    WorktreeError,
+    createDispatchWorktree,
+    teardownWorktree,
+    worktreeErrorText,
+    worktreePath,
+ )
 import Icarium.Git qualified as Git
 import Icarium.Id (newId)
 import Icarium.Render (renderTaskPrompt)
@@ -76,9 +83,13 @@ resolveDispatchOpts req =
 -- Entry
 -- =============================================================
 
-dispatch :: Connection -> DispatchRequest -> IO DispatchResult
+{- | Run one dispatch. 'Left' means the worktree could not be provisioned
+(no capacity, setup error) before any dispatch row existed — the task is
+untouched and the caller decides whether to stop or fail loudly.
+-}
+dispatch :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 dispatch conn req
-    | drDryRun req = doDryRun conn req
+    | drDryRun req = Right <$> doDryRun conn req
     | otherwise = doReal conn req
 
 -- =============================================================
@@ -101,6 +112,7 @@ doDryRun conn req = do
     TIO.putStrLn $ "task id:                 " <> taskId (drTask req)
     TIO.putStrLn $ "base branch:             " <> roBase opts
     TIO.putStrLn $ "dispatch branch:         " <> branch
+    TIO.putStrLn $ "worktree:                " <> T.pack (worktreePath fakeId)
     TIO.putStrLn $ "model:                   " <> roModel opts
     TIO.putStrLn $ "effort:                  " <> effortText (roEffort opts)
     TIO.putStrLn $ "tools:                   " <> T.intercalate "," tools
@@ -140,10 +152,10 @@ renderCmdPreview model effort tools allowed =
 -- Real dispatch (with retry loop)
 -- =============================================================
 
-doReal :: Connection -> DispatchRequest -> IO DispatchResult
+doReal :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 doReal conn req = doRealAttempt conn req 1 Nothing
 
-doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> IO DispatchResult
+doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> IO (Either WorktreeError DispatchResult)
 doRealAttempt conn req attempt mFindings = do
     let cfg = drConfig req
         dcfg = cfgDispatch cfg
@@ -155,7 +167,6 @@ doRealAttempt conn req attempt mFindings = do
         effort = roEffort opts
         maxAttempts = maybe 1 rcMaxAttempts (cfgReview cfg)
 
-    checkPreconditions base
     baseSha <- either (ioFail . show) pure =<< Git.revParse "." base
 
     did <- newId
@@ -163,56 +174,47 @@ doRealAttempt conn req attempt mFindings = do
         logDir = ".icarium" </> "logs"
         logPath = logDir </> T.unpack did <> ".jsonl"
     createDirectoryIfMissing True logDir
-    createDirectoryIfMissing True (T.unpack (dcScratchDir dcfg))
 
-    RD.insertDispatch
-        conn
-        did
-        RD.NewDispatch
-            { RD.ndTaskId = taskId task
-            , RD.ndBranch = branch
-            , RD.ndBaseBranch = base
-            , RD.ndBaseSha = baseSha
-            , RD.ndModel = model
-            , RD.ndEffort = effort
-            , RD.ndLogPath = Just logPath
-            , RD.ndPid = Nothing
-            }
+    mWt <- createDispatchWorktree "." dcfg did branch base
+    case mWt of
+        Left err -> pure (Left err)
+        Right wt -> do
+            createDirectoryIfMissing True (wt </> T.unpack (dcScratchDir dcfg))
 
-    void $
-        RT.updateTask
-            conn
-            (taskId task)
-            RT.emptyUpdate
-                { RT.tuState = Just InProgress
-                }
-
-    prompt <- buildPrompt conn task mFindings
-
-    let retention = dcLogRetentionRuns (cfgDispatch cfg)
-        dx =
-            DispatchCtx
-                { dxConn = conn
-                , dxDbPath = dbPath
-                , dxDid = did
-                , dxBranch = branch
-                , dxBase = base
-                }
-    mBr <- Git.createBranch "." branch base
-    case mBr of
-        Left e ->
-            finishWith
-                dx
-                FinishArgs
-                    { faOutcome = OFailure
-                    , faSha = Nothing
-                    , faNotes = "git checkout -b failed: " <> T.pack (show e)
-                    , faRetention = retention
-                    , faLogPath = Nothing
-                    , faBaseSha = Just baseSha
+            RD.insertDispatch
+                conn
+                did
+                RD.NewDispatch
+                    { RD.ndTaskId = taskId task
+                    , RD.ndBranch = branch
+                    , RD.ndBaseBranch = base
+                    , RD.ndBaseSha = baseSha
+                    , RD.ndModel = model
+                    , RD.ndEffort = effort
+                    , RD.ndLogPath = Just logPath
+                    , RD.ndPid = Nothing
                     }
-        Right () -> do
-            let ctx =
+
+            void $
+                RT.updateTask
+                    conn
+                    (taskId task)
+                    RT.emptyUpdate
+                        { RT.tuState = Just InProgress
+                        }
+
+            prompt <- buildPrompt conn task mFindings
+
+            let dx =
+                    DispatchCtx
+                        { dxConn = conn
+                        , dxDbPath = dbPath
+                        , dxDid = did
+                        , dxBranch = branch
+                        , dxBase = base
+                        , dxWorkDir = wt
+                        }
+                ctx =
                     RunCtx
                         { rcDbPath = dbPath
                         , rcDid = did
@@ -221,33 +223,40 @@ doRealAttempt conn req attempt mFindings = do
                         , rcModel = model
                         , rcEffort = effort
                         , rcLogPath = logPath
+                        , rcWorkDir = wt
                         }
-            exit <- runClaudeStreaming ctx dcfg
-            pcResult <- handlePostClaudeWithReview dx cfg task (taskNoCommit task) exit baseSha logPath
+            -- Teardown must run on every exit, including exceptions;
+            -- checkpointing of dirty state happens inside post-claude first.
+            pcResult <-
+                ( do
+                    exit <- runClaudeStreaming ctx dcfg
+                    handlePostClaudeWithReview dx cfg task (taskNoCommit task) exit baseSha logPath
+                )
+                    `onException` teardownWorktree "." dcfg wt
+            teardownWorktree "." dcfg wt
+            -- A no-commit success leaves an empty branch (sha == baseSha);
+            -- delete it once the worktree no longer has it checked out.
             case pcResult of
-                PCDone dr -> pure dr
-                PCRetry dr findings ->
-                    if attempt < maxAttempts
-                        then doRealAttempt conn req (attempt + 1) (Just findings)
-                        else pure dr
-
-checkPreconditions :: Text -> IO ()
-checkPreconditions base = do
-    clean <- Git.isClean "."
-    unless clean $
-        ioFail
-            "working tree not clean; commit or stash before dispatch"
-    mCur <- Git.currentBranch "."
-    case mCur of
-        Left e -> ioFail ("git: " <> show e)
-        Right b ->
-            when (b /= base) $
-                ioFail
-                    ( "not on base branch "
-                        <> T.unpack base
-                        <> "; currently on "
-                        <> T.unpack b
-                    )
+                PCDone dr
+                    | dresOutcome dr == OSuccess && taskNoCommit task ->
+                        void (Git.deleteBranch "." branch)
+                _ -> pure ()
+            case pcResult of
+                PCDone dr -> pure (Right dr)
+                PCRetry dr findings
+                    | attempt < maxAttempts -> do
+                        next <- doRealAttempt conn req (attempt + 1) (Just findings)
+                        case next of
+                            Right dr' -> pure (Right dr')
+                            Left err -> do
+                                -- The first attempt already recorded a failed
+                                -- dispatch; report that rather than losing the
+                                -- findings to a provisioning error.
+                                hPutStrLn stderr $
+                                    "icarium: retry skipped: "
+                                        <> T.unpack (worktreeErrorText err)
+                                pure (Right dr)
+                    | otherwise -> pure (Right dr)
 
 buildPrompt :: Connection -> Task -> Maybe Text -> IO Text
 buildPrompt conn t mFindings = do

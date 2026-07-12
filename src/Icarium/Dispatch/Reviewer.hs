@@ -32,6 +32,7 @@ import System.Process.Typed (
     setEnv,
     setStdin,
     setStdout,
+    setWorkingDir,
     waitExitCode,
     withProcessWait,
  )
@@ -121,6 +122,8 @@ parseReviewVerdictFromText t =
             _ -> Nothing
 
 runReviewer ::
+    -- | directory the reviewer runs in (its Read tool sees branch state)
+    FilePath ->
     -- | model name
     Text ->
     -- | system prompt override (Nothing = use default)
@@ -136,7 +139,7 @@ runReviewer ::
     -- | wall-clock limit in minutes
     Int ->
     IO ReviewResult
-runReviewer model mSysPrompt taskTitle taskBody diffText reviewerLogPath maxMinutes = do
+runReviewer workDir model mSysPrompt taskTitle taskBody diffText reviewerLogPath maxMinutes = do
     let sysPrompt = fromMaybe defaultReviewerPrompt mSysPrompt
         stdinText = buildReviewerStdin sysPrompt taskTitle taskBody diffText
         stdinBytes = BL.fromStrict (TE.encodeUtf8 stdinText)
@@ -156,7 +159,7 @@ runReviewer model mSysPrompt taskTitle taskBody diffText reviewerLogPath maxMinu
             , "dontAsk"
             ]
     hPutStrLn stderr "[reviewer] running..."
-    exit <- runReviewerProcess stdinBytes args reviewerLogPath maxMinutes
+    exit <- runReviewerProcess workDir stdinBytes args reviewerLogPath maxMinutes
     mLR <- readLogResult reviewerLogPath
     let responseText = case exit of
             ExitFailure 124 -> "reviewer timed out"
@@ -172,15 +175,16 @@ runReviewer model mSysPrompt taskTitle taskBody diffText reviewerLogPath maxMinu
             , rrLogPath = reviewerLogPath
             }
 
-runReviewerProcess :: BL.ByteString -> [String] -> FilePath -> Int -> IO ExitCode
-runReviewerProcess stdinBytes args logPath maxMinutes = do
+runReviewerProcess :: FilePath -> BL.ByteString -> [String] -> FilePath -> Int -> IO ExitCode
+runReviewerProcess workDir stdinBytes args logPath maxMinutes = do
     parentEnv <- getEnvironment
     let pcfg =
             setStdin (byteStringInput stdinBytes) $
                 setStdout createPipe $
                     setEnv parentEnv $
                         setCreateGroup True $
-                            proc "claude" args
+                            setWorkingDir workDir $
+                                proc "claude" args
         maxUsecs = maxMinutes * 60 * 1_000_000
     withLogHandle logPath $ \logH ->
         withProcessWait pcfg $ \p -> do

@@ -60,6 +60,8 @@ data DispatchConfig = DispatchConfig
     , dcHeartbeatStaleSeconds :: Int
     , dcLogRetentionRuns :: Int
     , dcRetryStormThreshold :: Int
+    , dcWorktreeSetup :: Maybe Text
+    , dcWorktreeTeardown :: Maybe Text
     }
     deriving (Show)
 
@@ -110,6 +112,8 @@ dispatchCodec =
         <*> Toml.int "heartbeat_stale_seconds" .= dcHeartbeatStaleSeconds
         <*> Toml.int "log_retention_runs" .= dcLogRetentionRuns
         <*> (fromMaybe 3 <$> Toml.dioptional (Toml.int "retry_storm_threshold")) .= (Just . dcRetryStormThreshold)
+        <*> Toml.dioptional (Toml.text "worktree_setup") .= dcWorktreeSetup
+        <*> Toml.dioptional (Toml.text "worktree_teardown") .= dcWorktreeTeardown
 
 categoriesCodec :: TomlCodec CategoriesConfig
 categoriesCodec =
@@ -184,6 +188,11 @@ defaultConfigText =
     \# events. Lower = faster kill on transient API spikes (risk: false kills);\n\
     \# higher = more tolerant but a stuck agent burns more wall-clock budget.\n\
     \retry_storm_threshold    = 3\n\
+    \# Optional commands run inside each dispatch worktree, after creation and\n\
+    \# before removal. Setup exit 75 means \"no capacity, try later\" (queue\n\
+    \# drain stops cleanly); any other nonzero exit is an error.\n\
+    \# worktree_setup    = \"scripts/worktree-init.sh\"\n\
+    \# worktree_teardown = \"scripts/worktree-free.sh\"\n\
     \\n\
     \[categories]\n\
     \# Source of truth for the category vocabulary. Edit here, then run\n\

@@ -23,6 +23,8 @@ data DispatchCtx = DispatchCtx
     , dxDid :: Text
     , dxBranch :: Text
     , dxBase :: Text
+    , dxWorkDir :: FilePath
+    -- ^ The dispatch worktree; every git and gate operation targets it.
     }
 
 data DispatchResult = DispatchResult
@@ -48,25 +50,22 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
-        base = dxBase dx
-    -- On failure, snapshot any dirty worktree/index onto the dispatch branch
-    -- before returning to base. Without this, `git checkout base` carries
-    -- staged or unstaged changes onto main when the dispatch branch SHA equals
-    -- base SHA (i.e. the agent never committed). Best-effort: ignore git errors
-    -- so we don't mask the original failure note.
+        wt = dxWorkDir dx
+    -- On failure, snapshot any dirty state onto the dispatch branch before
+    -- the worktree is torn down; the branch is what survives. Best-effort:
+    -- ignore git errors so we don't mask the original failure note.
     mWipSha <-
         if outcome == OFailure
             then do
-                clean <- Git.isClean "."
+                clean <- Git.isClean wt
                 if clean
                     then pure Nothing
                     else do
-                        r <- Git.commitAll "." ("WIP: dispatch " <> did <> " failed before commit")
+                        r <- Git.commitAll wt ("WIP: dispatch " <> did <> " failed before commit")
                         case r of
                             Left _ -> pure Nothing
-                            Right () -> either (const Nothing) Just <$> Git.revParse "." "HEAD"
+                            Right () -> either (const Nothing) Just <$> Git.revParse wt "HEAD"
             else pure Nothing
-    when (outcome == OFailure) $ void (Git.checkout "." base)
     let enrichedNotes = case mWipSha of
             Nothing -> notes
             Just sha -> notes <> "\nwip_commit: " <> sha

@@ -35,6 +35,7 @@ library
                       Icarium.Dispatch.Outcome
                       Icarium.Dispatch.Reviewer
                       Icarium.Dispatch.Tick
+                      Icarium.Dispatch.Worktree
                       Icarium.Heartbeat
                       Icarium.Node
                       Icarium.Repo.Internal
