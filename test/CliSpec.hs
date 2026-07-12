@@ -175,6 +175,7 @@ tests =
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
+        , testCase "dispatch review: unreadable prompt_path fails closed before worker starts" testReviewerPromptUnreadableFailsClosed
         , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
         , testCase "dispatch stats: byte-for-byte summary, --since filters" testDispatchStats
         ]
@@ -1920,6 +1921,22 @@ testReviewerSeesBodyFileEdits = withDispatchRepo $ \dir db -> do
     -- the file's mtime.
     (_, sOut, _) <- runDispatch dir db Nothing ["search", "xproof1"]
     assertBool "mid-run edit searchable after dispatch" ("proof task" `isInfixOf` sOut)
+
+-- Scenario: an unreadable [review] prompt_path must fail closed before the
+-- worker starts, not silently fall back to the built-in prompt.
+testReviewerPromptUnreadableFailsClosed :: IO ()
+testReviewerPromptUnreadableFailsClosed = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "prompt-path task"
+    writeFile
+        (dir </> "icarium.toml")
+        (stubToml <> unlines ["[review]", "enabled = true", "prompt_path = \"missing-reviewer-prompt.md\""])
+    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitFailure 3
+    assertBool "error names the unreadable path" ("missing-reviewer-prompt.md" `isInfixOf` err)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
 
 -- Scenario: park-by-default means a dependency going `done` is not enough
 -- for its dependents — its work must be IN base. Without the merged gate,

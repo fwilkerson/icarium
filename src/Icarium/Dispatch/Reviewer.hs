@@ -84,15 +84,18 @@ defaultReviewerPrompt =
     \\n\
     \Output ONLY the yaml block."
 
-loadReviewerPrompt :: Maybe Text -> IO (Maybe Text)
-loadReviewerPrompt Nothing = pure Nothing
+{- | Load the reviewer system prompt override. Fails closed: an unreadable
+@prompt_path@ is an error naming the path, not a silent fallback to
+'defaultReviewerPrompt'. Must be called before the worker starts, so a
+broken config never lets a weakened reviewer gate the merge.
+-}
+loadReviewerPrompt :: Maybe Text -> IO (Either Text (Maybe Text))
+loadReviewerPrompt Nothing = pure (Right Nothing)
 loadReviewerPrompt (Just path) = do
     r <- try (TIO.readFile (T.unpack path)) :: IO (Either SomeException Text)
     case r of
-        Left e -> do
-            hPutStrLn stderr ("icarium: reviewer prompt_path read failed: " <> show e)
-            pure Nothing
-        Right t -> pure (Just t)
+        Left e -> pure (Left ("reviewer prompt_path unreadable: " <> path <> ": " <> T.pack (show e)))
+        Right t -> pure (Right (Just t))
 
 buildReviewerStdin :: Text -> Text -> Text -> Text -> Text
 buildReviewerStdin sysPrompt taskTitle taskBody diffText =

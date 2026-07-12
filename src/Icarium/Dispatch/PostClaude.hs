@@ -24,7 +24,7 @@ import System.Process.Typed (runProcess, setWorkingDir, shell)
 import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), ReviewConfig (..))
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
-import Icarium.Dispatch.Reviewer (ReviewResult (..), loadReviewerPrompt, runReviewer)
+import Icarium.Dispatch.Reviewer (ReviewResult (..), runReviewer)
 import Icarium.Git qualified as Git
 import Icarium.Node (createContextWithBody)
 import Icarium.Repo.Category qualified as RC
@@ -48,16 +48,22 @@ handlePostClaude ::
     FilePath ->
     IO DispatchResult
 handlePostClaude dx cfg noCommit exit baseSha logPath = do
-    res <- handlePostClaudeImpl dx cfg Nothing noCommit exit baseSha logPath
+    res <- handlePostClaudeImpl dx cfg Nothing Nothing noCommit exit baseSha logPath
     pure $ case res of
         PCDone dr -> dr
         PCRetry dr _ -> dr
 
--- | Full interface used by the dispatch loop; runs reviewer when configured.
+{- | Full interface used by the dispatch loop; runs reviewer when configured.
+The reviewer system prompt (already loaded, before the worker started —
+see 'Icarium.Dispatch.Reviewer.loadReviewerPrompt') is passed in rather than
+read here, so the reviewer never sees a prompt the worker had a chance to
+influence mid-run.
+-}
 handlePostClaudeWithReview ::
     DispatchCtx ->
     Config ->
     Task ->
+    Maybe Text ->
     Bool ->
     ExitCode ->
     Text ->
@@ -74,12 +80,13 @@ handlePostClaudeImpl ::
     DispatchCtx ->
     Config ->
     Maybe Task ->
+    Maybe Text ->
     Bool ->
     ExitCode ->
     Text ->
     FilePath ->
     IO PostClaudeResult
-handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
+handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
@@ -127,7 +134,7 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
             RD.setMerged conn did baseSha
             pure (PCDone dr)
         Right (Just ()) ->
-            runReviewThenPark dx cfg mTask finish logPath maxMins baseSha
+            runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha
 
 {- | Reviewer gate, then park: the dispatch branch is left for
 @icarium dispatch merge@ to land. Nothing here touches the base branch.
@@ -136,12 +143,13 @@ runReviewThenPark ::
     DispatchCtx ->
     Config ->
     Maybe Task ->
+    Maybe Text ->
     (DispatchOutcome -> Maybe Text -> Text -> IO DispatchResult) ->
     FilePath ->
     Int ->
     Text ->
     IO PostClaudeResult
-runReviewThenPark dx cfg mTask finish logPath maxMins baseSha = do
+runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
     let conn = dxConn dx
         db = dxDbPath dx
         did = dxDid dx
@@ -158,7 +166,6 @@ runReviewThenPark dx cfg mTask finish logPath maxMins baseSha = do
             task <- refreshTaskBody conn db task0
             let reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
                 reviewerLogPath = takeDirectory logPath <> "/" <> T.unpack did <> "-reviewer.jsonl"
-            mSysPrompt <- loadReviewerPrompt (rcPromptPath rcfg)
             diffText <- Git.diffPatch wt baseSha
             rr <- runReviewer wt reviewModel mSysPrompt (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
             RD.setReviewInfo conn did (rrVerdict rr) (rrLogPath rr)

@@ -27,6 +27,10 @@ data WorktreeError
       WtNoCapacity Text
     | WtSetupFailed Text
     | WtGitFailed Text
+    | {- | A pre-worker check (reviewer prompt_path, working-agreement file,
+      ...) failed before any worktree or dispatch row was created.
+      -}
+      WtPreflightFailed Text
     deriving (Show, Eq)
 
 worktreeErrorText :: WorktreeError -> Text
@@ -34,6 +38,7 @@ worktreeErrorText = \case
     WtNoCapacity t -> "no worktree capacity: " <> t
     WtSetupFailed t -> "worktree setup failed: " <> t
     WtGitFailed t -> "worktree git operation failed: " <> t
+    WtPreflightFailed t -> t
 
 -- | Where a dispatch's worktree lives, relative to the invoking checkout.
 worktreePath :: Text -> FilePath
