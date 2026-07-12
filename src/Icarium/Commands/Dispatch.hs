@@ -12,7 +12,7 @@ import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
-import System.Directory (doesFileExist)
+import System.Directory (doesDirectoryExist, doesFileExist)
 import System.IO (hPutStrLn, stderr)
 import System.Posix.Signals (Handler (..), installHandler, raiseSignal, sigINT)
 import Text.Printf (printf)
@@ -38,12 +38,13 @@ import Icarium.Config (
  )
 import Icarium.Db (parseDbTime, withDbReadOnly, withDbSync)
 import Icarium.Dispatch qualified as D
-import Icarium.Dispatch.PostClaude (runGate)
+import Icarium.Dispatch.PostClaude (checkpointDirtyTree, runGate)
 import Icarium.Dispatch.Worktree (
     WorktreeError (..),
     rebuildWorktree,
     teardownWorktree,
     worktreeErrorText,
+    worktreePath,
  )
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Render qualified as Render
@@ -508,26 +509,40 @@ runRecover db o = do
             then TIO.putStrLn "no open dispatches"
             else do
                 now <- getCurrentTime
-                forM_ open (reconcileDispatch c now staleSec)
+                forM_ open (reconcileDispatch c (cfgDispatch cfg) now staleSec)
+                Git.worktreePrune "."
 
-reconcileDispatch :: Connection -> UTCTime -> Int -> Dispatch -> IO ()
-reconcileDispatch c now staleSec d = do
+reconcileDispatch :: Connection -> DispatchConfig -> UTCTime -> Int -> Dispatch -> IO ()
+reconcileDispatch c dcfg now staleSec d = do
     alive <- maybe (pure False) pidAlive (dispatchPid d)
     let stale = heartbeatStale now staleSec (dispatchHeartbeat d)
     if alive && not stale
         then pure ()
         else do
-            uncommitted <- fmap not (Git.isClean ".")
+            -- If the dispatch worktree survived the crash, preserve any
+            -- in-flight work on the branch, then remove it. When it's gone
+            -- there is nothing to say about uncommitted state — the invoking
+            -- checkout's dirtiness is not this dispatch's.
+            let wt = worktreePath (dispatchId d)
+            wtExists <- doesDirectoryExist wt
+            wtNotes <-
+                if wtExists
+                    then do
+                        dirty <- fmap not (Git.isClean wt)
+                        when dirty $
+                            checkpointDirtyTree wt (dispatchId d) "interrupted"
+                        teardownWorktree "." dcfg wt
+                        pure ["uncommitted=" <> boolText dirty, "worktree=removed"]
+                    else pure []
             lastCommit <- fmap (fromRight "") (Git.revParse "." (dispatchBranch d))
             let notes =
-                    T.intercalate
-                        "; "
+                    T.intercalate "; " $
                         [ "interrupted"
                         , "alive=" <> boolText alive
                         , "stale=" <> boolText stale
-                        , "uncommitted=" <> boolText uncommitted
-                        , "last_commit=" <> lastCommit
                         ]
+                            <> wtNotes
+                            <> ["last_commit=" <> lastCommit]
             RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
             void $
                 RT.updateTask
