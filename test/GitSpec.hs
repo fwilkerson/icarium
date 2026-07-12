@@ -2,14 +2,17 @@ module GitSpec (tests) where
 
 import Control.Monad (void)
 import Data.Text (Text)
-import System.Directory (canonicalizePath, doesDirectoryExist)
+import System.Directory (canonicalizePath, doesDirectoryExist, doesFileExist, withCurrentDirectory)
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
+import Icarium.Config (DispatchConfig (..))
+import Icarium.Dispatch.Worktree (createDispatchWorktree)
 import Icarium.Git qualified as Git
-import TestHelpers (withTestRepo)
+import Icarium.Types (Effort (..))
+import TestHelpers (withCwdLock, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -20,6 +23,9 @@ tests =
         , testCase "mergeBaseIsAncestor tracks FF-possibility" testAncestor
         , testCase "rebase moves a branch onto an advanced base" testRebase
         , testCase "worktreeRemove + worktreePrune leave only the main checkout" testRemove
+        , testCase "isTracked distinguishes committed from untracked paths" testIsTracked
+        , testCase "provision keeps tracked icarium.toml at the checkout's version" testProvisionTrackedConfig
+        , testCase "provision copies untracked icarium.toml into the worktree" testProvisionUntrackedConfig
         ]
 
 -- Setup git commands never rely on process cwd — every call names the repo.
@@ -123,6 +129,63 @@ testRebase =
         expectRight =<< Git.rebase repo "main"
         contains <- Git.mergeBaseIsAncestor repo newBase "feat"
         assertBool "feat contains the new base commit after rebase" contains
+
+testIsTracked :: IO ()
+testIsTracked =
+    withTestRepo $ \repo -> do
+        tracked <- Git.isTracked repo "README"
+        assertBool "committed file is tracked" tracked
+        writeFile (repo </> "loose") "x"
+        loose <- Git.isTracked repo "loose"
+        assertBool "untracked file is not tracked" (not loose)
+
+minDispatchConfig :: DispatchConfig
+minDispatchConfig =
+    DispatchConfig
+        { dcModel = "claude-sonnet-5"
+        , dcEffort = Medium
+        , dcTools = []
+        , dcAllowedTools = []
+        , dcScratchDir = ".icarium/scratch"
+        , dcMaxMinutesPerDispatch = 1
+        , dcHeartbeatStaleSeconds = 1
+        , dcLogRetentionRuns = 1
+        , dcRetryStormThreshold = 3
+        , dcWorktreeSetup = Nothing
+        , dcWorktreeTeardown = Nothing
+        }
+
+{- | Regression: a tracked icarium.toml diverged in the invoking checkout
+must NOT be copied over the worktree's committed version — the resulting
+dirty tree fails the post-claude guard and refuses the merge rebase.
+-}
+testProvisionTrackedConfig :: IO ()
+testProvisionTrackedConfig =
+    withTestRepo $ \repo -> withCwdLock $ withCurrentDirectory repo $ do
+        writeFile (repo </> "icarium.toml") "committed = true\n"
+        gitIn_ repo ["add", "icarium.toml"]
+        gitIn_ repo ["commit", "-m", "track config"]
+        -- local, uncommitted edit in the invoking checkout
+        writeFile (repo </> "icarium.toml") "local-edit = true\n"
+        wt <- expectRight =<< createDispatchWorktree "." minDispatchConfig "D1" "dispatch/D1" "main"
+        clean <- Git.isClean wt
+        assertBool "worktree stays clean" clean
+        content <- readFile (wt </> "icarium.toml")
+        content @?= "committed = true\n"
+
+testProvisionUntrackedConfig :: IO ()
+testProvisionUntrackedConfig =
+    withTestRepo $ \repo -> withCwdLock $ withCurrentDirectory repo $ do
+        -- the designed case: gitignored local config, absent from a fresh checkout
+        writeFile (repo </> ".gitignore") "icarium.toml\n"
+        gitIn_ repo ["add", ".gitignore"]
+        gitIn_ repo ["commit", "-m", "ignore config"]
+        writeFile (repo </> "icarium.toml") "local = true\n"
+        wt <- expectRight =<< createDispatchWorktree "." minDispatchConfig "D2" "dispatch/D2" "main"
+        copied <- doesFileExist (wt </> "icarium.toml")
+        assertBool "untracked config copied into worktree" copied
+        clean <- Git.isClean wt
+        assertBool "ignored copy leaves worktree clean" clean
 
 testRemove :: IO ()
 testRemove =

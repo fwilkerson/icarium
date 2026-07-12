@@ -2,6 +2,7 @@ module Icarium.Git (
     GitError (..),
     runGit,
     isClean,
+    isTracked,
     statusPorcelain,
     topLevel,
     revParse,
@@ -72,6 +73,12 @@ statusPorcelain dir = do
     pure $ case r of
         Right out -> out
         Left _ -> "?? <git status failed>"
+
+-- | Whether @path@ is tracked in the checkout at @dir@.
+isTracked :: FilePath -> FilePath -> IO Bool
+isTracked dir path =
+    either (const False) (const True)
+        <$> runGit dir ["ls-files", "--error-unmatch", path]
 
 -- | Absolute path of the checkout root containing @dir@.
 topLevel :: FilePath -> IO (Either GitError Text)

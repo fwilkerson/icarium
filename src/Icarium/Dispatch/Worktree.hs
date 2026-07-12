@@ -50,7 +50,8 @@ setupExitError cmd c = WtSetupFailed (cmd <> " -> exit " <> T.pack (show c))
 
 {- | Cut a fresh worktree for a dispatch: new branch from @base@ at
 @worktreePath did@, the invoking checkout's icarium.toml copied in
-(it is gitignored by design), then @worktree_setup@ run inside it.
+when untracked (gitignored local config would otherwise be missing
+from the fresh checkout), then @worktree_setup@ run inside it.
 On any failure the worktree is removed; the branch from a failed
 setup is deleted too (it has no commits).
 -}
@@ -85,7 +86,13 @@ rebuildWorktree repo dcfg did branch = do
 provision :: FilePath -> DispatchConfig -> FilePath -> IO (Either WorktreeError FilePath)
 provision repo dcfg wt = do
     hasToml <- doesFileExist (repo </> defaultConfigPath)
-    when hasToml (copyFile (repo </> defaultConfigPath) (wt </> defaultConfigPath))
+    tracked <- Git.isTracked repo defaultConfigPath
+    -- A tracked icarium.toml is already in the checkout; copying the
+    -- invoking checkout's (possibly diverged) copy over it would dirty
+    -- the worktree — failing the post-claude guard and refusing the
+    -- merge-time rebase.
+    when (hasToml && not tracked) $
+        copyFile (repo </> defaultConfigPath) (wt </> defaultConfigPath)
     case dcWorktreeSetup dcfg of
         Nothing -> pure (Right wt)
         Just cmd -> do
