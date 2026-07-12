@@ -10,8 +10,9 @@ module Icarium.Db (
 ) where
 
 import Control.Exception (bracket)
-import Control.Monad (unless, when)
+import Control.Monad (unless, void, when)
 import Data.Int (Int64)
+import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute_, open, query_)
 import Icarium.Bodies.Sweep (mtimeSweep)
@@ -24,10 +25,17 @@ import System.FilePath (takeDirectory, (</>))
 defaultDbPath :: FilePath
 defaultDbPath = ".icarium" </> "icarium.db"
 
+{- | WAL + busy_timeout on every connection: dispatch, its heartbeat
+thread, and concurrent commands share one DB file. Both pragmas return a
+row, so @query_@ (not @execute_@) is required.
+-}
 openDb :: FilePath -> IO Connection
 openDb path = do
     createDirectoryIfMissing True (takeDirectory path)
-    open path
+    conn <- open path
+    void (query_ conn "PRAGMA journal_mode=WAL" :: IO [Only Text])
+    void (query_ conn "PRAGMA busy_timeout=5000" :: IO [Only Int64])
+    pure conn
 
 {- | Open the DB, run pending migrations, run the mtime sweep, then the action.
 Use for commands that write to the DB or need FTS accuracy (dispatch run, search, reindex).
