@@ -22,6 +22,9 @@ tests =
         , testCase "3 consecutive api_retry events returns TickKill" testRetryStormKills
         , testCase "assistant text between retries resets counter; no kill on next two retries" testRetryStormResetsOnSubstantive
         , testCase "threshold=5 kills at 5 retries, not 3" testRetryStormThreshold5
+        , testCase "repeated assistant events for one message id contribute tokens once" testTokensRepeatedMessageId
+        , testCase "assistant events for a new message id add to the running total" testTokensMessageIdChange
+        , testCase "result event overwrites accumulated totals with the authoritative usage" testTokensResultOverwrite
         ]
 
 tickTs :: String
@@ -124,6 +127,44 @@ testRetryStormResetsOnSubstantive = do
         (_, _, a5) = tickWith retryLine st4
     a4 @?= TickContinue
     a5 @?= TickContinue
+
+msgA, msgB, systemLine, resultLine :: BC.ByteString
+msgA = "{\"type\":\"assistant\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":5,\"output_tokens\":3,\"cache_read_input_tokens\":1}}}"
+msgB = "{\"type\":\"assistant\",\"message\":{\"id\":\"m2\",\"usage\":{\"input_tokens\":7,\"output_tokens\":2,\"cache_read_input_tokens\":1}}}"
+systemLine = "{\"type\":\"system\",\"model\":\"x\",\"session_id\":\"s\"}"
+resultLine = "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"done\",\"usage\":{\"input_tokens\":999,\"output_tokens\":888,\"cache_read_input_tokens\":777}}"
+
+testTokensRepeatedMessageId :: IO ()
+testTokensRepeatedMessageId = do
+    let stN (_, st, _) = st
+        st19 = iterate (stN . tickWith msgA) emptyTickState !! 19
+        (out20, _, _) = tickWith msgA st19
+    assertBool "single contribution: in 5" ("in 5 " `strIn` last out20)
+    assertBool "single contribution: out 3" ("out 3 " `strIn` last out20)
+    assertBool "single contribution: cache_read 1" ("cache_read 1" `strIn` last out20)
+
+testTokensMessageIdChange :: IO ()
+testTokensMessageIdChange = do
+    let stN (_, st, _) = st
+        (_, st1, _) = tick msgA
+        st19 = iterate (stN . tickWith msgB) st1 !! 18
+        (out20, _, _) = tickWith msgB st19
+    assertBool "summed input: 12" ("in 12 " `strIn` last out20)
+    assertBool "summed output: 5" ("out 5 " `strIn` last out20)
+    assertBool "summed cache_read: 2" ("cache_read 2" `strIn` last out20)
+
+testTokensResultOverwrite :: IO ()
+testTokensResultOverwrite = do
+    let stN (_, st, _) = st
+        (_, st1, _) = tick msgA
+        (_, st2, _) = tickWith resultLine st1
+        st19 = iterate (stN . tickWith systemLine) st2 !! 17
+        -- trigger with the same message id again: no re-add, but forces the
+        -- periodic check (only evaluated on assistant events) to fire
+        (out20, _, _) = tickWith msgA st19
+    assertBool "overwritten input: 999" ("in 999" `strIn` last out20)
+    assertBool "overwritten output: 888" ("out 888" `strIn` last out20)
+    assertBool "overwritten cache_read: 777" ("cache_read 777" `strIn` last out20)
 
 testRetryStormThreshold5 :: IO ()
 testRetryStormThreshold5 = do

@@ -11,22 +11,23 @@ import Data.Aeson (Object, Result (..), Value (..), decodeStrict, fromJSON)
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as AKM
 import Data.ByteString.Char8 qualified as BC
-import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
+import Data.Maybe (fromMaybe, isJust, mapMaybe, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
 
 data TickState = TickState
     { tsEventCount :: !Int
-    , tsLastIn :: !Int
-    , tsLastOut :: !Int
-    , tsLastCache :: !Int
+    , tsLastMessageId :: !(Maybe Text)
+    , tsTokIn :: !Int
+    , tsTokOut :: !Int
+    , tsTokCache :: !Int
     , tsConsecutiveRetries :: !Int
     }
 
 data TickAction = TickContinue | TickKill Text deriving (Show, Eq)
 
 emptyTickState :: TickState
-emptyTickState = TickState 0 0 0 0 0
+emptyTickState = TickState 0 Nothing 0 0 0 0
 
 {- | Parse one JSONL line and return lines to emit on stderr plus a
 watchdog action. Increments the event counter and prints a usage
@@ -80,16 +81,22 @@ handleSystem ts st obj = case lookStr "subtype" obj of
 handleAssistant :: String -> TickState -> Object -> ([String], TickState)
 handleAssistant ts st obj =
     let msg = lookObj "message" obj
+        msgId = msg >>= lookStr "id"
         usageObj = msg >>= lookObj "usage"
-        inToks = usageObj >>= lookInt "input_tokens"
-        outToks = usageObj >>= lookInt "output_tokens"
-        cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
-        st1 =
-            st
-                { tsLastIn = fromMaybe (tsLastIn st) inToks
-                , tsLastOut = fromMaybe (tsLastOut st) outToks
-                , tsLastCache = fromMaybe (tsLastCache st) cacheToks
-                }
+        inToks = fromMaybe 0 (usageObj >>= lookInt "input_tokens")
+        outToks = fromMaybe 0 (usageObj >>= lookInt "output_tokens")
+        cacheToks = fromMaybe 0 (usageObj >>= lookInt "cache_read_input_tokens")
+        -- assistant events repeat per content block with an identical
+        -- message-start usage snapshot; only add once per distinct message id.
+        st1
+            | isJust msgId && msgId /= tsLastMessageId st =
+                st
+                    { tsLastMessageId = msgId
+                    , tsTokIn = tsTokIn st + inToks
+                    , tsTokOut = tsTokOut st + outToks
+                    , tsTokCache = tsTokCache st + cacheToks
+                    }
+            | otherwise = st
         contents = msg >>= lookArr "content"
         eventLine = do
             xs <- contents
@@ -145,15 +152,24 @@ toolResultError ts (Object o)
         _ -> "error"
 toolResultError _ _ = Nothing
 
+{- | The result event's usage is authoritative and cumulative for the
+whole run, so it overwrites (not adds to) the accumulated totals.
+-}
 handleResult :: String -> TickState -> Object -> ([String], TickState)
 handleResult ts st obj =
-    let st' = st{tsConsecutiveRetries = 0}
-        subtype = maybe "?" T.unpack (lookStr "subtype" obj)
+    let subtype = maybe "?" T.unpack (lookStr "subtype" obj)
         result = maybe "" (take 60 . T.unpack) (lookStr "result" obj)
         usageObj = lookObj "usage" obj
         inToks = usageObj >>= lookInt "input_tokens"
         outToks = usageObj >>= lookInt "output_tokens"
         cacheToks = usageObj >>= lookInt "cache_read_input_tokens"
+        st' =
+            st
+                { tsConsecutiveRetries = 0
+                , tsTokIn = fromMaybe (tsTokIn st) inToks
+                , tsTokOut = fromMaybe (tsTokOut st) outToks
+                , tsTokCache = fromMaybe (tsTokCache st) cacheToks
+                }
         resultLine = formatRow ts '+' "result" (subtype ++ ": " ++ result)
         usageLine = case (inToks, outToks, cacheToks) of
             (Just i, Just o, Just c) ->
@@ -181,11 +197,11 @@ checkUsagePeriodic ts st
                     '='
                     "usage"
                     ( "in "
-                        ++ show (tsLastIn st)
+                        ++ show (tsTokIn st)
                         ++ " / out "
-                        ++ show (tsLastOut st)
+                        ++ show (tsTokOut st)
                         ++ " / cache_read "
-                        ++ show (tsLastCache st)
+                        ++ show (tsTokCache st)
                     )
          in ([line], st{tsEventCount = 0})
     | otherwise = ([], st)

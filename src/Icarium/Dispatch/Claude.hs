@@ -201,13 +201,13 @@ teeAndHeartbeat retryThreshold dbPath src logH did title = do
                     (outLines, st', action) = summariseTick retryThreshold ts line st
                 mapM_ (hPutStrLn stderr) outLines
                 let tokensChanged =
-                        tsLastIn st' /= tsLastIn st
-                            || tsLastOut st' /= tsLastOut st
-                            || tsLastCache st' /= tsLastCache st
+                        tsTokIn st' /= tsTokIn st
+                            || tsTokOut st' /= tsTokOut st
+                            || tsTokCache st' /= tsTokCache st
                 when tokensChanged $
                     void $
                         (try :: IO () -> IO (Either SomeException ())) $
-                            RD.updateTokens c d (tsLastIn st') (tsLastOut st') (tsLastCache st')
+                            RD.updateTokens c d (tsTokIn st') (tsTokOut st') (tsTokCache st')
                 case action of
                     TickContinue -> loop h lh d st' c
                     TickKill reason -> do
