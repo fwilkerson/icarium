@@ -7,7 +7,7 @@ import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute, open, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute, execute_, open, query_)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
@@ -71,6 +71,13 @@ tests =
             [ testCase "migration 9 adds merged_at column to a pre-migration dispatches table" testMigration9AddsMergedAt
             , testCase "setMerged round-trips merge_sha and a non-null merged_at" testSetMergedRoundTrips
             , testCase "listParkedDispatches includes success+unmerged, excludes after setMerged" testListParkedDispatches
+            ]
+        , testGroup
+            "dependency gating on merged"
+            [ testCase "parked dependency blocks dependent" testParkedDepBlocks
+            , testCase "merged dependency unblocks dependent" testMergedDepUnblocks
+            , testCase "manually-done dependency with no dispatches unblocks" testManualDoneDepUnblocks
+            , testCase "migration 10 replaces the pre-existing ready_tasks view" testMigration10ReplacesView
             ]
         , testGroup
             "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
@@ -1224,6 +1231,80 @@ testSetMergedRoundTrips = withTestDb $ \c -> do
     Just after <- RD.getDispatch c did
     dispatchMergeSha after @?= Just "deadbeef"
     assertBool "merged_at set" (isJust (dispatchMergedAt after))
+
+{- | Insert a done dependency and a ready dependent linked by depends_on;
+returns (depId, dependentId). Callers vary the dependency's dispatch state.
+-}
+mkDepPair :: Connection -> IO (Text, Text)
+mkDepPair c = do
+    dep <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Dependency task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    dependent <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Dependent task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    _ <- RE.insertEdge c DependsOn TaskNode dependent TaskNode dep
+    void $ RT.updateTask c dep RT.emptyUpdate{RT.tuState = Just Done}
+    pure (dep, dependent)
+
+readyIds :: Connection -> IO [Text]
+readyIds c = map taskId <$> RT.listTasks c [] True Nothing Nothing
+
+testParkedDepBlocks :: IO ()
+testParkedDepBlocks = withTestDb $ \c -> do
+    (dep, dependent) <- mkDepPair c
+    let did = "01DEPGATE00000000000000001" :: Text
+    insertTestDispatch c did dep
+    RD.finishDispatch c did OSuccess Nothing Nothing
+    ready <- readyIds c
+    assertBool "dependent held while dependency is parked" (dependent `notElem` ready)
+
+testMergedDepUnblocks :: IO ()
+testMergedDepUnblocks = withTestDb $ \c -> do
+    (dep, dependent) <- mkDepPair c
+    let did = "01DEPGATE00000000000000002" :: Text
+    insertTestDispatch c did dep
+    RD.finishDispatch c did OSuccess Nothing Nothing
+    RD.setMerged c did "deadbeef"
+    ready <- readyIds c
+    assertBool "dependent eligible once dependency merged" (dependent `elem` ready)
+
+testManualDoneDepUnblocks :: IO ()
+testManualDoneDepUnblocks = withTestDb $ \c -> do
+    (_, dependent) <- mkDepPair c
+    ready <- readyIds c
+    assertBool "dependent eligible behind manually-done dependency" (dependent `elem` ready)
+
+{- | An upgrading DB carries the old view; migration 10 must drop and
+recreate it. The stand-in view's shape is irrelevant — only its existence
+matters for the DROP.
+-}
+testMigration10ReplacesView :: IO ()
+testMigration10ReplacesView = withBaseTestDb $ \conn -> do
+    execute_ conn "DROP VIEW ready_tasks"
+    execute_ conn "CREATE VIEW ready_tasks AS SELECT * FROM tasks WHERE 0"
+    let m10 = case filter ((== 10) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 10 not registered"
+    migrationUp m10 conn
+    sql <- query_ conn "SELECT sql FROM sqlite_master WHERE type='view' AND name='ready_tasks'" :: IO [Only Text]
+    assertBool
+        "recreated view gates on unmerged dispatches"
+        (any (\(Only s) -> "merge_sha IS NULL" `T.isInfixOf` s) sql)
 
 testListParkedDispatches :: IO ()
 testListParkedDispatches = withTestDb $ \c -> do

@@ -170,6 +170,7 @@ tests =
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
+        , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
         ]
 
 testVersion :: IO ()
@@ -1751,3 +1752,27 @@ testReviewerSeesBodyFileEdits = withDispatchRepo $ \dir db -> do
     -- the file's mtime.
     (_, sOut, _) <- runDispatch dir db Nothing ["search", "xproof1"]
     assertBool "mid-run edit searchable after dispatch" ("proof task" `isInfixOf` sOut)
+
+-- Scenario: park-by-default means a dependency going `done` is not enough
+-- for its dependents — its work must be IN base. Without the merged gate,
+-- the drain would dispatch the dependent against a base missing the
+-- dependency's changes.
+testDispatchDepGateOnMerged :: IO ()
+testDispatchDepGateOnMerged = withDispatchRepo $ \dir db -> do
+    depTid <- addReadyTask dir db "dep gate dependency"
+    (_, addOut, _) <-
+        runDispatch dir db Nothing ["task", "add", "dep gate dependent", "--state", "ready", "--depends-on", depTid]
+    let dependentTid = head (words addOut)
+    -- drain: dispatches the dependency, parks it, then must find no eligible task
+    (code, _, drainErr) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
+    code @?= ExitSuccess
+    assertBool "drain stopped on empty queue after parking the dependency" ("ready queue empty" `isInfixOf` drainErr)
+    (nextCode, _, _) <- runDispatch dir db Nothing ["task", "next"]
+    nextCode @?= ExitFailure 1
+    -- land the dependency; the dependent becomes eligible
+    did <- parkedId dir db
+    (mcode, _, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
+    mcode @?= ExitSuccess
+    (nextCode2, nextOut, _) <- runDispatch dir db Nothing ["task", "next"]
+    nextCode2 @?= ExitSuccess
+    assertBool "dependent is next after merge" (dependentTid `isInfixOf` nextOut)

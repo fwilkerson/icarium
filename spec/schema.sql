@@ -211,9 +211,11 @@ SELECT
     t.updated_at
 FROM tasks t;
 
--- Tasks eligible for dispatch: state='ready' AND every depends_on target is done.
--- NB: a dependency counts as satisfied when its stored state is 'done'.
--- In-progress deps are NOT satisfied.
+-- Tasks eligible for dispatch: state='ready' AND every depends_on target's
+-- work is in base. A dependency is satisfied when it is 'done' AND has no
+-- successful-but-unmerged (parked) dispatch — under park-by-default, done
+-- alone means parked, not landed. Manually-completed tasks (no dispatch
+-- rows) and no-commit successes (merge-stamped at finish) satisfy as before.
 CREATE VIEW ready_tasks AS
 SELECT t.*
 FROM tasks t
@@ -225,7 +227,13 @@ WHERE t.state = 'ready'
       WHERE e.kind = 'depends_on'
         AND e.src_kind = 'task' AND e.src_id = t.id
         AND e.dst_kind = 'task'
-        AND dep.state <> 'done'
+        AND (dep.state <> 'done'
+             OR EXISTS (
+                 SELECT 1 FROM dispatches pd
+                 WHERE pd.task_id = dep.id
+                   AND pd.outcome = 'success'
+                   AND pd.merge_sha IS NULL
+             ))
   )
   AND NOT EXISTS (
       SELECT 1 FROM dispatches d
