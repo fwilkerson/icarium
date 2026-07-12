@@ -9,11 +9,12 @@ import Data.Time.Clock (UTCTime (..))
 import Database.SQLite.Simple (Query (..), close, execute, execute_, open)
 import Icarium.Schema (execSql, schemaSql)
 import System.Directory (doesFileExist, makeAbsolute, setModificationTime)
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
-import System.Process.Typed (proc, readProcess, setWorkingDir)
+import System.Process.Typed (proc, readProcess, setEnv, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
@@ -44,6 +45,17 @@ runIcariumIn workdir db args = do
 withTempDb :: (FilePath -> IO a) -> IO a
 withTempDb k = withSystemTempDirectory "icarium-test" $ \dir ->
     k (dir <> "/icarium.db")
+
+{- | Run icarium with no --db flag; ICARIUM_DB in the environment resolves
+the db path instead. Replaces any inherited ICARIUM_DB so the value passed
+here always wins.
+-}
+runIcariumEnvDb :: FilePath -> [String] -> IO (ExitCode, String, String)
+runIcariumEnvDb db args = do
+    parentEnv <- getEnvironment
+    let env = ("ICARIUM_DB", db) : filter ((/= "ICARIUM_DB") . fst) parentEnv
+    (code, outBs, errBs) <- readProcess (setEnv env (proc absBin args))
+    pure (code, BLC.unpack outBs, BLC.unpack errBs)
 
 runIcariumBare :: [String] -> IO (ExitCode, String, String)
 runIcariumBare args = do
@@ -134,6 +146,8 @@ tests =
         , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
         , testCase "ctx list on externally-created DB (user_version=0) exits 0" testCtxListOnExternalDb
         , testCase "doctor: no [commands] section does not FAIL config" testDoctorNoCommandsSection
+        , testCase "ICARIUM_DB env resolves db path when --db is not given" testDbEnvFallback
+        , testCase "explicit --db wins over ICARIUM_DB" testDbFlagOverridesEnv
         ]
 
 testVersion :: IO ()
@@ -1193,3 +1207,39 @@ testDoctorNoCommandsSection = withSystemTempDirectory "icarium-test" $ \dir -> d
     writeFile (dir <> "/icarium.toml") noCommandsIcariumToml
     (_, out, _) <- runIcariumIn dir db ["doctor"]
     assertBool "config check passes with no [commands] section" (not ("FAIL  config" `isInfixOf` out))
+
+-- =============================================================
+-- ICARIUM_DB env fallback tests
+-- =============================================================
+
+testDbEnvFallback :: IO ()
+testDbEnvFallback = withTempDb $ \db -> do
+    (addCode, addOut, _) <- runIcariumEnvDb db ["task", "add", "Env db task", "--state", "ready"]
+    addCode @?= ExitSuccess
+    let tid = head (words addOut)
+    dbExists <- doesFileExist db
+    assertBool "db file created at ICARIUM_DB path" dbExists
+
+    (listCode, listOut, _) <- runIcariumEnvDb db ["task", "list"]
+    listCode @?= ExitSuccess
+    assertBool "task list (via ICARIUM_DB) shows the added task" ("Env db task" `isInfixOf` listOut)
+    assertBool "task list (via ICARIUM_DB) shows id prefix" (take 10 tid `isInfixOf` listOut)
+
+testDbFlagOverridesEnv :: IO ()
+testDbFlagOverridesEnv = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let envDb = dir </> "env.db"
+        flagDb = dir </> "flag.db"
+    parentEnv <- getEnvironment
+    let env = ("ICARIUM_DB", envDb) : filter ((/= "ICARIUM_DB") . fst) parentEnv
+    (code, addOut, _) <-
+        readProcess (setEnv env (proc absBin ["--db", flagDb, "task", "add", "Flag wins task", "--state", "ready"]))
+    code @?= ExitSuccess
+    let tid = head (words (BLC.unpack addOut))
+    flagDbExists <- doesFileExist flagDb
+    envDbExists <- doesFileExist envDb
+    assertBool "explicit --db path was used" flagDbExists
+    assertBool "ICARIUM_DB path was not touched" (not envDbExists)
+
+    (listCode, listOut, _) <- runIcarium flagDb ["task", "list"]
+    listCode @?= ExitSuccess
+    assertBool "task shows up under the --db path" (take 10 tid `isInfixOf` listOut)

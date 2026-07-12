@@ -14,7 +14,7 @@ import Icarium.Commands.Task qualified as Task
 import Icarium.Db (defaultDbPath)
 import Options.Applicative
 import Paths_icarium (version)
-import System.Environment (getArgs)
+import System.Environment (getArgs, lookupEnv)
 
 data Command
     = CmdInit Init.Options
@@ -35,8 +35,12 @@ data Args = Args
 
 main :: IO ()
 main = do
+    mEnvDb <- lookupEnv "ICARIUM_DB"
+    let defaultDb = case mEnvDb of
+            Just db | not (null db) -> db
+            _ -> defaultDbPath
     argv <- helpForBareNoun . lsToList <$> getArgs
-    args <- handleParseResult (execParserPure defaultPrefs parser argv)
+    args <- handleParseResult (execParserPure defaultPrefs (parser defaultDb) argv)
     runCmd (argsDb args) (argsCmd args)
 
 nounGroups :: [String]
@@ -90,22 +94,22 @@ versionP =
         ("icarium " <> showVersion version)
         (long "version" <> short 'V' <> help "Print version and exit")
 
-parser :: ParserInfo Args
-parser =
+parser :: FilePath -> ParserInfo Args
+parser defaultDb =
     info
-        (argsP <**> helper <**> versionP)
+        (argsP defaultDb <**> helper <**> versionP)
         ( fullDesc
             <> progDesc "Task/context/dispatch tool for headless-agent workflows. IDs are ULIDs; any unique prefix is accepted; lists show 10-char prefixes, show/create output prints the full id. New agents: run `icarium agents` for a quickstart."
             <> header "icarium"
         )
 
-argsP :: Parser Args
-argsP =
+argsP :: FilePath -> Parser Args
+argsP defaultDb =
     Args
         <$> strOption
             ( long "db"
                 <> metavar "PATH"
-                <> value defaultDbPath
+                <> value defaultDb
                 <> showDefault
                 <> help "SQLite database file"
             )
