@@ -3,6 +3,7 @@ module RepoSpec (tests) where
 import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, void)
 import Data.Int (Int64)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -17,7 +18,7 @@ import Icarium.Commands.Ctx (autoDeriveDeps)
 import Icarium.Config (CategoriesConfig (..), defaultConfigText, loadConfig)
 import Icarium.Db (dbSchemaVersion, migrateDb)
 import Icarium.Id (newId)
-import Icarium.Migrations (Migration (..), mkSqlMigration)
+import Icarium.Migrations (Migration (..), migrations, mkSqlMigration)
 import Icarium.Render (renderTaskPrompt)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RK
@@ -64,6 +65,12 @@ tests =
             "dispatch token columns"
             [ testCase "FromRow reads populated token columns" testDispatchTokensPopulated
             , testCase "FromRow reads NULL token columns as Nothing" testDispatchTokensNull
+            ]
+        , testGroup
+            "dispatch merge tracking"
+            [ testCase "migration 9 adds merged_at column to a pre-migration dispatches table" testMigration9AddsMergedAt
+            , testCase "setMerged round-trips merge_sha and a non-null merged_at" testSetMergedRoundTrips
+            , testCase "listParkedDispatches includes success+unmerged, excludes after setMerged" testListParkedDispatches
             ]
         , testGroup
             "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
@@ -1163,3 +1170,80 @@ testDispatchTokensNull = withTestDb $ \c -> do
     dispatchTokensIn d @?= Nothing
     dispatchTokensOut d @?= Nothing
     dispatchTokensCacheRead d @?= Nothing
+
+-- =============================================================
+-- dispatch merge tracking tests
+-- =============================================================
+
+{- | applySchema always stamps the latest schemaVersion (Schema.hs), so a
+"v8" DB can't be built that way; hand-write the pre-migration-9 table
+(no merged_at) instead.
+-}
+testMigration9AddsMergedAt :: IO ()
+testMigration9AddsMergedAt = do
+    conn <- open ":memory:"
+    execSql
+        conn
+        "CREATE TABLE dispatches (\
+        \id TEXT PRIMARY KEY, task_id TEXT NOT NULL, branch TEXT NOT NULL, \
+        \base_branch TEXT NOT NULL, base_sha TEXT NOT NULL, pid INTEGER, \
+        \model TEXT NOT NULL, effort TEXT NOT NULL, \
+        \started_at TEXT NOT NULL DEFAULT (datetime('now')), \
+        \heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')), \
+        \ended_at TEXT, outcome TEXT, merge_sha TEXT, last_commit TEXT, \
+        \notes TEXT, log_path TEXT, tokens_in INTEGER, tokens_out INTEGER, \
+        \tokens_cache_read INTEGER, review_verdict TEXT, reviewer_log_path TEXT)"
+    let m9 = case filter ((== 9) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 9 not registered"
+    migrationUp m9 conn
+    cols <- query_ conn "SELECT name FROM pragma_table_info('dispatches')" :: IO [Only Text]
+    assertBool "merged_at column present after migration 9" (Only ("merged_at" :: Text) `elem` cols)
+    close conn
+
+testSetMergedRoundTrips :: IO ()
+testSetMergedRoundTrips = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Merge tracking task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    let did = "01MERGE000000000000000001M" :: Text
+    insertTestDispatch c did tid
+    RD.finishDispatch c did OSuccess Nothing Nothing
+    Just before <- RD.getDispatch c did
+    dispatchMergeSha before @?= Nothing
+    dispatchMergedAt before @?= Nothing
+
+    RD.setMerged c did "deadbeef"
+    Just after <- RD.getDispatch c did
+    dispatchMergeSha after @?= Just "deadbeef"
+    assertBool "merged_at set" (isJust (dispatchMergedAt after))
+
+testListParkedDispatches :: IO ()
+testListParkedDispatches = withTestDb $ \c -> do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = "Parked task"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    let did = "01PARK0000000000000000001P" :: Text
+    insertTestDispatch c did tid
+    RD.finishDispatch c did OSuccess Nothing Nothing
+
+    parked <- RD.listParkedDispatches c
+    map dispatchId parked @?= [did]
+
+    RD.setMerged c did "cafebabe"
+    parked' <- RD.listParkedDispatches c
+    null parked' @?= True

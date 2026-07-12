@@ -6,12 +6,14 @@ module Icarium.Repo.Dispatch (
     resolveDispatchId,
     listOpenDispatches,
     listDispatches,
+    listParkedDispatches,
     updateHeartbeat,
     updateTokens,
     setLastCommit,
     setPid,
     updateNotes,
     setReviewInfo,
+    setMerged,
     finishDispatch,
     logPathsOutsideRetention,
 ) where
@@ -38,7 +40,7 @@ dispatchCols =
     "id, task_id, branch, base_branch, base_sha, pid, model, effort, \
     \started_at, heartbeat_at, ended_at, outcome, merge_sha, last_commit, \
     \notes, log_path, tokens_in, tokens_out, tokens_cache_read, \
-    \review_verdict, reviewer_log_path"
+    \review_verdict, reviewer_log_path, merged_at"
 
 {- | Insert a dispatch. The caller supplies the id so that the branch
 name and log path (which both embed the id) can be computed before
@@ -116,6 +118,18 @@ listDispatches conn (Just tid) =
         )
         (Only tid)
 
+-- | Successful dispatches whose branch hasn't been merged yet ("parked").
+listParkedDispatches :: Connection -> IO [Dispatch]
+listParkedDispatches conn =
+    query_
+        conn
+        ( Query $
+            "SELECT "
+                <> dispatchCols
+                <> " FROM dispatches WHERE outcome = 'success' AND merge_sha IS NULL \
+                   \ORDER BY started_at ASC"
+        )
+
 updateHeartbeat :: Connection -> Text -> IO ()
 updateHeartbeat conn did =
     execute
@@ -165,6 +179,18 @@ setReviewInfo conn did verdict reviewerLogPath =
             \WHERE id = ?"
         )
         (verdict, pack reviewerLogPath, did)
+
+-- | Stamp a dispatch as landed: merge sha plus the current timestamp.
+setMerged :: Connection -> Text -> Text -> IO ()
+setMerged conn did sha =
+    execute
+        conn
+        ( Query
+            "UPDATE dispatches \
+            \SET merge_sha = ?, merged_at = datetime('now') \
+            \WHERE id = ?"
+        )
+        (sha, did)
 
 {- | Log paths for dispatches outside the N most recent by started_at DESC.
 Includes both worker and reviewer log paths. Only returns non-NULL entries.
