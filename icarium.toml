@@ -2,7 +2,9 @@
 integration_branch = "main"
 
 [commands]
-build = "cabal build all"
+# make install also drops bin/icarium, which the CLI integration tests
+# invoke; a bare `cabal build all` leaves fresh worktrees without it.
+build = "make install"
 test  = "cabal test all"
 
 [dispatch]
