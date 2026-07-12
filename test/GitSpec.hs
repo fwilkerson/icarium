@@ -153,6 +153,7 @@ minDispatchConfig =
         , dcRetryStormThreshold = 3
         , dcWorktreeSetup = Nothing
         , dcWorktreeTeardown = Nothing
+        , dcMcpConfig = Nothing
         }
 
 {- | Regression: a tracked icarium.toml diverged in the invoking checkout
