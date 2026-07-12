@@ -1,22 +1,25 @@
 module CliSpec (tests) where
 
-import Control.Exception (bracket)
+import Control.Exception (bracket, evaluate)
 import Control.Monad (when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
-import Data.List (isInfixOf, isPrefixOf)
+import Data.Char (isSpace)
+import Data.List (dropWhileEnd, isInfixOf, isPrefixOf)
+import Data.Maybe (fromMaybe)
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
 import Database.SQLite.Simple (Query (..), close, execute, execute_, open)
 import Icarium.Schema (execSql, schemaSql)
-import System.Directory (doesFileExist, makeAbsolute, setModificationTime)
+import System.Directory (createDirectoryIfMissing, doesFileExist, makeAbsolute, setModificationTime)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
+import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, setEnv, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import TestHelpers (withTestRepo)
 
 -- Resolved once at load time so concurrent cwd changes in PostClaudeSpec
 -- tests (which use withCurrentDirectory) don't corrupt makeAbsolute calls.
@@ -148,6 +151,23 @@ tests =
         , testCase "doctor: no [commands] section does not FAIL config" testDoctorNoCommandsSection
         , testCase "ICARIUM_DB env resolves db path when --db is not given" testDbEnvFallback
         , testCase "explicit --db wins over ICARIUM_DB" testDbFlagOverridesEnv
+        , -- worktree dispatch + merge (stub claude on PATH)
+          testCase "dispatch: invoking checkout untouched from dirty feature branch" testDispatchInvokingCheckoutUntouched
+        , testCase "dispatch: child icarium hits parent DB, no nested store" testDispatchNoNestedStore
+        , testCase "dispatch: success parks the branch (merge_sha NULL, task done)" testDispatchParks
+        , testCase "dispatch merge: fast-forward in place when base checked out clean" testMergeFFInPlace
+        , testCase "dispatch merge: fast-forward via temp worktree when base checked out elsewhere" testMergeFFTempWorktree
+        , testCase "dispatch merge: dirty base checkout is fatal" testMergeDirtyBaseFatal
+        , testCase "dispatch merge: base moved rebases and re-runs gates" testMergeRebaseRegate
+        , testCase "dispatch merge: rebase conflict stays parked, exit 3" testMergeConflictParked
+        , testCase "dispatch: claude failure blocks task, retains branch, removes worktree" testDispatchFailBlocks
+        , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
+        , testCase "dispatch: worktree_setup exit 75 stops drain cleanly" testWorktreeSetup75
+        , testCase "dispatch: worktree_setup nonzero errors a single run" testWorktreeSetupErr
+        , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
+        , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
+        , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
+        , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         ]
 
 testVersion :: IO ()
@@ -1244,3 +1264,445 @@ testDbFlagOverridesEnv = withSystemTempDirectory "icarium-test" $ \dir -> do
     (listCode, listOut, _) <- runIcarium flagDb ["task", "list"]
     listCode @?= ExitSuccess
     assertBool "task shows up under the --db path" (take 10 tid `isInfixOf` listOut)
+
+-- =============================================================
+-- worktree dispatch + merge (stub claude on PATH)
+--
+-- These drive ./bin/icarium as a subprocess against a throwaway git repo,
+-- with the committed test/fixtures/claude stub resolved via PATH. The stub's
+-- behavior is selected by STUB_CLAUDE_MODE (see the script). Each test gets
+-- its own repo + DB, so they stay isolated under parallel execution.
+-- =============================================================
+
+-- | The committed stub-`claude` fixtures dir, resolved once at load time.
+{-# NOINLINE absFixtures #-}
+absFixtures :: FilePath
+absFixtures = unsafePerformIO (makeAbsolute "test/fixtures")
+
+-- | Directory holding ./bin/icarium, so a child @icarium@ resolves on PATH.
+binDir :: FilePath
+binDir = takeDirectory absBin
+
+{- | Run ./bin/icarium inside a test repo with the stub @claude@ (and the
+icarium binary itself) prepended to PATH. @STUB_CLAUDE_MODE@ picks the stub's
+behavior. typed-process's 'setEnv' replaces the whole environment, so we
+build from the parent's, override PATH, and add the mode. --db is absolute
+and cwd is the repo, so the binary's @git -C .@ calls resolve there.
+-}
+runDispatch :: FilePath -> FilePath -> Maybe String -> [String] -> IO (ExitCode, String, String)
+runDispatch repo db mMode args = do
+    absDb <- makeAbsolute db
+    parentEnv <- getEnvironment
+    let path0 = fromMaybe "" (lookup "PATH" parentEnv)
+        base = filter ((`notElem` ["PATH", "STUB_CLAUDE_MODE"]) . fst) parentEnv
+        env =
+            ("PATH", absFixtures <> ":" <> binDir <> ":" <> path0)
+                : maybe id (\m -> (("STUB_CLAUDE_MODE", m) :)) mMode base
+    (code, out, err) <-
+        readProcess (setEnv env (setWorkingDir repo (proc absBin (["--db", absDb] <> args))))
+    pure (code, BLC.unpack out, BLC.unpack err)
+
+{- | A git repo with a committed .gitignore (so a worktree's .icarium/ is
+ignored), a stub-friendly icarium.toml, an empty .icarium/, and one commit
+on main. Yields the repo dir and the DB path (created on first command).
+-}
+withDispatchRepo :: (FilePath -> FilePath -> IO a) -> IO a
+withDispatchRepo k =
+    withTestRepo $ \dir -> do
+        writeFile (dir </> ".gitignore") ".icarium/\nicarium.toml\n"
+        _ <- readProcess (setWorkingDir dir (proc "git" ["add", ".gitignore"]))
+        _ <- readProcess (setWorkingDir dir (proc "git" ["commit", "-m", "gitignore"]))
+        writeFile (dir </> "icarium.toml") stubToml
+        createDirectoryIfMissing True (dir </> ".icarium")
+        k dir (dir </> ".icarium" </> "icarium.db")
+
+-- | Default stub config: trivial gates, no worktree hooks.
+stubToml :: String
+stubToml = stubTomlWith "true" Nothing Nothing
+
+{- | icarium.toml driving the stub model, with an overridable test gate and
+optional worktree_setup / worktree_teardown commands.
+-}
+stubTomlWith :: String -> Maybe String -> Maybe String -> String
+stubTomlWith testCmd mSetup mTeardown =
+    unlines $
+        [ "[project]"
+        , "integration_branch = \"main\""
+        , "[commands]"
+        , "build = \"true\""
+        , "test  = " <> show testCmd
+        , "[dispatch]"
+        , "model  = \"stub\""
+        , "effort = \"low\""
+        , "tools = [\"Bash\"]"
+        , "allowed_tools = [\"Bash\"]"
+        , "scratch_dir = \".icarium/scratch\""
+        , "max_minutes_per_dispatch = 2"
+        , "heartbeat_stale_seconds  = 300"
+        , "log_retention_runs       = 5"
+        ]
+            <> maybe [] (\c -> ["worktree_setup = " <> show c]) mSetup
+            <> maybe [] (\c -> ["worktree_teardown = " <> show c]) mTeardown
+            <> [ "[categories]"
+               , "domains     = [\"core\"]"
+               , "disciplines = [\"development\"]"
+               ]
+
+{- | Count lines in a file, forcing the read fully (a plain lazy
+@readFile@ leaves the handle open, so a concurrent appender can leak into
+a later forced read). Used to observe gate/teardown side effects.
+-}
+countLines :: FilePath -> IO Int
+countLines p = readFile p >>= evaluate . length . lines
+
+-- | Run git in a repo dir; return stdout stripped of trailing whitespace.
+gitOut :: FilePath -> [String] -> IO String
+gitOut dir args = do
+    (_, out, _) <- readProcess (setWorkingDir dir (proc "git" args))
+    pure (dropWhileEnd isSpace (BLC.unpack out))
+
+-- | Number of worktrees registered in the repo (1 = just the main checkout).
+worktreeCount :: FilePath -> IO Int
+worktreeCount dir = length . filter (not . null) . lines <$> gitOut dir ["worktree", "list"]
+
+-- | Full names of any dispatch/* branches.
+dispatchBranches :: FilePath -> IO [String]
+dispatchBranches dir =
+    filter (not . null) . lines
+        <$> gitOut dir ["branch", "--list", "dispatch/*", "--format=%(refname:short)"]
+
+-- | Add a ready task, returning its full id.
+addReadyTask :: FilePath -> FilePath -> String -> IO String
+addReadyTask dir db title = do
+    (_, out, _) <- runDispatch dir db Nothing ["task", "add", title, "--state", "ready"]
+    pure (head (words out))
+
+-- | First token of the first non-empty line (a 10-char id prefix from a list).
+firstListId :: String -> String
+firstListId out = case filter (not . null) (lines out) of
+    (l : _) -> head (words l)
+    [] -> ""
+
+-- | The parked dispatch id prefix, or "" if none parked.
+parkedId :: FilePath -> FilePath -> IO String
+parkedId dir db = firstListId . snd3 <$> runDispatch dir db Nothing ["dispatch", "list", "--parked"]
+  where
+    snd3 (_, b, _) = b
+
+-- Scenario 1: dispatch from a checkout on a different branch with a dirty
+-- tree; the invoking checkout's branch, dirtiness, and base ref are untouched,
+-- and no worktree is left behind.
+testDispatchInvokingCheckoutUntouched :: IO ()
+testDispatchInvokingCheckoutUntouched = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "stub task"
+    baseSha <- gitOut dir ["rev-parse", "main"]
+    _ <- gitOut dir ["checkout", "-b", "feature"]
+    writeFile (dir </> "founder.txt") "uncommitted founder work\n"
+
+    (code, _, _) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+
+    branch <- gitOut dir ["rev-parse", "--abbrev-ref", "HEAD"]
+    branch @?= "feature"
+    status <- gitOut dir ["status", "--porcelain"]
+    assertBool "founder's dirty file survives" ("founder.txt" `isInfixOf` status)
+    mainAfter <- gitOut dir ["rev-parse", "main"]
+    mainAfter @?= baseSha
+
+    brs <- dispatchBranches dir
+    assertBool "a dispatch branch was created" (not (null brs))
+    parent <- gitOut dir ["rev-parse", head brs <> "~1"]
+    assertBool "dispatch branch was cut from the base sha" (parent == baseSha)
+    wc <- worktreeCount dir
+    wc @?= 1
+
+-- Scenario 2: a child `icarium` run by the worker must resolve ICARIUM_DB
+-- (absolute) to the parent store, never create a nested .icarium/icarium.db.
+testDispatchNoNestedStore :: IO ()
+testDispatchNoNestedStore = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "nested probe task"
+    (code, _, _) <- runDispatch dir db (Just "icarium") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    report <- readFile (dir </> ".icarium" </> ("stub-report-" <> tid <> ".txt"))
+    assertBool "child icarium exited 0 against the parent DB" ("rc=0" `isInfixOf` report)
+    assertBool "no nested .icarium/icarium.db created in the worktree" ("nested=no" `isInfixOf` report)
+    park <- parkedId dir db
+    assertBool "dispatch parked" (not (null park))
+
+-- Scenario 3: a committed success parks — outcome success, merge_sha NULL,
+-- [parked] badge, branch present, base unmoved, task done, worktree gone.
+testDispatchParks :: IO ()
+testDispatchParks = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "park task"
+    baseSha <- gitOut dir ["rev-parse", "main"]
+    (code, _, _) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+
+    (_, parkedOut, _) <- runDispatch dir db Nothing ["dispatch", "list", "--parked"]
+    assertBool "[parked] badge present" ("[parked]" `isInfixOf` parkedOut)
+    let did = firstListId parkedOut
+    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
+    assertBool "outcome success" ("success" `isInfixOf` showOut)
+    assertBool "merged: no (parked ...)" ("no (parked; land with `icarium dispatch merge`)" `isInfixOf` showOut)
+    assertBool "notes say parked" ("parked" `isInfixOf` showOut)
+
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task moved to done" ("done" `isInfixOf` taskOut)
+    brs <- dispatchBranches dir
+    assertBool "dispatch branch retained" (not (null brs))
+    mainAfter <- gitOut dir ["rev-parse", "main"]
+    mainAfter @?= baseSha
+    wc <- worktreeCount dir
+    wc @?= 1
+
+-- Scenario 4a: base checked out here and clean -> FF in place, HEAD advances.
+testMergeFFInPlace :: IO ()
+testMergeFFInPlace = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "ff task"
+    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    before <- gitOut dir ["rev-parse", "HEAD"]
+    did <- parkedId dir db
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
+    code @?= ExitSuccess
+    assertBool "merge reports landing" ("merged" `isInfixOf` out)
+    after <- gitOut dir ["rev-parse", "HEAD"]
+    assertBool "HEAD advanced in place" (before /= after)
+    onMain <- gitOut dir ["rev-parse", "--abbrev-ref", "HEAD"]
+    onMain @?= "main"
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "badge flips to [success]" ("[success]" `isInfixOf` listOut)
+    brs <- dispatchBranches dir
+    assertBool "dispatch branch deleted after merge" (null brs)
+
+-- Scenario 4b: base checked out nowhere (HEAD on a feature branch) -> FF via
+-- a throwaway worktree; the invoking checkout stays on its branch.
+testMergeFFTempWorktree :: IO ()
+testMergeFFTempWorktree = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "ff-temp task"
+    baseSha <- gitOut dir ["rev-parse", "main"]
+    _ <- gitOut dir ["checkout", "-b", "feature"]
+    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    did <- parkedId dir db
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
+    code @?= ExitSuccess
+    assertBool "merge reports landing" ("merged" `isInfixOf` out)
+    mainAfter <- gitOut dir ["rev-parse", "main"]
+    assertBool "base advanced" (mainAfter /= baseSha)
+    onFeature <- gitOut dir ["rev-parse", "--abbrev-ref", "HEAD"]
+    onFeature @?= "feature"
+    brs <- dispatchBranches dir
+    assertBool "dispatch branch deleted after merge" (null brs)
+    wc <- worktreeCount dir
+    wc @?= 1
+
+-- Scenario 4c: base checked out here but dirty -> fatal, stays parked.
+testMergeDirtyBaseFatal :: IO ()
+testMergeDirtyBaseFatal = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "dirty-base task"
+    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    did <- parkedId dir db
+    writeFile (dir </> "local.txt") "uncommitted local edit\n"
+    (code, _, err) <- runDispatch dir db Nothing ["dispatch", "merge", did]
+    code @?= ExitFailure 1
+    assertBool "error names the dirty base tree" ("dirty tree" `isInfixOf` err)
+    park <- parkedId dir db
+    assertBool "dispatch still parked" (not (null park))
+
+-- Scenario 5a: base moved since park -> merge rebases and re-runs the gates
+-- (observable: the test gate appends to a file), then lands.
+testMergeRebaseRegate :: IO ()
+testMergeRebaseRegate = withDispatchRepo $ \dir db -> do
+    let gateLog = dir </> ".icarium" </> "gate.log"
+    writeFile (dir </> "icarium.toml") (stubTomlWith ("echo gate-ran >> " <> gateLog) Nothing Nothing)
+    tid <- addReadyTask dir db "rebase task"
+    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    did <- parkedId dir db
+    atPark <- countLines gateLog
+
+    -- move base forward, non-conflicting, while parked
+    writeFile (dir </> "base-moved.txt") "founder moved base\n"
+    _ <- gitOut dir ["add", "-A"]
+    _ <- gitOut dir ["commit", "-m", "founder: base moves"]
+
+    (code, _, err) <- runDispatch dir db Nothing ["dispatch", "merge", did]
+    code @?= ExitSuccess
+    assertBool "rebase announced on stderr" ("rebasing" `isInfixOf` err)
+    atMerge <- countLines gateLog
+    assertBool "gates re-ran during merge" (atMerge > atPark)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "badge flips to [success]" ("[success]" `isInfixOf` listOut)
+
+-- Scenario 5b: base moved with a conflicting change -> rebase conflict,
+-- dispatch stays parked with a note, exit 3, no leftover worktree.
+testMergeConflictParked :: IO ()
+testMergeConflictParked = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "conflict task"
+    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    did <- parkedId dir db
+    -- create a conflicting commit on main touching the stub's file
+    writeFile (dir </> ("stub-" <> tid <> ".txt")) "conflicting content\n"
+    _ <- gitOut dir ["add", "-A"]
+    _ <- gitOut dir ["commit", "-m", "founder: conflicts with parked branch"]
+
+    (code, _, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
+    code @?= ExitFailure 3
+    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
+    assertBool "conflict note recorded" ("merge conflict; needs manual rebase onto main" `isInfixOf` showOut)
+    park <- parkedId dir db
+    assertBool "dispatch still parked" (not (null park))
+    wc <- worktreeCount dir
+    wc @?= 1
+
+-- Scenario 6a: claude exits nonzero -> failure, task blocked, branch retained,
+-- worktree removed, invoking checkout pristine.
+testDispatchFailBlocks :: IO ()
+testDispatchFailBlocks = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "fail task"
+    baseSha <- gitOut dir ["rev-parse", "main"]
+    (code, out, err) <- runDispatch dir db (Just "fail") ["dispatch", "run", tid]
+    code @?= ExitFailure 3
+    assertBool "reports failure" ("dispatch did not succeed" `isInfixOf` err)
+    assertBool "notes carry the exit code" ("claude exited 2" `isInfixOf` out)
+
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task blocked" ("blocked" `isInfixOf` taskOut)
+    brs <- dispatchBranches dir
+    assertBool "dispatch branch retained for inspection" (not (null brs))
+    wc <- worktreeCount dir
+    wc @?= 1
+    headAfter <- gitOut dir ["rev-parse", "HEAD"]
+    headAfter @?= baseSha
+    status <- gitOut dir ["status", "--porcelain"]
+    assertBool "invoking checkout clean" (null status)
+
+-- Scenario 6b: agent leaves a dirty tree -> failure, the dirty state is
+-- checkpointed as a wip commit on the retained dispatch branch.
+testDispatchDirtyCheckpoint :: IO ()
+testDispatchDirtyCheckpoint = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "dirty task"
+    (code, _, _) <- runDispatch dir db (Just "dirty") ["dispatch", "run", tid]
+    code @?= ExitFailure 3
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task blocked" ("blocked" `isInfixOf` taskOut)
+    brs <- dispatchBranches dir
+    assertBool "dispatch branch retained" (not (null brs))
+    logOut <- gitOut dir ["log", head brs, "--oneline"]
+    assertBool "wip checkpoint on the dispatch branch" ("wip: dispatch" `isInfixOf` logOut)
+    wc <- worktreeCount dir
+    wc @?= 1
+    status <- gitOut dir ["status", "--porcelain"]
+    assertBool "invoking checkout clean" (null status)
+
+-- Scenario 7a: worktree_setup exit 75 is back-pressure: drain stops cleanly
+-- (exit 0), no dispatch row is created, the task stays ready.
+testWorktreeSetup75 :: IO ()
+testWorktreeSetup75 = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "capacity task"
+    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "exit 75") Nothing)
+    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
+    code @?= ExitSuccess
+    assertBool "drain reports no capacity and stops" ("no worktree capacity" `isInfixOf` err)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
+
+-- Scenario 7b: worktree_setup other-nonzero is an error: single run exits 3,
+-- no dispatch row, task untouched.
+testWorktreeSetupErr :: IO ()
+testWorktreeSetupErr = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "setup-err task"
+    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "exit 1") Nothing)
+    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitFailure 3
+    assertBool "reports a setup failure" ("worktree setup failed" `isInfixOf` err)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
+
+-- Scenario 7c: worktree_teardown runs on both the success and failure paths.
+testWorktreeTeardownRuns :: IO ()
+testWorktreeTeardownRuns = withDispatchRepo $ \dir db -> do
+    let tdLog = dir </> ".icarium" </> "teardown.log"
+    writeFile (dir </> "icarium.toml") (stubTomlWith "true" Nothing (Just ("echo torn >> " <> tdLog)))
+    okTid <- addReadyTask dir db "teardown ok task"
+    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", okTid]
+    afterOk <- countLines tdLog
+    afterOk @?= 1
+    failTid <- addReadyTask dir db "teardown fail task"
+    _ <- runDispatch dir db (Just "fail") ["dispatch", "run", failTid]
+    afterFail <- countLines tdLog
+    afterFail @?= 2
+
+-- Scenario 8: --dry-run previews the containment flag and the worktree path.
+testDispatchDryRun :: IO ()
+testDispatchDryRun = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "dry-run task"
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "preview shows --permission-mode dontAsk" ("--permission-mode dontAsk" `isInfixOf` out)
+    assertBool "preview shows the worktree path" ("worktree:" `isInfixOf` out)
+    assertBool "worktree path under .icarium/wt" (".icarium/wt/" `isInfixOf` out)
+
+-- Scenario 9: recover reconciles an orphaned open dispatch whose worktree
+-- survived a crash: dirty state is checkpointed, the worktree is removed,
+-- the task is blocked.
+testDispatchRecoverWorktree :: IO ()
+testDispatchRecoverWorktree = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "recover task"
+    baseSha <- gitOut dir ["rev-parse", "main"]
+    let did = "01RECOVER" <> replicate 16 '0' <> "1"
+        branch = "dispatch/" <> did
+    _ <- gitOut dir ["worktree", "add", ".icarium/wt/" <> did, "-b", branch, "main"]
+    writeFile (dir </> ".icarium" </> "wt" </> did </> "orphan.txt") "orphan work\n"
+    -- open dispatch row with a dead pid and a stale heartbeat
+    conn <- open db
+    execute
+        conn
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, pid, model, effort, \
+            \ started_at, heartbeat_at) \
+            \VALUES (?,?,?,?,?,?,?,?,datetime('now','-1 hour'),datetime('now','-1 hour'))"
+        )
+        ( did
+        , tid
+        , branch
+        , "main" :: String
+        , baseSha
+        , 999999 :: Int
+        , "stub" :: String
+        , "low" :: String
+        )
+    close conn
+    _ <- runDispatch dir db Nothing ["task", "update", tid, "--state", "in-progress"]
+
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "recover"]
+    code @?= ExitSuccess
+    assertBool "recover reports the worktree was removed" ("worktree=removed" `isInfixOf` out)
+    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
+    assertBool "outcome interrupted" ("interrupted" `isInfixOf` showOut)
+    assertBool "dirty state was checkpointed" ("uncommitted=yes" `isInfixOf` showOut)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task blocked" ("blocked" `isInfixOf` taskOut)
+    wc <- worktreeCount dir
+    wc @?= 1
+
+-- Scenario 10: a no-commit task success is stamped merged immediately — it
+-- never surfaces as parked, and its empty branch is deleted.
+testDispatchNoCommitSuccess :: IO ()
+testDispatchNoCommitSuccess = withDispatchRepo $ \dir db -> do
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "no-commit task", "--state", "ready", "--no-commit"]
+    let tid = head (words addOut)
+    (code, out, _) <- runDispatch dir db (Just "nocommit") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    assertBool "outcome success" ("success" `isInfixOf` out)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task moved to done" ("done" `isInfixOf` taskOut)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "badge is [success], not [parked]" ("[success]" `isInfixOf` listOut)
+    (_, parkedOut, _) <- runDispatch dir db Nothing ["dispatch", "list", "--parked"]
+    assertBool "not in the parked list" ("(no dispatches)" `isInfixOf` parkedOut)
+    brs <- dispatchBranches dir
+    assertBool "empty no-commit branch deleted" (null brs)

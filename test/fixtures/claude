@@ -1,0 +1,60 @@
+#!/bin/sh
+# Stub `claude` for icarium's CLI integration tests.
+#
+# The dispatcher runs this with cwd = the dispatch worktree and with
+# ICARIUM_TASK_ID / ICARIUM_DB set in the environment. Behaviour is chosen
+# by STUB_CLAUDE_MODE (default: commit). We consume the prompt on stdin and
+# emit the init + result stream-json lines the orchestrator logs.
+set -u
+cat > /dev/null # consume the prompt
+
+mode="${STUB_CLAUDE_MODE:-commit}"
+tid="${ICARIUM_TASK_ID:-unknown}"
+
+init()   { echo '{"type":"system","subtype":"init"}'; }
+result() { echo '{"type":"result","subtype":"success","is_error":false,"result":"stub done","num_turns":1}'; }
+
+# Commit a task-unique file so the branch diverges from base.
+commit_work() {
+    echo "stub work for $tid" > "stub-$tid.txt"
+    git add -A
+    git commit -q -m "stub: task $tid"
+}
+
+case "$mode" in
+    fail)
+        init
+        exit 2
+        ;;
+    dirty)
+        init
+        echo "left uncommitted" > "stub-dirty-$tid.txt"
+        result
+        exit 0
+        ;;
+    nocommit)
+        init
+        result
+        exit 0
+        ;;
+    icarium)
+        init
+        # Nested-store regression: a child `icarium` with no --db must resolve
+        # ICARIUM_DB (absolute) and hit the parent store, never create a nested
+        # .icarium/icarium.db under the worktree cwd. Record the outcome next to
+        # the parent DB (survives worktree teardown) for the test to read.
+        icarium task list > /dev/null 2>&1
+        rc=$?
+        if [ -f .icarium/icarium.db ]; then nested=yes; else nested=no; fi
+        printf 'rc=%s\nnested=%s\n' "$rc" "$nested" > "$(dirname "$ICARIUM_DB")/stub-report-$tid.txt"
+        commit_work
+        result
+        exit 0
+        ;;
+    commit | *)
+        init
+        commit_work
+        result
+        exit 0
+        ;;
+esac
