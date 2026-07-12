@@ -57,16 +57,16 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
     mWipSha <-
         if outcome == OFailure
             then do
-                clean <- Git.isClean
+                clean <- Git.isClean "."
                 if clean
                     then pure Nothing
                     else do
-                        r <- Git.commitAll ("WIP: dispatch " <> did <> " failed before commit")
+                        r <- Git.commitAll "." ("WIP: dispatch " <> did <> " failed before commit")
                         case r of
                             Left _ -> pure Nothing
-                            Right () -> either (const Nothing) Just <$> Git.revParse "HEAD"
+                            Right () -> either (const Nothing) Just <$> Git.revParse "." "HEAD"
             else pure Nothing
-    when (outcome == OFailure) $ void (Git.checkout base)
+    when (outcome == OFailure) $ void (Git.checkout "." base)
     let enrichedNotes = case mWipSha of
             Nothing -> notes
             Just sha -> notes <> "\nwip_commit: " <> sha

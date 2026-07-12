@@ -31,12 +31,14 @@ data GitError = GitError
     }
     deriving (Show)
 
-{- | Run @git@ with the given args. Returns stdout (stripped) on
-success, a structured error otherwise.
+{- | Run @git -C \<dir\>@ with the given args. Returns stdout (stripped)
+on success, a structured error otherwise. Every operation is explicit
+about the repo/worktree it acts on; nothing depends on the process cwd.
 -}
-runGit :: [String] -> IO (Either GitError Text)
-runGit args = do
-    (code, out, err) <- readProcess (proc "git" args)
+runGit :: FilePath -> [String] -> IO (Either GitError Text)
+runGit dir args = do
+    let allArgs = "-C" : dir : args
+    (code, out, err) <- readProcess (proc "git" allArgs)
     let outT = T.strip (decodeUtf8 (BL.toStrict out))
         errT = T.strip (decodeUtf8 (BL.toStrict err))
     pure $ case code of
@@ -44,89 +46,85 @@ runGit args = do
         ExitFailure c ->
             Left
                 GitError
-                    { gitCmd = "git" : args
+                    { gitCmd = "git" : allArgs
                     , gitStderr = errT
                     , gitExit = c
                     }
 
-isClean :: IO Bool
-isClean = T.null . T.strip <$> statusPorcelain
+isClean :: FilePath -> IO Bool
+isClean dir = T.null . T.strip <$> statusPorcelain dir
 
 {- | Raw `git status --porcelain` output (already stripped). Empty means
 the working tree is clean. On git failure returns a non-empty sentinel
 so callers conservatively treat the tree as dirty.
 -}
-statusPorcelain :: IO Text
-statusPorcelain = do
-    r <- runGit ["status", "--porcelain"]
+statusPorcelain :: FilePath -> IO Text
+statusPorcelain dir = do
+    r <- runGit dir ["status", "--porcelain"]
     pure $ case r of
         Right out -> out
         Left _ -> "?? <git status failed>"
 
-currentBranch :: IO (Either GitError Text)
-currentBranch = runGit ["rev-parse", "--abbrev-ref", "HEAD"]
+currentBranch :: FilePath -> IO (Either GitError Text)
+currentBranch dir = runGit dir ["rev-parse", "--abbrev-ref", "HEAD"]
 
 -- | Resolve a ref to its full SHA.
-revParse :: Text -> IO (Either GitError Text)
-revParse ref = runGit ["rev-parse", "--verify", T.unpack ref]
+revParse :: FilePath -> Text -> IO (Either GitError Text)
+revParse dir ref = runGit dir ["rev-parse", "--verify", T.unpack ref]
 
 -- | Create and check out a new branch from the given base.
-createBranch :: Text -> Text -> IO (Either GitError ())
-createBranch name base =
+createBranch :: FilePath -> Text -> Text -> IO (Either GitError ())
+createBranch dir name base =
     void
-        <$> runGit
-            ["checkout", "-b", T.unpack name, T.unpack base]
+        <$> runGit dir ["checkout", "-b", T.unpack name, T.unpack base]
 
-checkout :: Text -> IO (Either GitError ())
-checkout branch = void <$> runGit ["checkout", T.unpack branch]
+checkout :: FilePath -> Text -> IO (Either GitError ())
+checkout dir branch = void <$> runGit dir ["checkout", T.unpack branch]
 
 {- | Fast-forward the current branch to the named branch. Fails if
 the FF isn't possible — we never want a merge commit.
 -}
-ffMerge :: Text -> IO (Either GitError ())
-ffMerge branch =
+ffMerge :: FilePath -> Text -> IO (Either GitError ())
+ffMerge dir branch =
     void
-        <$> runGit
-            ["merge", "--ff-only", T.unpack branch]
+        <$> runGit dir ["merge", "--ff-only", T.unpack branch]
 
 {- | Stash working-tree changes including untracked files with a
 deterministic message. Used by recovery to preserve in-flight work.
 -}
-stashUntracked :: Text -> IO (Either GitError ())
-stashUntracked msg =
+stashUntracked :: FilePath -> Text -> IO (Either GitError ())
+stashUntracked dir msg =
     void
-        <$> runGit
-            ["stash", "push", "-u", "-m", T.unpack msg]
+        <$> runGit dir ["stash", "push", "-u", "-m", T.unpack msg]
 
 {- | Delete a fully-merged local branch. Uses -d (safe delete) so git
 will refuse if the branch has unmerged commits.
 -}
-deleteBranch :: Text -> IO (Either GitError ())
-deleteBranch name =
+deleteBranch :: FilePath -> Text -> IO (Either GitError ())
+deleteBranch dir name =
     void
-        <$> runGit
-            ["branch", "-d", T.unpack name]
+        <$> runGit dir ["branch", "-d", T.unpack name]
 
 -- | Stage all changes and create a commit with the given message.
-commitAll :: Text -> IO (Either GitError ())
-commitAll msg = do
-    r <- runGit ["add", "-A"]
+commitAll :: FilePath -> Text -> IO (Either GitError ())
+commitAll dir msg = do
+    r <- runGit dir ["add", "-A"]
     case r of
         Left e -> pure (Left e)
-        Right _ -> void <$> runGit ["commit", "-m", T.unpack msg]
+        Right _ -> void <$> runGit dir ["commit", "-m", T.unpack msg]
 
 -- | Files changed between the given base SHA and HEAD; returns [] on git error.
-changedFiles :: Text -> IO [Text]
-changedFiles baseSha = do
-    r <- runGit ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
+changedFiles :: FilePath -> Text -> IO [Text]
+changedFiles dir baseSha = do
+    r <- runGit dir ["diff", "--name-only", T.unpack baseSha <> "..HEAD"]
     case r of
         Left _ -> pure []
         Right out -> pure (filter (not . T.null) (T.lines out))
 
 -- | Full patch between the given base SHA and HEAD; returns empty on git error.
-diffPatch :: Text -> IO Text
-diffPatch baseSha = do
-    r <- runGit ["diff", T.unpack baseSha <> "..HEAD"]
+diffPatch :: FilePath -> Text -> IO Text
+diffPatch dir baseSha = do
+    r <- runGit dir ["diff", T.unpack baseSha <> "..HEAD"]
     pure $ case r of
         Left _ -> ""
         Right out -> out

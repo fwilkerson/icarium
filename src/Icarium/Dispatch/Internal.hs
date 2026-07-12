@@ -156,7 +156,7 @@ doRealAttempt conn req attempt mFindings = do
         maxAttempts = maybe 1 rcMaxAttempts (cfgReview cfg)
 
     checkPreconditions base
-    baseSha <- either (ioFail . show) pure =<< Git.revParse base
+    baseSha <- either (ioFail . show) pure =<< Git.revParse "." base
 
     did <- newId
     let branch = dispatchBranchName did
@@ -198,7 +198,7 @@ doRealAttempt conn req attempt mFindings = do
                 , dxBranch = branch
                 , dxBase = base
                 }
-    mBr <- Git.createBranch branch base
+    mBr <- Git.createBranch "." branch base
     case mBr of
         Left e ->
             finishWith
@@ -233,11 +233,11 @@ doRealAttempt conn req attempt mFindings = do
 
 checkPreconditions :: Text -> IO ()
 checkPreconditions base = do
-    clean <- Git.isClean
+    clean <- Git.isClean "."
     unless clean $
         ioFail
             "working tree not clean; commit or stash before dispatch"
-    mCur <- Git.currentBranch
+    mCur <- Git.currentBranch "."
     case mCur of
         Left e -> ioFail ("git: " <> show e)
         Right b ->

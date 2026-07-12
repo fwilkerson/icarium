@@ -104,25 +104,25 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
         preStep
             | noCommit = do
                 checkExit
-                porcelain <- liftIO Git.statusPorcelain
+                porcelain <- liftIO (Git.statusPorcelain ".")
                 let porcStripped = T.strip porcelain
                 unless (T.null porcStripped) $
                     throwE $
                         "agent left uncommitted changes; refusing to merge\nuncommitted:\n"
                             <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
-                mBranchSha <- liftIO (Git.revParse branch)
+                mBranchSha <- liftIO (Git.revParse "." branch)
                 case mBranchSha of
                     Right sha
                         | sha /= baseSha ->
                             throwE "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
                     _ -> pure ()
-                gitStep "checkout base" (Git.checkout base)
-                liftIO (void (Git.deleteBranch branch))
+                gitStep "checkout base" (Git.checkout "." base)
+                liftIO (void (Git.deleteBranch "." branch))
                 pure Nothing
             | otherwise = do
                 checkExit
-                porcelain <- liftIO Git.statusPorcelain
-                mBranchSha <- liftIO (Git.revParse branch)
+                porcelain <- liftIO (Git.statusPorcelain ".")
+                mBranchSha <- liftIO (Git.revParse "." branch)
                 mapM_ throwE (postClaudeGuard porcelain mBranchSha baseSha)
                 liftIO $ case mBranchSha of
                     Right sha -> RD.setLastCommit conn did sha
@@ -165,7 +165,7 @@ runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins base
             let reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
                 reviewerLogPath = takeDirectory logPath <> "/" <> T.unpack did <> "-reviewer.jsonl"
             mSysPrompt <- loadReviewerPrompt (rcPromptPath rcfg)
-            diffText <- Git.diffPatch baseSha
+            diffText <- Git.diffPatch "." baseSha
             rr <- runReviewer reviewModel mSysPrompt (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
             RD.setReviewInfo conn did (rrVerdict rr) (rrLogPath rr)
             hPutStrLn stderr ("[reviewer] verdict: " <> T.unpack (reviewVerdictText (rrVerdict rr)))
@@ -197,10 +197,10 @@ runReviewThenMerge conn db cfg mTask finish did branch base logPath maxMins base
   where
     doMerge :: ExceptT Text IO (Maybe Text)
     doMerge = do
-        gitStep "checkout base" (Git.checkout base)
-        gitStep "ff-merge" (Git.ffMerge branch)
-        liftIO (void (Git.deleteBranch branch))
-        either (const Nothing) Just <$> liftIO (Git.revParse base)
+        gitStep "checkout base" (Git.checkout "." base)
+        gitStep "ff-merge" (Git.ffMerge "." branch)
+        liftIO (void (Git.deleteBranch "." branch))
+        either (const Nothing) Just <$> liftIO (Git.revParse "." base)
 
 writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> Text -> IO ()
 writeWarnContextEntry conn db task cats findings = do
@@ -222,11 +222,11 @@ can inspect it after a failure.
 -}
 checkpointDirtyTree :: Text -> Text -> IO ()
 checkpointDirtyTree did note = do
-    porcelain <- Git.statusPorcelain
+    porcelain <- Git.statusPorcelain "."
     unless (T.null (T.strip porcelain)) $ do
         let shortNote = T.take 60 (T.takeWhile (/= '\n') note)
             msg = "wip: dispatch " <> did <> " (failed: " <> shortNote <> ")"
-        void $ Git.commitAll msg
+        void $ Git.commitAll "." msg
 
 gitStep :: (Show e) => Text -> IO (Either e a) -> ExceptT Text IO a
 gitStep label = liftIO >=> either (throwE . tag) pure

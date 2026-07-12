@@ -243,7 +243,7 @@ printSummary r = do
     case D.dresBaseSha r of
         Nothing -> pure ()
         Just sha -> do
-            files <- Git.changedFiles sha
+            files <- Git.changedFiles "." sha
             case files of
                 [] -> pure ()
                 _ -> do
@@ -480,8 +480,8 @@ reconcileDispatch c now staleSec d = do
     if alive && not stale
         then pure ()
         else do
-            uncommitted <- fmap not Git.isClean
-            lastCommit <- fmap (fromRight "") (Git.revParse (dispatchBranch d))
+            uncommitted <- fmap not (Git.isClean ".")
+            lastCommit <- fmap (fromRight "") (Git.revParse "." (dispatchBranch d))
             let notes =
                     T.intercalate
                         "; "

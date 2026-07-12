@@ -228,7 +228,7 @@ testFinishWithWipCheckpoint =
                             }
                 res <- finishWith dx FinishArgs{faOutcome = OFailure, faSha = Nothing, faNotes = "agent timed out", faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha}
                 -- (a) base branch worktree is clean after teardown
-                clean <- Git.isClean
+                clean <- Git.isClean dir
                 assertBool "base branch worktree is clean after teardown" clean
                 -- (b) dispatch branch carries the WIP commit
                 logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
