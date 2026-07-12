@@ -88,10 +88,16 @@ hasAdjacentPair x y xs = (x, y) `elem` zip xs (drop 1 xs)
 
 testClaudeArgsPermissionMode :: IO ()
 testClaudeArgsPermissionMode = do
-    let args = claudeArgs "claude-sonnet-4-6" Medium ["Read", "Edit"] ["Read"]
+    let args = claudeArgs "claude-sonnet-4-6" Medium ["Read", "Edit"] ["Read"] Nothing
     assertBool "adjacent --permission-mode dontAsk" (hasAdjacentPair "--permission-mode" "dontAsk" args)
     assertBool "-p present" ("-p" `elem` args)
     assertBool "adjacent --output-format stream-json" (hasAdjacentPair "--output-format" "stream-json" args)
+    assertBool "--strict-mcp-config present" ("--strict-mcp-config" `elem` args)
+    assertBool "no --mcp-config when key absent" ("--mcp-config" `notElem` args)
+    let argsWithMcp = claudeArgs "claude-sonnet-4-6" Medium ["Read", "Edit"] ["Read"] (Just ".mcp.json")
+    assertBool
+        "adjacent --mcp-config <path> when key set"
+        (hasAdjacentPair "--mcp-config" ".mcp.json" argsWithMcp)
 
 testSetupExitClassifier :: IO ()
 testSetupExitClassifier = do

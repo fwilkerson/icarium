@@ -108,6 +108,7 @@ doDryRun conn req = do
         tools = dcTools dcfg
         allowed = dcAllowedTools dcfg
         scratchDir = dcScratchDir dcfg
+        mcpConfig = dcMcpConfig dcfg
 
     TIO.putStrLn "=== DRY RUN ==="
     TIO.putStrLn $ "dispatch id (simulated): " <> fakeId
@@ -122,7 +123,7 @@ doDryRun conn req = do
     TIO.putStrLn $ "scratch_dir:             " <> scratchDir
     TIO.putStrLn ""
     TIO.putStrLn "--- claude invocation ---"
-    TIO.putStrLn (renderCmdPreview (roModel opts) (roEffort opts) tools allowed)
+    TIO.putStrLn (renderCmdPreview (roModel opts) (roEffort opts) tools allowed mcpConfig)
     TIO.putStrLn ""
     TIO.putStrLn "--- prompt (via stdin) ---"
     TIO.putStr prompt
@@ -140,9 +141,9 @@ doDryRun conn req = do
 {- | Renders 'claudeArgs', quoting the comma-joined tool lists for
 human readability.
 -}
-renderCmdPreview :: Text -> Effort -> [Text] -> [Text] -> Text
-renderCmdPreview model effort tools allowed =
-    T.unwords ("claude" : quoteToolLists (claudeArgs model effort tools allowed))
+renderCmdPreview :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> Text
+renderCmdPreview model effort tools allowed mcpConfig =
+    T.unwords ("claude" : quoteToolLists (claudeArgs model effort tools allowed mcpConfig))
   where
     quoteToolLists (flag : val : rest)
         | flag `elem` ["--tools", "--allowedTools"] =

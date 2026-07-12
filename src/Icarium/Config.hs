@@ -62,6 +62,7 @@ data DispatchConfig = DispatchConfig
     , dcRetryStormThreshold :: Int
     , dcWorktreeSetup :: Maybe Text
     , dcWorktreeTeardown :: Maybe Text
+    , dcMcpConfig :: Maybe Text
     }
     deriving (Show)
 
@@ -114,6 +115,7 @@ dispatchCodec =
         <*> (fromMaybe 3 <$> Toml.dioptional (Toml.int "retry_storm_threshold")) .= (Just . dcRetryStormThreshold)
         <*> Toml.dioptional (Toml.text "worktree_setup") .= dcWorktreeSetup
         <*> Toml.dioptional (Toml.text "worktree_teardown") .= dcWorktreeTeardown
+        <*> Toml.dioptional (Toml.text "mcp_config") .= dcMcpConfig
 
 categoriesCodec :: TomlCodec CategoriesConfig
 categoriesCodec =
@@ -193,6 +195,9 @@ defaultConfigText =
     \# drain stops cleanly); any other nonzero exit is an error.\n\
     \# worktree_setup    = \"scripts/worktree-init.sh\"\n\
     \# worktree_teardown = \"scripts/worktree-free.sh\"\n\
+    \# Workers run with --strict-mcp-config, so no MCP servers load unless this\n\
+    \# is set. Reviewers never get MCP servers regardless of this key.\n\
+    \# mcp_config = \".mcp.json\"\n\
     \\n\
     \[categories]\n\
     \# Source of truth for the category vocabulary. Edit here, then run\n\

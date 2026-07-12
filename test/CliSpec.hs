@@ -171,6 +171,7 @@ tests =
         , testCase "dispatch: worktree_setup nonzero errors a single run" testWorktreeSetupErr
         , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
         , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
+        , testCase "dispatch --dry-run previews --mcp-config when set" testDispatchDryRunMcpConfig
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
@@ -1738,6 +1739,39 @@ testDispatchDryRun = withDispatchRepo $ \dir db -> do
     assertBool "preview shows --permission-mode dontAsk" ("--permission-mode dontAsk" `isInfixOf` out)
     assertBool "preview shows the worktree path" ("worktree:" `isInfixOf` out)
     assertBool "worktree path under .icarium/wt" (".icarium/wt/" `isInfixOf` out)
+    assertBool "preview shows --strict-mcp-config" ("--strict-mcp-config" `isInfixOf` out)
+    assertBool "no --mcp-config when key absent" (not ("--mcp-config" `isInfixOf` out))
+
+-- Scenario 8b: --dry-run previews --mcp-config <path> when dispatch.mcp_config is set.
+testDispatchDryRunMcpConfig :: IO ()
+testDispatchDryRunMcpConfig = withDispatchRepo $ \dir db -> do
+    let toml =
+            unlines
+                [ "[project]"
+                , "integration_branch = \"main\""
+                , "[commands]"
+                , "build = \"true\""
+                , "test  = \"true\""
+                , "[dispatch]"
+                , "model  = \"stub\""
+                , "effort = \"low\""
+                , "tools = [\"Bash\"]"
+                , "allowed_tools = [\"Bash\"]"
+                , "scratch_dir = \".icarium/scratch\""
+                , "max_minutes_per_dispatch = 2"
+                , "heartbeat_stale_seconds  = 300"
+                , "log_retention_runs       = 5"
+                , "mcp_config = \".mcp.json\""
+                , "[categories]"
+                , "domains     = [\"core\"]"
+                , "disciplines = [\"development\"]"
+                ]
+    writeFile (dir </> "icarium.toml") toml
+    tid <- addReadyTask dir db "dry-run mcp task"
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "preview shows --strict-mcp-config" ("--strict-mcp-config" `isInfixOf` out)
+    assertBool "preview shows --mcp-config .mcp.json" ("--mcp-config .mcp.json" `isInfixOf` out)
 
 -- Scenario 9: recover reconciles an orphaned open dispatch whose worktree
 -- survived a crash: dirty state is checkpointed, the worktree is removed,

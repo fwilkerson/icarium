@@ -157,6 +157,7 @@ runReviewer workDir model mSysPrompt taskTitle taskBody diffText reviewerLogPath
             , "--disable-slash-commands"
             , "--permission-mode"
             , "dontAsk"
+            , "--strict-mcp-config"
             ]
     hPutStrLn stderr "[reviewer] running..."
     exit <- runReviewerProcess workDir stdinBytes args reviewerLogPath maxMinutes

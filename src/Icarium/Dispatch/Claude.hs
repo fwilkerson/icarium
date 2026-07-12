@@ -95,9 +95,12 @@ data RunCtx = RunCtx
 
 {- | Full claude(1) worker argument list. Shared with the dry-run preview
 so the two can't drift out of sync with each other.
+
+@--strict-mcp-config@ with no @--mcp-config@ means zero MCP servers; when
+'Just' a path is given, @--mcp-config@ grants exactly that file.
 -}
-claudeArgs :: Text -> Effort -> [Text] -> [Text] -> [Text]
-claudeArgs model effort tools allowed =
+claudeArgs :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> [Text]
+claudeArgs model effort tools allowed mcpConfig =
     [ "-p"
     , "--model"
     , model
@@ -113,7 +116,9 @@ claudeArgs model effort tools allowed =
     , T.intercalate "," allowed
     , "--permission-mode"
     , "dontAsk"
+    , "--strict-mcp-config"
     ]
+        ++ maybe [] (\p -> ["--mcp-config", p]) mcpConfig
 
 runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode
 runClaudeStreaming ctx dcfg = do
@@ -128,6 +133,7 @@ runClaudeStreaming ctx dcfg = do
         allowed = dcAllowedTools dcfg
         scratchDir = dcScratchDir dcfg
         maxMinutes = dcMaxMinutesPerDispatch dcfg
+        mcpConfig = dcMcpConfig dcfg
     parentEnv <- getEnvironment
     -- Absolute paths: the worker's cwd is the worktree, and child `icarium`
     -- invocations resolve ICARIUM_DB/scratch against it — a relative db
@@ -135,7 +141,7 @@ runClaudeStreaming ctx dcfg = do
     absDb <- makeAbsolute dbPath
     absScratch <- makeAbsolute (rcWorkDir ctx </> T.unpack scratchDir)
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
-        args = map T.unpack (claudeArgs model effort tools allowed)
+        args = map T.unpack (claudeArgs model effort tools allowed mcpConfig)
         -- Inherit parent env so claude can find ~/.claude credentials
         -- via $HOME; append icarium's own vars.
         env =

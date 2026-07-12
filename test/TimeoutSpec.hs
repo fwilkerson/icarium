@@ -131,6 +131,7 @@ fakeConfig =
                 , dcRetryStormThreshold = 3
                 , dcWorktreeSetup = Nothing
                 , dcWorktreeTeardown = Nothing
+                , dcMcpConfig = Nothing
                 }
         , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
         , cfgReview = Nothing
