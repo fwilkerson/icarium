@@ -110,16 +110,39 @@ buildReviewerStdin sysPrompt taskTitle taskBody diffText =
         , "```"
         ]
 
+{- | Anchors verdict parsing to the last fenced @```yaml@ block in the text.
+A @status:@ line found outside any fenced block, or in a bare @```@ block,
+is ignored; fail-closed if no valid yaml block/status is found.
+-}
 parseReviewVerdictFromText :: Text -> ReviewVerdict
 parseReviewVerdictFromText t =
     fromMaybe RVFail $ do
-        line <- find (T.isPrefixOf "status:") (T.lines t)
-        let val = T.strip (T.drop 7 line)
+        block <- lastYamlBlock (T.lines t)
+        line <- find (T.isPrefixOf "status:" . T.strip) block
+        let val = T.strip (T.drop 7 (T.strip line))
         case val of
             "pass" -> Just RVPass
             "warn" -> Just RVWarn
             "fail" -> Just RVFail
             _ -> Nothing
+
+-- | Extracts the lines of the last closed @```yaml@ fenced block, if any.
+lastYamlBlock :: [Text] -> Maybe [Text]
+lastYamlBlock = go Nothing Nothing
+  where
+    go :: Maybe (Bool, [Text]) -> Maybe [Text] -> [Text] -> Maybe [Text]
+    go Nothing lastBlock [] = lastBlock
+    go (Just _) lastBlock [] = lastBlock
+    go Nothing lastBlock (line : rest)
+        | "```" `T.isPrefixOf` T.strip line =
+            let fenceArg = T.toLower (T.strip (T.drop 3 (T.strip line)))
+             in go (Just (fenceArg == "yaml", [])) lastBlock rest
+        | otherwise = go Nothing lastBlock rest
+    go (Just (isYaml, acc)) lastBlock (line : rest)
+        | "```" `T.isPrefixOf` T.strip line =
+            let lastBlock' = if isYaml then Just (reverse acc) else lastBlock
+             in go Nothing lastBlock' rest
+        | otherwise = go (Just (isYaml, line : acc)) lastBlock rest
 
 runReviewer ::
     -- | directory the reviewer runs in (its Read tool sees branch state)

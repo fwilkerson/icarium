@@ -12,6 +12,7 @@ import NodeSpec qualified
 import PostClaudeSpec qualified
 import RenderSpec qualified
 import RepoSpec qualified
+import ReviewerSpec qualified
 import TickSpec qualified
 import TimeoutSpec qualified
 
@@ -31,5 +32,6 @@ main =
             , PostClaudeSpec.tests
             , RenderSpec.tests
             , RepoSpec.tests
+            , ReviewerSpec.tests
             , TimeoutSpec.tests
             ]
