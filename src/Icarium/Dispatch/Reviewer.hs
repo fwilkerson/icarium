@@ -97,10 +97,18 @@ loadReviewerPrompt (Just path) = do
         Left e -> pure (Left ("reviewer prompt_path unreadable: " <> path <> ": " <> T.pack (show e)))
         Right t -> pure (Right (Just t))
 
-buildReviewerStdin :: Text -> Text -> Text -> Text -> Text
-buildReviewerStdin sysPrompt taskTitle taskBody diffText =
+{- | @bodyReport@ is the body-change tamper report
+('Icarium.Dispatch.BodyDiff.renderBodyReport'); it precedes the task
+body so the reviewer reads the provenance of the text before the text.
+-}
+buildReviewerStdin :: Text -> Text -> Text -> Text -> Text -> Text
+buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText =
     T.unlines
         [ sysPrompt
+        , ""
+        , "# Task body change report"
+        , ""
+        , bodyReport
         , ""
         , "# Task: " <> taskTitle
         , ""
@@ -154,6 +162,8 @@ runReviewer ::
     Text ->
     -- | system prompt override (Nothing = use default)
     Maybe Text ->
+    -- | body-change tamper report
+    Text ->
     -- | task title
     Text ->
     -- | task body
@@ -165,9 +175,9 @@ runReviewer ::
     -- | wall-clock limit in minutes
     Int ->
     IO ReviewResult
-runReviewer workDir model mSysPrompt taskTitle taskBody diffText reviewerLogPath maxMinutes = do
+runReviewer workDir model mSysPrompt bodyReport taskTitle taskBody diffText reviewerLogPath maxMinutes = do
     let sysPrompt = fromMaybe defaultReviewerPrompt mSysPrompt
-        stdinText = buildReviewerStdin sysPrompt taskTitle taskBody diffText
+        stdinText = buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText
         stdinBytes = BL.fromStrict (TE.encodeUtf8 stdinText)
         args =
             [ "-p"

@@ -173,7 +173,9 @@ CREATE TABLE dispatches (
     review_verdict    TEXT
                       CHECK (review_verdict IS NULL OR review_verdict IN ('pass','warn','fail')),
     reviewer_log_path TEXT,
-    merged_at         TEXT                             -- set when merge_sha is stamped
+    merged_at         TEXT,                            -- set when merge_sha is stamped
+    body_changed      INTEGER                          -- reviewer tamper signal; NULL = no review ran
+                      CHECK (body_changed IS NULL OR body_changed IN (0, 1))
 );
 
 CREATE INDEX dispatches_task_idx      ON dispatches(task_id);

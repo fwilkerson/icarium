@@ -30,6 +30,7 @@ library
                       Icarium.Dispatch
                       Icarium.Dispatch.Internal
                       Icarium.Dispatch.Agreement
+                      Icarium.Dispatch.BodyDiff
                       Icarium.Dispatch.Claude
                       Icarium.Dispatch.LogResult
                       Icarium.Dispatch.Merge
@@ -96,6 +97,7 @@ test-suite icarium-test
     main-is:          Main.hs
     ghc-options:      -threaded -with-rtsopts=-N
     other-modules:    BodiesSpec
+                      BodyDiffSpec
                       CliSpec
                       GitSpec
                       GuardSpec

@@ -23,6 +23,7 @@ import System.Process.Typed (runProcess, setWorkingDir, shell)
 
 import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), ReviewConfig (..))
+import Icarium.Dispatch.BodyDiff (bodyChanged, diffBody, renderBodyReport)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
 import Icarium.Dispatch.Reviewer (ReviewResult (..), runReviewer)
 import Icarium.Git qualified as Git
@@ -57,20 +58,23 @@ handlePostClaude dx cfg noCommit exit baseSha logPath = do
 The reviewer system prompt (already loaded, before the worker started —
 see 'Icarium.Dispatch.Reviewer.loadReviewerPrompt') is passed in rather than
 read here, so the reviewer never sees a prompt the worker had a chance to
-influence mid-run.
+influence mid-run. @baselineBody@ is the task body at FIRST attempt start —
+the tamper baseline for the body-change report (retries keep the original,
+so a failed attempt cannot launder its edits into a clean baseline).
 -}
 handlePostClaudeWithReview ::
     DispatchCtx ->
     Config ->
     Task ->
+    Text ->
     Maybe Text ->
     Bool ->
     ExitCode ->
     Text ->
     FilePath ->
     IO PostClaudeResult
-handlePostClaudeWithReview dx cfg task =
-    handlePostClaudeImpl dx cfg (Just task)
+handlePostClaudeWithReview dx cfg task baselineBody =
+    handlePostClaudeImpl dx cfg (Just (task, baselineBody))
 
 -- =============================================================
 -- Internal implementation
@@ -79,7 +83,7 @@ handlePostClaudeWithReview dx cfg task =
 handlePostClaudeImpl ::
     DispatchCtx ->
     Config ->
-    Maybe Task ->
+    Maybe (Task, Text) ->
     Maybe Text ->
     Bool ->
     ExitCode ->
@@ -142,7 +146,7 @@ handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
 runReviewThenPark ::
     DispatchCtx ->
     Config ->
-    Maybe Task ->
+    Maybe (Task, Text) ->
     Maybe Text ->
     (DispatchOutcome -> Maybe Text -> Text -> IO DispatchResult) ->
     FilePath ->
@@ -155,20 +159,24 @@ runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
         did = dxDid dx
         wt = dxWorkDir dx
         activeReview = do
-            task <- mTask
+            (task, baseline) <- mTask
             rc <- cfgReview cfg
-            if rcEnabled rc then Just (task, rc) else Nothing
+            if rcEnabled rc then Just (task, baseline, rc) else Nothing
     mReviewResult <- case activeReview of
         Nothing -> pure Nothing
-        Just (task0, rcfg) -> do
+        Just (task0, baselineBody, rcfg) -> do
             -- Mid-run body-file edits (e.g. a ## Proof section) must reach
-            -- the reviewer; task0 predates the worker run.
+            -- the reviewer; task0 predates the worker run. The section diff
+            -- against the first-attempt baseline is the tamper signal: the
+            -- body is worker-writable, so the reviewer must be told how the
+            -- text it judges against changed under it.
             task <- refreshTaskBody conn db task0
-            let reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
+            let bodyDiff = diffBody baselineBody (taskBody task)
+                reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
                 reviewerLogPath = takeDirectory logPath <> "/" <> T.unpack did <> "-reviewer.jsonl"
             diffText <- Git.diffPatch wt baseSha
-            rr <- runReviewer wt reviewModel mSysPrompt (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
-            RD.setReviewInfo conn did (rrVerdict rr) (rrLogPath rr)
+            rr <- runReviewer wt reviewModel mSysPrompt (renderBodyReport bodyDiff) (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
+            RD.setReviewInfo conn did (rrVerdict rr) (rrLogPath rr) (bodyChanged bodyDiff)
             hPutStrLn stderr ("[reviewer] verdict: " <> T.unpack (reviewVerdictText (rrVerdict rr)))
             pure (Just (task, rr))
     case mReviewResult of

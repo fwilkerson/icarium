@@ -167,10 +167,10 @@ renderCmdPreview model effort tools allowed mcpConfig =
 -- =============================================================
 
 doReal :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
-doReal conn req = doRealAttempt conn req 1 Nothing
+doReal conn req = doRealAttempt conn req 1 Nothing Nothing
 
-doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> IO (Either WorktreeError DispatchResult)
-doRealAttempt conn req attempt mFindings = do
+doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> Maybe Text -> IO (Either WorktreeError DispatchResult)
+doRealAttempt conn req attempt mFindings mBaseline = do
     let cfg = drConfig req
         dcfg = cfgDispatch cfg
         dbPath = drDbPath req
@@ -184,6 +184,11 @@ doRealAttempt conn req attempt mFindings = do
     -- previous attempt (the record in the request is a dispatch-start
     -- snapshot of the DB column).
     task <- refreshTaskBody conn dbPath (drTask req)
+    -- The reviewer's tamper baseline is the body at FIRST attempt start:
+    -- a retry diffs against the original contract, not its own attempt
+    -- start, else attempt 1's tampering becomes attempt 2's clean
+    -- baseline and the surviving dispatch reports "no".
+    let baselineBody = fromMaybe (taskBody task) mBaseline
     baseSha <- either (ioFail . show) pure =<< Git.revParse "." base
 
     -- Load the reviewer's system prompt and the working agreement before
@@ -259,7 +264,7 @@ doRealAttempt conn req attempt mFindings = do
                     pcResult <-
                         ( do
                             exit <- runClaudeStreaming ctx dcfg
-                            handlePostClaudeWithReview dx cfg task mSysPrompt (taskNoCommit task) exit baseSha logPath
+                            handlePostClaudeWithReview dx cfg task baselineBody mSysPrompt (taskNoCommit task) exit baseSha logPath
                         )
                             `onException` teardownWorktree "." dcfg wt
                     teardownWorktree "." dcfg wt
@@ -275,7 +280,7 @@ doRealAttempt conn req attempt mFindings = do
                             pure (Right dr)
                         PCRetry dr findings
                             | attempt < maxAttempts -> do
-                                next <- doRealAttempt conn req (attempt + 1) (Just findings)
+                                next <- doRealAttempt conn req (attempt + 1) (Just findings) (Just baselineBody)
                                 case next of
                                     Right dr' -> pure (Right dr')
                                     Left err -> do

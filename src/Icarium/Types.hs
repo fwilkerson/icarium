@@ -336,6 +336,7 @@ data Dispatch = Dispatch
     , dispatchReviewVerdict :: Maybe ReviewVerdict
     , dispatchReviewerLogPath :: Maybe Text
     , dispatchMergedAt :: Maybe Text
+    , dispatchBodyChanged :: Maybe Bool
     }
     deriving (Show)
 
@@ -343,6 +344,7 @@ instance FromRow Dispatch where
     fromRow =
         Dispatch
             <$> field
+            <*> field
             <*> field
             <*> field
             <*> field

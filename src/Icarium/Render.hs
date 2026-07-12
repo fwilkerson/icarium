@@ -386,6 +386,7 @@ renderDispatch d mt ks mRetryId =
         , field "ended_at" (fromMaybe "" (dispatchEndedAt d))
         , field "outcome" (maybe "open" dispatchOutcomeText (dispatchOutcome d))
         , field "review" (maybe "" reviewVerdictText (dispatchReviewVerdict d))
+        , field "body_changed" (maybe "" (\b -> if b then "yes" else "no") (dispatchBodyChanged d))
         , field "merged" mergedField
         , field "merge_sha" (fromMaybe "" (dispatchMergeSha d))
         , field "last_commit" (fromMaybe "" (dispatchLastCommit d))

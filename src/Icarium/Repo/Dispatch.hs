@@ -42,7 +42,7 @@ dispatchCols =
     "id, task_id, branch, base_branch, base_sha, pid, model, effort, \
     \started_at, heartbeat_at, ended_at, outcome, merge_sha, last_commit, \
     \notes, log_path, tokens_in, tokens_out, tokens_cache_read, \
-    \review_verdict, reviewer_log_path, merged_at"
+    \review_verdict, reviewer_log_path, merged_at, body_changed"
 
 {- | Insert a dispatch. The caller supplies the id so that the branch
 name and log path (which both embed the id) can be computed before
@@ -171,16 +171,19 @@ updateNotes conn did notes =
         (Query "UPDATE dispatches SET notes = ? WHERE id = ?")
         (notes, did)
 
-setReviewInfo :: Connection -> Text -> ReviewVerdict -> FilePath -> IO ()
-setReviewInfo conn did verdict reviewerLogPath =
+{- | The Bool is the body-changed tamper signal; stored alongside the
+verdict so one can never be stamped without the other.
+-}
+setReviewInfo :: Connection -> Text -> ReviewVerdict -> FilePath -> Bool -> IO ()
+setReviewInfo conn did verdict reviewerLogPath bodyChanged =
     execute
         conn
         ( Query
             "UPDATE dispatches \
-            \SET review_verdict = ?, reviewer_log_path = ? \
+            \SET review_verdict = ?, reviewer_log_path = ?, body_changed = ? \
             \WHERE id = ?"
         )
-        (verdict, pack reviewerLogPath, did)
+        (verdict, pack reviewerLogPath, bodyChanged, did)
 
 -- | Stamp a dispatch as landed: merge sha plus the current timestamp.
 setMerged :: Connection -> Text -> Text -> IO ()

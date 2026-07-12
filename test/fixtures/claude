@@ -10,10 +10,10 @@ set -u
 mode="${STUB_CLAUDE_MODE:-commit}"
 tid="${ICARIUM_TASK_ID:-unknown}"
 
-# The reviewer invocation carries no ICARIUM_TASK_ID; in proof mode it
-# records the prompt it was given (next to the main repo, so it survives
-# worktree teardown). All other invocations discard the prompt.
-if [ "$mode" = proof ] && [ -z "${ICARIUM_TASK_ID:-}" ]; then
+# The reviewer invocation carries no ICARIUM_TASK_ID; in proof and tamper
+# modes it records the prompt it was given (next to the main repo, so it
+# survives worktree teardown). All other invocations discard the prompt.
+if { [ "$mode" = proof ] || [ "$mode" = tamper ] || [ "$mode" = launder ]; } && [ -z "${ICARIUM_TASK_ID:-}" ]; then
     common="$(git rev-parse --path-format=absolute --git-common-dir)"
     cat > "$common/../stub-reviewer-prompt.txt"
 else
@@ -61,6 +61,50 @@ case "$mode" in
             # printf %s: sh's echo would expand the \n inside the JSON.
             init
             printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
+        fi
+        exit 0
+        ;;
+    tamper)
+        if [ -n "${ICARIUM_TASK_ID:-}" ]; then
+            # Worker: rewrite an existing body line (contract tampering, not
+            # an appended Proof section), then commit work so gates pass.
+            init
+            body="$(dirname "$ICARIUM_DB")/bodies/tasks/$tid.md"
+            sed 's/prove it/tampered xtamper1/' "$body" > "$body.tmp" && mv "$body.tmp" "$body"
+            commit_work
+            result
+        else
+            # Reviewer: prompt captured above; verdict pass.
+            init
+            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
+        fi
+        exit 0
+        ;;
+    launder)
+        # Retry-laundering regression: attempt 1 tampers and its reviewer
+        # fails the attempt; attempt 2 changes nothing and its reviewer
+        # passes. The prompt capture above overwrites per review, so the
+        # recorded prompt is attempt 2's -- which must still report the
+        # inherited tamper against the FIRST-attempt baseline.
+        common="$(git rev-parse --path-format=absolute --git-common-dir)"
+        count="$common/../stub-launder-count"
+        if [ -n "${ICARIUM_TASK_ID:-}" ]; then
+            init
+            if [ ! -f "$count" ]; then
+                body="$(dirname "$ICARIUM_DB")/bodies/tasks/$tid.md"
+                sed 's/prove it/tampered xlaunder1/' "$body" > "$body.tmp" && mv "$body.tmp" "$body"
+                echo 1 > "$count"
+            fi
+            commit_work
+            result
+        else
+            init
+            if [ "$(cat "$count" 2>/dev/null)" = 1 ]; then
+                echo 2 > "$count"
+                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: fail\nfindings: []\n```","num_turns":1}'
+            else
+                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
+            fi
         fi
         exit 0
         ;;

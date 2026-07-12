@@ -3,6 +3,7 @@ module Main (main) where
 import Test.Tasty (defaultMain, testGroup)
 
 import BodiesSpec qualified
+import BodyDiffSpec qualified
 import CliSpec qualified
 import GitSpec qualified
 import GuardSpec qualified
@@ -22,6 +23,7 @@ main =
         testGroup
             "icarium"
             [ BodiesSpec.tests
+            , BodyDiffSpec.tests
             , CliSpec.tests
             , GitSpec.tests
             , TickSpec.tests

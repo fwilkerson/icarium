@@ -178,6 +178,8 @@ tests =
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
         , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
+        , testCase "dispatch review: body tamper reported to reviewer, flag persisted" testReviewerBodyTamperReport
+        , testCase "dispatch review: retry diffs against first-attempt baseline (no laundering)" testReviewerRetryKeepsTamperBaseline
         , testCase "dispatch review: unreadable prompt_path fails closed before worker starts" testReviewerPromptUnreadableFailsClosed
         , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
         , testCase "dispatch stats: byte-for-byte summary, --since filters" testDispatchStats
@@ -1998,11 +2000,62 @@ testReviewerSeesBodyFileEdits = withDispatchRepo $ \dir db -> do
     code @?= ExitSuccess
     reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
     assertBool "reviewer prompt contains the mid-run body edit" ("xproof1" `isInfixOf` reviewerPrompt)
+    -- An appended ## Proof section is an exempt addition: the body-change
+    -- report must not flag it.
+    assertBool "proof-only addition reports no change" ("task body changed during run: no" `isInfixOf` reviewerPrompt)
     -- The reviewer-time refresh also wrote through to column + FTS. The
     -- sweep cannot explain this: the Done update bumped updated_at past
     -- the file's mtime.
     (_, sOut, _) <- runDispatch dir db Nothing ["search", "xproof1"]
     assertBool "mid-run edit searchable after dispatch" ("proof task" `isInfixOf` sOut)
+
+{- | The tamper signal: a worker that rewrites existing body text (rather
+than appending an exempt ## Proof section) produces a reviewer prompt whose
+body-change report says yes, quotes the old and new text, and the flag
+persists on the dispatch row for post-rotation audit.
+-}
+testReviewerBodyTamperReport :: IO ()
+testReviewerBodyTamperReport = withDispatchRepo $ \dir db -> do
+    writeFile (dir </> "icarium.toml") (stubToml <> unlines ["[review]", "enabled = true"])
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "tamper task", "--state", "ready", "--body", "criteria: prove it"]
+    let tid = head (words addOut)
+    (code, _, _) <- runDispatch dir db (Just "tamper") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
+    assertBool "report says yes" ("task body changed during run: yes" `isInfixOf` reviewerPrompt)
+    assertBool "old text quoted" ("> criteria: prove it" `isInfixOf` reviewerPrompt)
+    assertBool "new text quoted" ("> criteria: tampered xtamper1" `isInfixOf` reviewerPrompt)
+    did <- parkedId dir db
+    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
+    assertBool
+        "dispatch show records body_changed yes"
+        (any (\l -> words l == ["body_changed:", "yes"]) (lines showOut))
+
+{- | Retry laundering: attempt 1 tampers and is failed by its reviewer;
+attempt 2 changes nothing. The retry must diff against the FIRST-attempt
+baseline, so attempt 2's report (the captured one — the stub overwrites per
+review) still says yes and the surviving parked dispatch records the flag.
+-}
+testReviewerRetryKeepsTamperBaseline :: IO ()
+testReviewerRetryKeepsTamperBaseline = withDispatchRepo $ \dir db -> do
+    writeFile
+        (dir </> "icarium.toml")
+        (stubToml <> unlines ["[review]", "enabled = true", "max_attempts = 2"])
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "launder task", "--state", "ready", "--body", "criteria: prove it"]
+    let tid = head (words addOut)
+    (code, _, _) <- runDispatch dir db (Just "launder") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "attempt 1 recorded as failure" ("[failure]" `isInfixOf` listOut)
+    assertBool "attempt 2 parked as success" ("[parked]" `isInfixOf` listOut)
+    reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
+    assertBool "attempt-2 report still says yes" ("task body changed during run: yes" `isInfixOf` reviewerPrompt)
+    assertBool "inherited tamper quoted" ("> criteria: tampered xlaunder1" `isInfixOf` reviewerPrompt)
+    did <- parkedId dir db
+    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
+    assertBool
+        "parked dispatch records body_changed yes"
+        (any (\l -> words l == ["body_changed:", "yes"]) (lines showOut))
 
 -- Scenario: an unreadable [review] prompt_path must fail closed before the
 -- worker starts, not silently fall back to the built-in prompt.
