@@ -6,10 +6,19 @@
 # by STUB_CLAUDE_MODE (default: commit). We consume the prompt on stdin and
 # emit the init + result stream-json lines the orchestrator logs.
 set -u
-cat > /dev/null # consume the prompt
 
 mode="${STUB_CLAUDE_MODE:-commit}"
 tid="${ICARIUM_TASK_ID:-unknown}"
+
+# The reviewer invocation carries no ICARIUM_TASK_ID; in proof mode it
+# records the prompt it was given (next to the main repo, so it survives
+# worktree teardown). All other invocations discard the prompt.
+if [ "$mode" = proof ] && [ -z "${ICARIUM_TASK_ID:-}" ]; then
+    common="$(git rev-parse --path-format=absolute --git-common-dir)"
+    cat > "$common/../stub-reviewer-prompt.txt"
+else
+    cat > /dev/null # consume the prompt
+fi
 
 init()   { echo '{"type":"system","subtype":"init"}'; }
 result() { echo '{"type":"result","subtype":"success","is_error":false,"result":"stub done","num_turns":1}'; }
@@ -35,6 +44,22 @@ case "$mode" in
     nocommit)
         init
         result
+        exit 0
+        ;;
+    proof)
+        if [ -n "${ICARIUM_TASK_ID:-}" ]; then
+            # Worker: add a Proof section to the body FILE (the store agents
+            # actually edit), then commit work so gates pass.
+            init
+            printf '\n## Proof\ngate output xproof1\n' >> "$(dirname "$ICARIUM_DB")/bodies/tasks/$tid.md"
+            commit_work
+            result
+        else
+            # Reviewer: prompt already captured above; verdict pass.
+            # printf %s: sh's echo would expand the \n inside the JSON.
+            init
+            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"status: pass\nfindings: []","num_turns":1}'
+        fi
         exit 0
         ;;
     icarium)

@@ -1,4 +1,4 @@
-module Icarium.Bodies.Sweep (mtimeSweep) where
+module Icarium.Bodies.Sweep (mtimeSweep, refreshTaskBody) where
 
 import Control.Monad (forM_, unless, when)
 import Data.Maybe (fromMaybe)
@@ -24,7 +24,7 @@ import Icarium.Repo.Context qualified as Repo.Context
 import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Task qualified as Repo.Task
 import Icarium.Time (parseDbTime)
-import Icarium.Types (NodeKind (..))
+import Icarium.Types (NodeKind (..), Task (..))
 
 {- | Compare as integer Unix seconds: avoids sub-second mismatch between
 file mtimes (high precision) and SQLite datetime() (second precision).
@@ -47,6 +47,29 @@ mtimeSweep conn dbPath = do
     sweepKind conn bodDir ContextNode
     orphanScan conn bodDir tDir TaskNode
     orphanScan conn bodDir tDir ContextNode
+
+{- | Overlay the on-disk body file onto the task; when it differs from the
+column, write the column and FTS back. Content-compared, not mtime-gated,
+so a stale @updated_at@ (which blinds 'mtimeSweep') cannot hide an edit.
+Missing file -> task unchanged (column is the fallback).
+-}
+refreshTaskBody :: Connection -> FilePath -> Task -> IO Task
+refreshTaskBody conn dbPath task = do
+    let fp = taskBodyPath (bodiesDir dbPath) (taskId task)
+    exists <- doesFileExist fp
+    if not exists
+        then pure task
+        else do
+            fileBody <- TIO.readFile fp
+            if fileBody == taskBody task
+                then pure task
+                else do
+                    Repo.Task.setTaskBody conn (taskId task) fileBody
+                    -- Title from the DB: a mid-run title update must not be
+                    -- clobbered in FTS by the caller's stale record.
+                    title <- fromMaybe (taskTitle task) <$> Repo.Task.getTaskTitle conn (taskId task)
+                    Fts.indexEntry conn (taskId task) TaskNode title fileBody
+                    pure task{taskBody = fileBody}
 
 sweepKind :: Connection -> FilePath -> NodeKind -> IO ()
 sweepKind conn bodDir kind = do

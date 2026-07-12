@@ -20,6 +20,7 @@ import System.FilePath (takeDirectory)
 import System.IO (hPutStrLn, stderr)
 import System.Process.Typed (runProcess, setWorkingDir, shell)
 
+import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), ReviewConfig (..))
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
 import Icarium.Dispatch.Reviewer (ReviewResult (..), loadReviewerPrompt, runReviewer)
@@ -165,7 +166,10 @@ runReviewThenPark dx cfg mTask finish logPath maxMins baseSha = do
             if rcEnabled rc then Just (task, rc) else Nothing
     mReviewResult <- case activeReview of
         Nothing -> pure Nothing
-        Just (task, rcfg) -> do
+        Just (task0, rcfg) -> do
+            -- Mid-run body-file edits (e.g. a ## Proof section) must reach
+            -- the reviewer; task0 predates the worker run.
+            task <- refreshTaskBody conn db task0
             let reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
                 reviewerLogPath = takeDirectory logPath <> "/" <> T.unpack did <> "-reviewer.jsonl"
             mSysPrompt <- loadReviewerPrompt (rcPromptPath rcfg)

@@ -140,6 +140,7 @@ tests =
         , testCase "orphan sweep: stray .md file moved to trash on sync command" testOrphanRemoval
         , testCase "orphan sweep: read-only command leaves orphan body file intact" testReadOnlyCommandPreservesOrphan
         , testCase "reindex: rebuilds FTS from DB after body_fts wipe" testReindexRestoresFts
+        , testCase "dispatch dry-run: prompt reads body file even when sweep is blind" testDryRunPromptReadsBodyFile
         , testCase "link add ctx references ctx is accepted" testLinkAddCtxReferencesCtx
         , testCase "ctx children lists direct children by edge kind" testCtxChildren
         , testCase "ctx tree recurses and detects cycles" testCtxTree
@@ -168,6 +169,7 @@ tests =
         , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
+        , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
         ]
 
 testVersion :: IO ()
@@ -1013,6 +1015,29 @@ testReindexRestoresFts = withSystemTempDirectory "icarium-test" $ \dir -> do
     code @?= ExitSuccess
     assertBool "entry found after reindex" ("reindex test entry" `isInfixOf` out)
 
+{- | Regression for issue #8: the dispatch prompt must render the body FILE
+even when mtimeSweep is blind to it. A PAST mtime guarantees the sweep's
+(mtime > updated_at) check cannot fire, so only the dispatch-time refresh
+can explain the fresh content. The refresh also writes through to the
+column + FTS, hence the search assert.
+-}
+testDryRunPromptReadsBodyFile :: IO ()
+testDryRunPromptReadsBodyFile = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir </> "icarium.db"
+    writeFile (dir </> "icarium.toml") minimalIcariumToml
+    (_, addOut, _) <- runIcarium db ["task", "add", "stale-body task", "--state", "ready", "--body", "original xstale1"]
+    let tid = head (words addOut)
+        bodyPath = lines addOut !! 1
+    writeFile bodyPath "edited xstale2"
+    setModificationTime bodyPath (UTCTime (fromGregorian 2000 1 1) 0)
+    (code, out, _) <- runIcariumIn dir db ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "prompt shows body-file content" ("edited xstale2" `isInfixOf` out)
+    assertBool "stale column content absent from prompt" (not ("original xstale1" `isInfixOf` out))
+    (sCode, sOut, _) <- runIcarium db ["search", "xstale2"]
+    sCode @?= ExitSuccess
+    assertBool "refreshed body searchable via FTS" ("stale-body task" `isInfixOf` sOut)
+
 testDispatchQuarantine :: IO ()
 testDispatchQuarantine = withTempDb $ \db -> do
     -- A: will be blocked (simulating a failed dispatch)
@@ -1706,3 +1731,23 @@ testDispatchNoCommitSuccess = withDispatchRepo $ \dir db -> do
     assertBool "not in the parked list" ("(no dispatches)" `isInfixOf` parkedOut)
     brs <- dispatchBranches dir
     assertBool "empty no-commit branch deleted" (null brs)
+
+{- | Regression for issue #8 (the observed live failure): the stub worker
+appends a ## Proof section to the body FILE mid-run; the reviewer must be
+judged against that fresh body, not the dispatch-start snapshot. The stub's
+reviewer branch records the prompt it received next to the repo.
+-}
+testReviewerSeesBodyFileEdits :: IO ()
+testReviewerSeesBodyFileEdits = withDispatchRepo $ \dir db -> do
+    writeFile (dir </> "icarium.toml") (stubToml <> unlines ["[review]", "enabled = true"])
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "proof task", "--state", "ready", "--body", "criteria: prove it"]
+    let tid = head (words addOut)
+    (code, _, _) <- runDispatch dir db (Just "proof") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
+    assertBool "reviewer prompt contains the mid-run body edit" ("xproof1" `isInfixOf` reviewerPrompt)
+    -- The reviewer-time refresh also wrote through to column + FTS. The
+    -- sweep cannot explain this: the Done update bumped updated_at past
+    -- the file's mtime.
+    (_, sOut, _) <- runDispatch dir db Nothing ["search", "xproof1"]
+    assertBool "mid-run edit searchable after dispatch" ("proof task" `isInfixOf` sOut)

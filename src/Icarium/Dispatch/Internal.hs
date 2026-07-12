@@ -18,6 +18,7 @@ import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
+import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (
     Config (..),
     DispatchConfig (..),
@@ -98,7 +99,8 @@ dispatch conn req
 
 doDryRun :: Connection -> DispatchRequest -> IO DispatchResult
 doDryRun conn req = do
-    prompt <- buildPrompt conn (drTask req) Nothing
+    task <- refreshTaskBody conn (drDbPath req) (drTask req)
+    prompt <- buildPrompt conn task Nothing
     fakeId <- newId
     let dcfg = cfgDispatch (drConfig req)
         branch = dispatchBranchName fakeId
@@ -109,7 +111,7 @@ doDryRun conn req = do
 
     TIO.putStrLn "=== DRY RUN ==="
     TIO.putStrLn $ "dispatch id (simulated): " <> fakeId
-    TIO.putStrLn $ "task id:                 " <> taskId (drTask req)
+    TIO.putStrLn $ "task id:                 " <> taskId task
     TIO.putStrLn $ "base branch:             " <> roBase opts
     TIO.putStrLn $ "dispatch branch:         " <> branch
     TIO.putStrLn $ "worktree:                " <> T.pack (worktreePath fakeId)
@@ -159,7 +161,6 @@ doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> IO (Eithe
 doRealAttempt conn req attempt mFindings = do
     let cfg = drConfig req
         dcfg = cfgDispatch cfg
-        task = drTask req
         dbPath = drDbPath req
         opts = resolveDispatchOpts req
         base = roBase opts
@@ -167,6 +168,10 @@ doRealAttempt conn req attempt mFindings = do
         effort = roEffort opts
         maxAttempts = maybe 1 rcMaxAttempts (cfgReview cfg)
 
+    -- Re-read per attempt: retries must see body-file edits from the
+    -- previous attempt (the record in the request is a dispatch-start
+    -- snapshot of the DB column).
+    task <- refreshTaskBody conn dbPath (drTask req)
     baseSha <- either (ioFail . show) pure =<< Git.revParse "." base
 
     did <- newId

@@ -117,6 +117,9 @@ linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
 
 {- | The exact prompt the dispatcher will send to the headless agent.
 Sharing this with @task show --prompt@ keeps the two in lockstep.
+Callers must pass a Task whose body reflects the on-disk body file
+(dispatch: 'Icarium.Bodies.Sweep.refreshTaskBody'; @task show --prompt@:
+'Icarium.Bodies.readBody' overlay).
 @refs@ = explicit references (always rendered); @catMatched@ = auto-pulled
 by category (rendered under a separate hedged section, omitted if empty).
 -}
