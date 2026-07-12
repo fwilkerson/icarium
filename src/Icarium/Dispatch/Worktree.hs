@@ -2,10 +2,12 @@ module Icarium.Dispatch.Worktree (
     WorktreeError (..),
     worktreeErrorText,
     worktreePath,
+    mergeWorktreePath,
     setupExitError,
     createDispatchWorktree,
     rebuildWorktree,
     teardownWorktree,
+    removeQuietly,
 ) where
 
 import Control.Monad (void, when)
@@ -36,6 +38,10 @@ worktreeErrorText = \case
 -- | Where a dispatch's worktree lives, relative to the invoking checkout.
 worktreePath :: Text -> FilePath
 worktreePath did = ".icarium" </> "wt" </> T.unpack did
+
+-- | Where the throwaway worktree for landing a merge lives.
+mergeWorktreePath :: Text -> FilePath
+mergeWorktreePath did = ".icarium" </> "wt" </> ("merge-" <> T.unpack did)
 
 -- | Classify a worktree_setup exit code. 75 is the back-pressure contract.
 setupExitError :: Text -> Int -> WorktreeError
@@ -114,6 +120,7 @@ teardownWorktree repo dcfg wt = do
                             "icarium: worktree_teardown exited " <> show c <> " (continuing)"
     removeQuietly repo wt
 
+-- | Force-remove a worktree, clear any leftover directory, and prune.
 removeQuietly :: FilePath -> FilePath -> IO ()
 removeQuietly repo wt = do
     void (Git.worktreeRemove repo wt True)

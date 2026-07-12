@@ -1,7 +1,6 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
-import Control.Monad (forM, forM_, unless, void, when)
-import Control.Monad.Trans.Except (ExceptT (..), runExceptT)
+import Control.Monad (forM, forM_, mfilter, unless, void, when)
 import Data.Either (fromRight)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.List (nub)
@@ -27,21 +26,13 @@ import Icarium.Dispatch.LogResult (
 import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
-import Icarium.Config (
-    CommandsConfig (..),
-    Config,
-    DispatchConfig (..),
-    cfgCommands,
-    cfgDispatch,
-    defaultConfigPath,
-    loadConfig,
- )
+import Icarium.Config (Config, DispatchConfig (..), cfgDispatch)
 import Icarium.Db (parseDbTime, withDbReadOnly, withDbSync)
 import Icarium.Dispatch qualified as D
-import Icarium.Dispatch.PostClaude (checkpointDirtyTree, runGate)
+import Icarium.Dispatch.Merge (MergeOutcome (..), mergeParked)
+import Icarium.Dispatch.PostClaude (checkpointDirtyTree)
 import Icarium.Dispatch.Worktree (
     WorktreeError (..),
-    rebuildWorktree,
     teardownWorktree,
     worktreeErrorText,
     worktreePath,
@@ -129,10 +120,7 @@ runP =
 
 runRun :: FilePath -> RunOpts -> IO ()
 runRun db o = do
-    cfg <-
-        loadConfig defaultConfigPath >>= \case
-            Left e -> fatal 2 ("config parse error:\n" <> e)
-            Right c -> pure c
+    cfg <- requireConfig
     case rTaskId o of
         Just rawId ->
             withDbSync db $ \c -> do
@@ -265,7 +253,7 @@ printSummary r = do
                         , "cost:     " <> maybe "-" (T.pack . printf "$%.4f") (lrCostUsd lr)
                         , "tokens:   " <> fmtTokens (lrUsage lr)
                         ]
-                    case lrResultText lr >>= \t -> if T.null t then Nothing else Just t of
+                    case mfilter (not . T.null) (lrResultText lr) of
                         Nothing -> pure ()
                         Just t -> TIO.putStrLn $ "result:   " <> trimResult t
     case D.dresBaseSha r of
@@ -491,10 +479,7 @@ recoverP =
 
 runRecover :: FilePath -> RecoverOpts -> IO ()
 runRecover db o = do
-    cfg <-
-        loadConfig defaultConfigPath >>= \case
-            Left e -> fatal 2 ("config parse error:\n" <> e)
-            Right c -> pure c
+    cfg <- requireConfig
     let staleSec = dcHeartbeatStaleSeconds (cfgDispatch cfg)
     withDbReadOnly db $ \c -> do
         open <- case recDispatchId o of
@@ -528,9 +513,7 @@ reconcileDispatch c dcfg now staleSec d = do
             wtNotes <-
                 if wtExists
                     then do
-                        dirty <- fmap not (Git.isClean wt)
-                        when dirty $
-                            checkpointDirtyTree wt (dispatchId d) "interrupted"
+                        dirty <- checkpointDirtyTree wt (dispatchId d) "interrupted"
                         teardownWorktree "." dcfg wt
                         pure ["uncommitted=" <> boolText dirty, "worktree=removed"]
                     else pure []
@@ -567,116 +550,92 @@ boolText True = "yes"
 boolText False = "no"
 
 -- =============================================================
--- merge  (land a parked dispatch on its base)
+-- merge  (land parked dispatches on their base)
 -- =============================================================
 
-newtype MergeOpts = MergeOpts {mId :: Text}
+data MergeOpts = MergeOpts
+    { mId :: Maybe Text
+    , mAll :: Bool
+    }
 
 mergeP :: Parser MergeOpts
 mergeP =
-    MergeOpts . T.pack
-        <$> strArgument (metavar "DISPATCH_ID")
+    MergeOpts
+        <$> optional (T.pack <$> strArgument (metavar "DISPATCH_ID"))
+        <*> switch (long "all" <> help "Land every parked dispatch, oldest first")
 
-{- | Merge-queue semantics: fast-forward when the base hasn't moved since
-the park; otherwise rebase the branch in a rebuilt worktree, re-run the
-gates against the post-rebase state, then fast-forward. A conflict or
-gate failure leaves the dispatch parked with updated notes.
--}
 runMerge :: FilePath -> MergeOpts -> IO ()
-runMerge db o = do
-    cfg <-
-        loadConfig defaultConfigPath >>= \case
-            Left e -> fatal 2 ("config parse error:\n" <> e)
-            Right c -> pure c
-    withDbSync db $ \c -> do
-        did <- resolveOrFatal (RD.resolveDispatchId c (mId o))
-        md <- RD.getDispatch c did
-        d <- maybe (fatal 1 ("dispatch not found: " <> T.unpack did)) pure md
-        case dispatchOutcome d of
-            Just OSuccess -> pure ()
-            other ->
-                fatal 1 $
-                    "not a successful dispatch (outcome: "
-                        <> maybe "open" (T.unpack . dispatchOutcomeText) other
-                        <> ")"
-        forM_ (dispatchMergeSha d) $ \sha ->
-            fatal 1 ("already merged: " <> T.unpack sha)
-        let branch = dispatchBranch d
-            base = dispatchBaseBranch d
-        Git.revParse "." branch >>= \case
-            Left _ -> fatal 1 ("branch missing (deleted manually?): " <> T.unpack branch)
-            Right _ -> pure ()
-        ffPossible <- Git.mergeBaseIsAncestor "." base branch
-        unless ffPossible $ rebaseThenGate cfg c did branch base
-        landFF did base branch
-        newSha <- either (fatal 1 . show) pure =<< Git.revParse "." base
-        RD.setMerged c did newSha
-        -- `branch -d` checks merged-ness against HEAD, which may be an
-        -- unrelated checkout; the sha equality proves the branch landed.
-        branchSha <- fromRight "" <$> Git.revParse "." branch
-        when (branchSha == newSha) $ void (Git.deleteBranchForce "." branch)
-        TIO.putStrLn $
-            "merged " <> T.take 10 did <> ": " <> base <> " -> " <> T.take 10 newSha
+runMerge db o = case (mId o, mAll o) of
+    (Just _, True) -> fatal 2 "--all and DISPATCH_ID are mutually exclusive"
+    (Nothing, False) -> fatal 2 "provide a DISPATCH_ID or --all"
+    (Just raw, False) -> withMergeCtx (\cfg c -> mergeOne cfg c raw)
+    (Nothing, True) -> withMergeCtx mergeAll
+  where
+    withMergeCtx k = do
+        cfg <- requireConfig
+        withDbSync db (k cfg)
 
-{- | Rebase the parked branch onto the current base tip and re-run the
-gates there. On success the branch fast-forwards from base. Note the
-rebase rewrites the parked branch even when the gates then fail — the
-pre-rebase commits stay reachable via the reflog, and retrying the merge
-after a fix is a plain FF.
+-- | Land a single parked dispatch; any blocked outcome is fatal.
+mergeOne :: Config -> Connection -> Text -> IO ()
+mergeOne cfg c raw = do
+    did <- resolveOrFatal (RD.resolveDispatchId c raw)
+    md <- RD.getDispatch c did
+    d <- maybe (fatal 1 ("dispatch not found: " <> T.unpack did)) pure md
+    case dispatchOutcome d of
+        Just OSuccess -> pure ()
+        other ->
+            fatal 1 $
+                "not a successful dispatch (outcome: "
+                    <> maybe "open" (T.unpack . dispatchOutcomeText) other
+                    <> ")"
+    forM_ (dispatchMergeSha d) $ \sha ->
+        fatal 1 ("already merged: " <> T.unpack sha)
+    mergeParked cfg c d >>= \case
+        MergeLanded sha -> TIO.putStrLn (landedLine d sha)
+        MergeBlocked code note -> fatal code (T.unpack note)
+        MergeStopped note -> fatal 3 (T.unpack note)
+
+{- | Land every parked dispatch oldest-first. A blocked dispatch stays
+parked (its notes were updated by the merge path) and the run continues;
+worktree back-pressure stops it, leaving the rest untouched. Exits 3
+when anything failed to land.
 -}
-rebaseThenGate :: Config -> Connection -> Text -> Text -> Text -> IO ()
-rebaseThenGate cfg conn did branch base = do
-    let dcfg = cfgDispatch cfg
-    hPutStrLn stderr ("icarium: base moved since park; rebasing " <> T.unpack branch)
-    wt <-
-        rebuildWorktree "." dcfg did branch
-            >>= either (fatal 3 . T.unpack . worktreeErrorText) pure
-    Git.rebase wt base >>= \case
-        Left _ -> do
-            Git.rebaseAbort wt
-            teardownWorktree "." dcfg wt
-            RD.updateNotes conn did ("merge conflict; needs manual rebase onto " <> base)
-            fatal 3 ("rebase onto " <> T.unpack base <> " failed; dispatch stays parked")
-        Right () -> do
-            cc <- maybe (fatal 2 "no [commands] section configured") pure (cfgCommands cfg)
-            gateResult <- runExceptT $ do
-                ExceptT (runGate wt (ccBuild cc))
-                ExceptT (runGate wt (ccTest cc))
-            case gateResult of
-                Left note -> do
-                    teardownWorktree "." dcfg wt
-                    RD.updateNotes conn did ("gates failed after rebase: " <> note)
-                    fatal 3 ("gates failed after rebase; dispatch stays parked: " <> T.unpack note)
-                Right () -> teardownWorktree "." dcfg wt
+mergeAll :: Config -> Connection -> IO ()
+mergeAll cfg c = do
+    parked <- RD.listParkedDispatches c
+    if null parked
+        then TIO.putStrLn "no parked dispatches"
+        else do
+            outcomes <- landInOrder parked
+            let landed = length [() | MergeLanded _ <- outcomes]
+                blocked = length [() | MergeBlocked _ _ <- outcomes]
+                unattempted = length parked - length outcomes
+            TIO.putStrLn $
+                T.intercalate "; " $
+                    [tshow landed <> " of " <> tshow (length parked) <> " landed"]
+                        <> [tshow blocked <> " still parked" | blocked > 0]
+                        <> [tshow unattempted <> " not attempted" | unattempted > 0]
+            when (landed < length parked) $
+                fatal 3 "not all parked dispatches landed"
+  where
+    landInOrder [] = pure []
+    landInOrder (d : ds) = do
+        out <- mergeParked cfg c d
+        TIO.putStrLn (outcomeLine d out)
+        case out of
+            MergeStopped _ -> pure [out]
+            _ -> (out :) <$> landInOrder ds
+    outcomeLine d = \case
+        MergeLanded sha -> landedLine d sha
+        MergeBlocked _ note -> "blocked " <> T.take 10 (dispatchId d) <> ": " <> note
+        MergeStopped note -> "stopped " <> T.take 10 (dispatchId d) <> ": " <> note
+    tshow = T.pack . show
 
--- | Fast-forward base to the dispatch branch, wherever base lives.
-landFF :: Text -> Text -> Text -> IO ()
-landFF did base branch = do
-    mWhere <- Git.branchCheckedOutAt "." base
-    here <- either (const Nothing) (Just . T.unpack) <$> Git.topLevel "."
-    case mWhere of
-        -- Base checked out nowhere: FF its ref via a throwaway worktree.
-        Nothing -> do
-            let path = ".icarium/wt/merge-" <> T.unpack did
-            void (Git.worktreeRemove "." path True)
-            Git.worktreePrune "."
-            Git.worktreeAddExisting "." path base
-                >>= either (fatal 1 . ("cannot create merge worktree: " <>) . show) pure
-            r <- Git.ffMerge path branch
-            void (Git.worktreeRemove "." path True)
-            Git.worktreePrune "."
-            either (fatal 1 . ("ff-merge failed: " <>) . show) pure r
-        Just wtPath
-            | Just wtPath == here -> do
-                clean <- Git.isClean "."
-                unless clean $
-                    fatal 1 "base is checked out here with a dirty tree; commit or stash first"
-                Git.ffMerge "." branch
-                    >>= either (fatal 1 . ("ff-merge failed: " <>) . show) pure
-            | otherwise ->
-                fatal 1 $
-                    "base branch "
-                        <> T.unpack base
-                        <> " is checked out at "
-                        <> wtPath
-                        <> "; merge there or free it first"
+landedLine :: Dispatch -> Text -> Text
+landedLine d sha =
+    "merged "
+        <> T.take 10 (dispatchId d)
+        <> ": "
+        <> dispatchBaseBranch d
+        <> " -> "
+        <> T.take 10 sha

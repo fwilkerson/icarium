@@ -2,6 +2,7 @@ module Icarium.Commands.Util (
     -- * Errors
     fatal,
     resolveOrFatal,
+    requireConfig,
 
     -- * Shared option readers
     taskStateReader,
@@ -42,6 +43,7 @@ import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 
+import Icarium.Config (Config, defaultConfigPath, loadConfig)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Task qualified as RT
@@ -58,6 +60,12 @@ return the Right value.
 -}
 resolveOrFatal :: IO (Either String a) -> IO a
 resolveOrFatal m = m >>= either (fatal 1) pure
+
+-- | Load icarium.toml, or exit 2 with the parse error.
+requireConfig :: IO Config
+requireConfig =
+    loadConfig defaultConfigPath
+        >>= either (fatal 2 . ("config parse error:\n" <>)) pure
 
 taskStateReader :: ReadM TaskState
 taskStateReader = eitherReader $ \s ->

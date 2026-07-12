@@ -6,11 +6,12 @@ module Icarium.Dispatch.PostClaude (
     checkpointDirtyTree,
     postClaudeGuard,
     runGate,
+    runGates,
 ) where
 
 import Control.Monad (forM_, unless, void)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (runExceptT, throwE)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -125,14 +126,12 @@ handlePostClaudeImpl dx cfg mTask noCommit exit baseSha logPath = do
                 liftIO $ case mBranchSha of
                     Right sha -> RD.setLastCommit conn did sha
                     Left _ -> pure ()
-                cc <- maybe (throwE "no [commands] section configured") pure (cfgCommands cfg)
-                liftIO (runGate wt (ccBuild cc)) >>= either throwE pure
-                liftIO (runGate wt (ccTest cc)) >>= either throwE pure
+                liftIO (runGates wt cfg) >>= either throwE pure
                 pure (Just ())
 
     runExceptT preStep >>= \case
         Left notes -> do
-            checkpointDirtyTree wt did notes
+            void (checkpointDirtyTree wt did notes)
             PCDone <$> finish OFailure Nothing notes
         Right Nothing -> do
             -- Nothing to land: stamp merged so the dispatch never shows as
@@ -213,15 +212,19 @@ writeWarnContextEntry conn db task cats findings = do
 
 {- | If the given worktree is dirty, commit everything to its current branch
 with a wip message. Preserves in-flight work on the dispatch branch so a
-human can inspect it after a failure.
+human can inspect it after a failure. Returns whether the tree was dirty
+(and therefore checkpointed).
 -}
-checkpointDirtyTree :: FilePath -> Text -> Text -> IO ()
+checkpointDirtyTree :: FilePath -> Text -> Text -> IO Bool
 checkpointDirtyTree wt did note = do
     porcelain <- Git.statusPorcelain wt
-    unless (T.null (T.strip porcelain)) $ do
-        let shortNote = T.take 60 (T.takeWhile (/= '\n') note)
-            msg = "wip: dispatch " <> did <> " (failed: " <> shortNote <> ")"
-        void $ Git.commitAll wt msg
+    if T.null (T.strip porcelain)
+        then pure False
+        else do
+            let shortNote = T.take 60 (T.takeWhile (/= '\n') note)
+                msg = "wip: dispatch " <> did <> " (failed: " <> shortNote <> ")"
+            void $ Git.commitAll wt msg
+            pure True
 
 {- | Pure guard logic for the post-claude checks. Returns Just an error
 message if a guard fires, Nothing if both pass.
@@ -241,6 +244,17 @@ postClaudeGuard porcelain mBranchSha baseSha
     dirtyMsg =
         "agent left uncommitted changes; refusing to accept\nuncommitted:\n"
             <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
+
+{- | Run the configured build and test gates in order, stopping at the
+first failure. This owns the gate contract — which commands run, in what
+order, and the missing-config message — for both the post-claude check
+and the merge rebase path.
+-}
+runGates :: FilePath -> Config -> IO (Either Text ())
+runGates dir cfg = runExceptT $ do
+    cc <- maybe (throwE "no [commands] section configured") pure (cfgCommands cfg)
+    ExceptT (runGate dir (ccBuild cc))
+    ExceptT (runGate dir (ccTest cc))
 
 {- | Run a shell command (as a single string, so users can include
 pipes and &&) inside the given directory. Returns () on exit 0;

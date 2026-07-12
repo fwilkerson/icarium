@@ -161,6 +161,9 @@ tests =
         , testCase "dispatch merge: dirty base checkout is fatal" testMergeDirtyBaseFatal
         , testCase "dispatch merge: base moved rebases and re-runs gates" testMergeRebaseRegate
         , testCase "dispatch merge: rebase conflict stays parked, exit 3" testMergeConflictParked
+        , testCase "dispatch merge --all: lands clean branches, conflict stays parked, exit 3" testMergeAllPartial
+        , testCase "dispatch merge --all: nothing parked is a friendly no-op" testMergeAllEmpty
+        , testCase "dispatch merge: --all and DISPATCH_ID are mutually exclusive" testMergeArgValidation
         , testCase "dispatch: claude failure blocks task, retains branch, removes worktree" testDispatchFailBlocks
         , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
         , testCase "dispatch: worktree_setup exit 75 stops drain cleanly" testWorktreeSetup75
@@ -1578,6 +1581,53 @@ testMergeConflictParked = withDispatchRepo $ \dir db -> do
     assertBool "dispatch still parked" (not (null park))
     wc <- worktreeCount dir
     wc @?= 1
+
+-- Scenario 5c: merge --all drains the parked queue oldest-first. Landing the
+-- first moves base, so the rest go through rebase + re-gate; a conflicting
+-- one stays parked with a note while later ones still land; exit 3.
+testMergeAllPartial :: IO ()
+testMergeAllPartial = withDispatchRepo $ \dir db -> do
+    tid1 <- addReadyTask dir db "all task one"
+    tid2 <- addReadyTask dir db "all task two"
+    tid3 <- addReadyTask dir db "all task three"
+    (code0, _, _) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
+    code0 @?= ExitSuccess
+    -- conflict with the third parked branch's file on main
+    writeFile (dir </> ("stub-" <> tid3 <> ".txt")) "conflicting content\n"
+    _ <- gitOut dir ["add", "-A"]
+    _ <- gitOut dir ["commit", "-m", "founder: conflicts with third parked branch"]
+
+    (code, out, err) <- runDispatch dir db Nothing ["dispatch", "merge", "--all"]
+    code @?= ExitFailure 3
+    length (filter ("merged " `isPrefixOf`) (lines out)) @?= 2
+    assertBool "rebase path exercised" ("rebasing" `isInfixOf` err)
+    assertBool "blocked line names the conflict" ("blocked" `isInfixOf` out)
+    assertBool "summary counts the outcomes" ("2 of 3 landed; 1 still parked" `isInfixOf` out)
+
+    (_, parkedOut, _) <- runDispatch dir db Nothing ["dispatch", "list", "--parked"]
+    length (filter (not . null) (lines parkedOut)) @?= 1
+    brs <- dispatchBranches dir
+    length brs @?= 1
+    wc <- worktreeCount dir
+    wc @?= 1
+    one <- doesFileExist (dir </> ("stub-" <> tid1 <> ".txt"))
+    two <- doesFileExist (dir </> ("stub-" <> tid2 <> ".txt"))
+    assertBool "both landed branches' files reached main" (one && two)
+
+testMergeAllEmpty :: IO ()
+testMergeAllEmpty = withDispatchRepo $ \dir db -> do
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "merge", "--all"]
+    code @?= ExitSuccess
+    assertBool "friendly no-op message" ("no parked dispatches" `isInfixOf` out)
+
+testMergeArgValidation :: IO ()
+testMergeArgValidation = withDispatchRepo $ \dir db -> do
+    (code1, _, err1) <- runDispatch dir db Nothing ["dispatch", "merge", "--all", "deadbeef"]
+    code1 @?= ExitFailure 2
+    assertBool "mutual exclusion reported" ("mutually exclusive" `isInfixOf` err1)
+    (code2, _, err2) <- runDispatch dir db Nothing ["dispatch", "merge"]
+    code2 @?= ExitFailure 2
+    assertBool "asks for an id or --all" ("DISPATCH_ID or --all" `isInfixOf` err2)
 
 -- Scenario 6a: claude exits nonzero -> failure, task blocked, branch retained,
 -- worktree removed, invoking checkout pristine.

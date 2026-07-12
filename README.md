@@ -4,7 +4,7 @@ icarium gives you three things in one local CLI:
 
 - **Tasks** — a small backlog with states, priorities, and dependencies.
 - **Knowledge** — context entries (domain notes) you attach to tasks; the dispatcher pulls relevant ones into the agent's prompt.
-- **Dispatch** — runs a headless Claude agent against a ready task in its own git worktree; if `build`/`test` (and an optional reviewer) pass, the branch is parked, and `dispatch merge` lands it on the integration branch.
+- **Dispatch** — runs a headless Claude agent against a ready task in its own git worktree; if `build`/`test` (and an optional reviewer) pass, the branch is parked, and `dispatch merge` (or `dispatch merge --all`) lands it on the integration branch.
 
 Storage is a local SQLite DB. It's a tool for one developer, or a small team.
 
@@ -164,8 +164,16 @@ the retained branch, and the worktree is removed.
 
 On a successful land the merge sha is recorded and the branch deleted.
 
+**`dispatch merge --all`** lands every parked dispatch oldest-first with the same per-dispatch
+semantics — after a drain, one command lands the lot. A dispatch that conflicts (or fails its
+re-run gates) stays parked with a note while the rest continue; the exit code is non-zero if
+anything failed to land. Because dependents only become ready once their dependency's branch is
+*merged*, the drain-then-land loop for dependent chains is: `dispatch run` → `dispatch merge --all`
+→ repeat.
+
 `dispatch run` (no task ID) drains the ready queue in priority order. "Ready" is stricter than
-`state='ready'`: the `ready_tasks` view also requires every `depends_on` upstream to be `done`.
+`state='ready'`: the `ready_tasks` view also requires every `depends_on` upstream to be `done`
+**and merged** — a parked (successful but unlanded) dependency still blocks its dependents.
 In-progress or blocked upstreams are not satisfied. If `worktree_setup` exits 75 (no capacity) the
 drain stops cleanly, leaving the task untouched; any other setup failure stops with an error.
 
