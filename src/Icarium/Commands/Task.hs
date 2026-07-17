@@ -1,7 +1,9 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
+import Control.Exception (SomeException, catch)
 import Control.Monad (forM_, unless, void, when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
+import Data.Char (isSpace)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -9,8 +11,11 @@ import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
+import System.Posix.Unistd (getSystemID, nodeName)
+import System.Posix.User (getEffectiveUserName)
 
 import Icarium.Bodies (bodiesDir, readBody, taskBodyPath)
 import Icarium.Commands.Util
@@ -31,6 +36,7 @@ data Command
     | Update UpdateOpts
     | Rm RmOpts
     | Next NextOpts
+    | Claim ClaimOpts
     | Path PathOpts
     | Cat CatOpts
     | Exists ExistsOpts
@@ -46,6 +52,7 @@ parser =
             <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP Done)
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
             <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
+            <> subcmd "claim" "Atomically take the next ready task: marks it in-progress, stamps an owner, prints its id; exit 1 if empty. Use instead of `next` + `start` when several agents share the queue." (Claim <$> claimP)
             <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
             <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
             <> subcmd "exists" "Check whether a task id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
@@ -59,6 +66,7 @@ run db = \case
     Update o -> runUpdate db o
     Rm o -> runRm db o
     Next o -> runNext db o
+    Claim o -> runClaim db o
     Path o -> runPath db o
     Cat o -> runCat db o
     Exists o -> runExists db o
@@ -390,6 +398,46 @@ runNext db _ = withDb db $ \c -> do
     case ts of
         [] -> exitWith (ExitFailure 1)
         (t : _) -> TIO.putStrLn (taskId t)
+
+-- =============================================================
+-- claim
+-- =============================================================
+
+newtype ClaimOpts = ClaimOpts {clOwner :: Maybe Text}
+
+claimP :: Parser ClaimOpts
+claimP =
+    ClaimOpts
+        <$> optional
+            ( textOption
+                "owner"
+                "NAME"
+                "Record NAME as the claim owner (default: $ICARIUM_OWNER, else <user>@<host>)"
+            )
+
+runClaim :: FilePath -> ClaimOpts -> IO ()
+runClaim db o = do
+    when (maybe False (T.all isSpace) (clOwner o)) $
+        fatal 2 "--owner must not be empty"
+    withDb db $ \c -> do
+        owner <- maybe defaultOwner pure (clOwner o)
+        mtid <- RT.claimNextTask c owner
+        case mtid of
+            Nothing -> exitWith (ExitFailure 1)
+            Just tid -> TIO.putStrLn tid
+
+{- | Who a claim is stamped for when @--owner@ is absent. ICARIUM_OWNER lets
+a supervisor name its agents; the user\@host fallback at least distinguishes
+machines.
+-}
+defaultOwner :: IO Text
+defaultOwner =
+    lookupEnv "ICARIUM_OWNER" >>= \case
+        Just s | not (all isSpace s) -> pure (T.strip (T.pack s))
+        _ -> do
+            user <- getEffectiveUserName `catch` \(_ :: SomeException) -> pure "unknown"
+            host <- nodeName <$> getSystemID
+            pure (T.pack (user <> "@" <> host))
 
 -- =============================================================
 -- path

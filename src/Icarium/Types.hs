@@ -199,6 +199,8 @@ data Task = Task
     , taskCreatedAt :: Text
     , taskUpdatedAt :: Text
     , taskNoCommit :: Bool
+    , taskClaimedBy :: Maybe Text
+    , taskClaimedAt :: Maybe Text
     }
     deriving (Show)
 
@@ -206,6 +208,8 @@ instance FromRow Task where
     fromRow =
         Task
             <$> field
+            <*> field
+            <*> field
             <*> field
             <*> field
             <*> field

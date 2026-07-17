@@ -92,6 +92,11 @@ tests =
         , testCase "dispatch list --limit caps rows" testDispatchListLimit
         , testCase "task next exits 1 on empty queue" testTaskNextEmpty
         , testCase "task next prints id on non-empty" testTaskNextNonEmpty
+        , testCase "task claim exits 1 on empty queue" testTaskClaimEmpty
+        , testCase "task claim takes each task at most once" testTaskClaimDistinct
+        , testCase "task claim records owner, shown by task show" testTaskClaimOwner
+        , testCase "task claim --owner empty exits 2, claims nothing" testTaskClaimEmptyOwner
+        , testCase "task done clears the claim" testTaskClaimClearedOnDone
         , testCase "task add --depends-on bad id exits 2" testTaskAddBadDependsOn
         , testCase "task add --state blocked exits 2" testTaskAddStateBlocked
         , testCase "dispatch run drains empty queue without --max" testDispatchRunEmptyQueue
@@ -334,6 +339,77 @@ testTaskNextNonEmpty = withTempDb $ \db -> do
     (code, nextOut, _) <- runIcarium db ["task", "next"]
     code @?= ExitSuccess
     assertBool "next output is the task id" (tid `isInfixOf` nextOut)
+
+testTaskClaimEmpty :: IO ()
+testTaskClaimEmpty = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["task", "claim"]
+    code @?= ExitFailure 1
+    out @?= ""
+
+{- | Two claims against a two-task queue must hand out both ids and never
+repeat one, in `task next` priority order; a third finds the queue drained.
+-}
+testTaskClaimDistinct :: IO ()
+testTaskClaimDistinct = withTempDb $ \db -> do
+    (_, loOut, _) <- runIcarium db ["task", "add", "Low", "--state", "ready", "--priority", "1"]
+    (_, hiOut, _) <- runIcarium db ["task", "add", "High", "--state", "ready", "--priority", "9"]
+    let loId = head (words loOut)
+        hiId = head (words hiOut)
+
+    (_, nextOut, _) <- runIcarium db ["task", "next"]
+    (c1, out1, _) <- runIcarium db ["task", "claim"]
+    c1 @?= ExitSuccess
+    words out1 @?= [hiId]
+    assertBool "claim agrees with next" (words nextOut == words out1)
+
+    (c2, out2, _) <- runIcarium db ["task", "claim"]
+    c2 @?= ExitSuccess
+    words out2 @?= [loId]
+
+    (c3, _, _) <- runIcarium db ["task", "claim"]
+    c3 @?= ExitFailure 1
+
+testTaskClaimOwner :: IO ()
+testTaskClaimOwner = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready"]
+    let tid = head (words addOut)
+
+    (code, claimOut, _) <- runIcarium db ["task", "claim", "--owner", "agent-7"]
+    code @?= ExitSuccess
+    words claimOut @?= [tid]
+
+    (_, showOut, _) <- runIcarium db ["task", "show", tid]
+    assertBool "state is in_progress" ("in_progress" `isInfixOf` showOut)
+    assertBool "owner shown" ("owner:     agent-7" `isInfixOf` showOut)
+    assertBool "claim time shown" ("claimed:   " `isInfixOf` showOut)
+
+-- | Guard runs before any DB I/O, so an empty owner never reaches the queue.
+testTaskClaimEmptyOwner :: IO ()
+testTaskClaimEmptyOwner = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready"]
+    let tid = head (words addOut)
+
+    (code, _, err) <- runIcarium db ["task", "claim", "--owner", "  "]
+    code @?= ExitFailure 2
+    assertBool "error names the flag" ("--owner" `isInfixOf` err)
+
+    -- The task must still be claimable.
+    (nCode, nOut, _) <- runIcarium db ["task", "next"]
+    nCode @?= ExitSuccess
+    words nOut @?= [tid]
+
+-- | A claim must not outlive the work: leaving in_progress drops the stamp.
+testTaskClaimClearedOnDone :: IO ()
+testTaskClaimClearedOnDone = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready"]
+    let tid = head (words addOut)
+    (_, _, _) <- runIcarium db ["task", "claim", "--owner", "agent-7"]
+
+    (code, _, _) <- runIcarium db ["task", "done", tid]
+    code @?= ExitSuccess
+    (_, showOut, _) <- runIcarium db ["task", "show", tid]
+    assertBool "owner cleared" (not ("agent-7" `isInfixOf` showOut))
+    assertBool "claim time cleared" (not ("claimed:" `isInfixOf` showOut))
 
 testTaskAddBadDependsOn :: IO ()
 testTaskAddBadDependsOn = withTempDb $ \db -> do

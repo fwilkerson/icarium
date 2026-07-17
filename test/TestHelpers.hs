@@ -62,6 +62,8 @@ minTask =
         , taskCreatedAt = "2026-01-01T00:00:00Z"
         , taskUpdatedAt = "2026-01-01T00:00:00Z"
         , taskNoCommit = False
+        , taskClaimedBy = Nothing
+        , taskClaimedAt = Nothing
         }
 
 {- | Create a throwaway git repo with one commit on main. The directory

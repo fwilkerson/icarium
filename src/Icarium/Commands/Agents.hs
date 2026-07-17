@@ -52,6 +52,11 @@ guide =
     \                                         # To see the body, Read the path.\n\
     \  icarium task cat <id>                  # print body to stdout (read-only)\n\
     \  icarium task next                      # print next ready task id (loop primitive)\n\
+    \  icarium task claim                     # same pick, but atomically takes it:\n\
+    \                                         # -> in-progress + owner stamp, prints id.\n\
+    \                                         # Use this, not next + start, when other\n\
+    \                                         # agents share the queue - two claims can\n\
+    \                                         # never return the same task.\n\
     \  icarium task list --state ready        # actionable queue\n\
     \  icarium task exists <id>               # exit 0 found / 1 missing / 2 ambiguous\n\
     \  icarium search \"query\"                 # FTS5; \"phrase\", UPPERCASE OR,\n\

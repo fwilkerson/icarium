@@ -21,7 +21,7 @@ module Icarium.Render (
 ) where
 
 import Data.List (sortBy)
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
 
@@ -59,6 +59,7 @@ renderTaskHuman utf8 t bodyPath refs deps cats =
         ]
             <> blockReasonLines t
             <> noCommitLine t
+            <> claimLines t
             <> [ "created:   " <> taskCreatedAt t
                , "updated:   " <> taskUpdatedAt t
                , "body:      " <> bodyPath
@@ -81,6 +82,12 @@ noCommitLine :: Task -> [Text]
 noCommitLine t
     | taskNoCommit t = ["no-commit:   yes"]
     | otherwise = []
+
+-- | Set by `task claim`; absent for tasks nobody claimed.
+claimLines :: Task -> [Text]
+claimLines t =
+    ["owner:     " <> w | w <- maybeToList (taskClaimedBy t)]
+        <> ["claimed:   " <> a | a <- maybeToList (taskClaimedAt t)]
 
 {- | Combined links tree replacing the old flat dep/ref sections.
 

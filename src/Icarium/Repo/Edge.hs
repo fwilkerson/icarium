@@ -25,7 +25,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix, taskCols)
 import Icarium.Types (
     Context,
     Edge (..),
@@ -128,13 +128,16 @@ dependencyTasks :: Connection -> Text -> IO [Task]
 dependencyTasks conn tid =
     query
         conn
-        "SELECT t.id, t.title, t.body, t.state, t.priority, t.block_reason, t.created_at, t.updated_at, t.no_commit \
-        \FROM edges e \
-        \JOIN tasks t ON t.id = e.dst_id \
-        \WHERE e.kind = 'depends_on' \
-        \  AND e.src_kind = 'task' AND e.src_id = ? \
-        \  AND e.dst_kind = 'task' \
-        \ORDER BY e.created_at ASC"
+        ( Query $
+            "SELECT "
+                <> taskCols "t."
+                <> " FROM edges e \
+                   \JOIN tasks t ON t.id = e.dst_id \
+                   \WHERE e.kind = 'depends_on' \
+                   \  AND e.src_kind = 'task' AND e.src_id = ? \
+                   \  AND e.dst_kind = 'task' \
+                   \ORDER BY e.created_at ASC"
+        )
         (Only tid)
 
 {- | Count outgoing depends_on and references edges for multiple task ids.

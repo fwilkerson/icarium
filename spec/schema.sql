@@ -20,6 +20,10 @@ CREATE TABLE tasks (
     priority    INTEGER,                             -- NULL = default
     block_reason TEXT,                               -- structured text when state='blocked'
     no_commit   INTEGER NOT NULL DEFAULT 0 CHECK (no_commit IN (0,1)),
+    -- `task claim` ownership stamp; meaningful only while state='in_progress'.
+    -- Any other state transition clears both, so a claim cannot outlive the work.
+    claimed_by  TEXT,
+    claimed_at  TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

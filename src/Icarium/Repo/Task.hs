@@ -8,6 +8,7 @@ module Icarium.Repo.Task (
     getTasksByPrefix,
     resolveTaskId,
     listTasks,
+    claimNextTask,
     updateTask,
     deleteTask,
     listTaskIdTimes,
@@ -29,11 +30,12 @@ import Database.SQLite.Simple (
     execute,
     query,
     query_,
+    withImmediateTransaction,
  )
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
+import Icarium.Repo.Internal (prefixLookup, resolveByPrefix, taskCols)
 import Icarium.Types (NodeKind (..), Task (..), TaskState (..))
 
 data NewTask = NewTask
@@ -55,6 +57,12 @@ data TaskUpdate = TaskUpdate
 emptyUpdate :: TaskUpdate
 emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
 
+{- | Ready-queue ordering, shared by @listTasks@ and @claimNextTask@ so
+`task next` and `task claim` cannot drift apart.
+-}
+readyOrder :: Text
+readyOrder = "COALESCE(priority, 0) DESC, created_at ASC"
+
 insertTask :: Connection -> NewTask -> IO Text
 insertTask conn NewTask{..} = do
     tid <- newId
@@ -73,7 +81,7 @@ getTask conn tid = do
     rows <-
         query
             conn
-            "SELECT id, title, body, state, priority, block_reason, created_at, updated_at, no_commit FROM tasks WHERE id = ?"
+            (Query $ "SELECT " <> taskCols "" <> " FROM tasks WHERE id = ?")
             (Only tid)
     pure $ case rows of
         (t : _) -> Just t
@@ -85,14 +93,14 @@ getTasksByIds _ [] = pure []
 getTasksByIds conn ids =
     query
         conn
-        (Query $ "SELECT id, title, body, state, priority, block_reason, created_at, updated_at, no_commit FROM tasks WHERE id IN " <> ph)
+        (Query $ "SELECT " <> taskCols "" <> " FROM tasks WHERE id IN " <> ph)
         (map SQLText ids)
   where
     ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
 
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]
-getTasksByPrefix conn = prefixLookup conn "tasks" "id, title, body, state, priority, block_reason, created_at, updated_at, no_commit"
+getTasksByPrefix conn = prefixLookup conn "tasks" (taskCols "")
 
 -- | Resolve a user-supplied string to a canonical task ULID via prefix match.
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
@@ -114,12 +122,9 @@ listTasks conn filterStates readyOnly mDomain mDisc = do
                 ss -> filter ((`elem` ss) . taskState) rows
   where
     tbl = if readyOnly then "ready_tasks" else "tasks"
-    ord =
-        if readyOnly
-            then "COALESCE(priority, 0) DESC, created_at ASC"
-            else "created_at ASC"
+    ord = if readyOnly then readyOrder else "created_at ASC"
     (whereClause, params) = taskCatWhere mDomain mDisc
-    buildQ t o = Query $ "SELECT id, title, body, state, priority, block_reason, created_at, updated_at, no_commit FROM " <> t <> whereClause <> " ORDER BY " <> o
+    buildQ t o = Query $ "SELECT " <> taskCols "" <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
 
 taskCatWhere :: Maybe Text -> Maybe Text -> (Text, [SQLData])
 taskCatWhere mDomain mDisc =
@@ -137,6 +142,30 @@ taskCatWhere mDomain mDisc =
      in case filters of
             [] -> ("", [])
             fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
+
+{- | Take the head of the ready queue, mark it in-progress and stamp
+@owner@ on it. Returns the claimed id, or Nothing when nothing is ready.
+
+@BEGIN IMMEDIATE@ acquires the write lock before the read, so concurrent
+claims serialise and the loser re-reads a queue the winner has already
+shortened. A deferred transaction (sqlite-simple's @withTransaction@)
+would not do: both callers would read the same head row, then one would
+fail to upgrade its read lock — which @busy_timeout@ cannot resolve.
+-}
+claimNextTask :: Connection -> Text -> IO (Maybe Text)
+claimNextTask conn owner = withImmediateTransaction conn $ do
+    rows <- query_ conn (Query $ "SELECT id FROM ready_tasks ORDER BY " <> readyOrder <> " LIMIT 1")
+    case rows of
+        [] -> pure Nothing
+        (Only tid : _) -> do
+            execute
+                conn
+                ( Query
+                    "UPDATE tasks SET state='in_progress', claimed_by=?, \
+                    \claimed_at=datetime('now') WHERE id=?"
+                )
+                (owner, tid)
+            pure (Just tid)
 
 {- | Apply a sparse update. Returns True iff a row was affected.
 When the title changes, updates the FTS5 entry to keep search current.
@@ -156,13 +185,19 @@ updateTask conn tid TaskUpdate{..} = do
                         then fromMaybe (taskBlockReason t) tuBlockReason
                         else Nothing
                 newNoCommit = fromMaybe (taskNoCommit t) tuNoCommit
+                -- Invariant: a claim is meaningful only while in_progress.
+                -- Moving anywhere else drops it, so no zombie claims survive.
+                (newClaimBy, newClaimAt)
+                    | newState == InProgress = (taskClaimedBy t, taskClaimedAt t)
+                    | otherwise = (Nothing, Nothing)
             execute
                 conn
                 ( Query
                     "UPDATE tasks SET title=?, state=?, \
-                    \priority=?, block_reason=?, no_commit=? WHERE id=?"
+                    \priority=?, block_reason=?, no_commit=?, \
+                    \claimed_by=?, claimed_at=? WHERE id=?"
                 )
-                (newTitle, newState, newPrio, newBlock, newNoCommit, tid)
+                (newTitle, newState, newPrio, newBlock, newNoCommit, newClaimBy, newClaimAt, tid)
             -- Keep FTS title in sync when title changes.
             when (isJust tuTitle) $
                 Fts.indexEntry conn tid TaskNode newTitle (taskBody t)

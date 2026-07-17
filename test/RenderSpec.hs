@@ -91,6 +91,8 @@ mkRow tid title st pri cats deps refs blockReason =
                 , taskCreatedAt = "2026-04-26 00:00:00"
                 , taskUpdatedAt = "2026-04-26 00:00:00"
                 , taskNoCommit = False
+                , taskClaimedBy = Nothing
+                , taskClaimedAt = Nothing
                 }
         , Icarium.Render.trCats = cats
         , Icarium.Render.trDeps = deps
