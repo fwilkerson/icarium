@@ -243,33 +243,36 @@ showP =
         <*> jsonFlag
 
 runShow :: FilePath -> ShowOpts -> IO ()
-runShow db o = openDb db $ \c -> do
+runShow db o = do
+    -- Flag conflict is pure usage error; reject before any DB I/O so a
+    -- bad invocation can't create/migrate a store as a side effect.
     when (sPrompt o && sJson o) $
         fatal 2 "--prompt and --json are mutually exclusive"
-    tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
-    mt <- RT.getTask c tid
-    t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
-    if sPrompt o
-        then do
-            bodyFromFile <- readBody (taskBodyPath (bodiesDir db) tid)
-            let t' = t{taskBody = bodyFromFile}
-            refs <- RE.referencedContexts c (taskId t')
-            deps <- RE.dependencyTasks c (taskId t')
-            cats <- RC.taskCategoriesFor c (taskId t')
-            catMatch <- RCx.categoryMatchedContexts c cats 5
-            let refIds = map contextId refs
-                dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-            TIO.putStr (Render.renderTaskPrompt t' refs dedupedCat deps)
-        else do
-            refs <- RE.referencedContexts c (taskId t)
-            deps <- RE.dependencyTasks c (taskId t)
-            cats <- RC.taskCategoriesFor c (taskId t)
-            let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
-            if sJson o
-                then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps cats)
-                else do
-                    utf8 <- detectUtf8
-                    TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
+    openDb db $ \c -> do
+        tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
+        mt <- RT.getTask c tid
+        t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
+        if sPrompt o
+            then do
+                bodyFromFile <- readBody (taskBodyPath (bodiesDir db) tid)
+                let t' = t{taskBody = bodyFromFile}
+                refs <- RE.referencedContexts c (taskId t')
+                deps <- RE.dependencyTasks c (taskId t')
+                cats <- RC.taskCategoriesFor c (taskId t')
+                catMatch <- RCx.categoryMatchedContexts c cats 5
+                let refIds = map contextId refs
+                    dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
+                TIO.putStr (Render.renderTaskPrompt t' refs dedupedCat deps)
+            else do
+                refs <- RE.referencedContexts c (taskId t)
+                deps <- RE.dependencyTasks c (taskId t)
+                cats <- RC.taskCategoriesFor c (taskId t)
+                let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
+                if sJson o
+                    then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps cats)
+                    else do
+                        utf8 <- detectUtf8
+                        TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
   where
     openDb = if sPrompt o then withDbSync else withDb
 

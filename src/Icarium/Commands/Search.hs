@@ -96,7 +96,7 @@ run db o = do
         (total, hits) <- RS.searchEntries c (oQuery o) filters (oLimit o)
         rows <- buildRows c hits
         if oJson o
-            then BLC.putStrLn (Json.renderSearchJson rows)
+            then BLC.putStrLn (Json.renderSearchJson total rows)
             else do
                 utf8 <- detectUtf8
                 isTty <- detectTty

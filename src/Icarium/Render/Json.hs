@@ -108,11 +108,16 @@ contextLinkEnc cx =
 -- Search
 -- =============================================================
 
-{- | Hits only, in rank order. No snippet: snippets are body content, and
-the body file stays the canonical source for that.
+{- | An object, not a bare array: @total@ is the full match count, so a
+consumer using @--limit@ can detect truncation (the human footer's
+"showing X of Y" equivalent). Hits are in rank order. No snippet:
+snippets are body content, and the body file stays the canonical source.
 -}
-renderSearchJson :: [SearchHitRow] -> BL.ByteString
-renderSearchJson = enc . E.list searchHitEnc
+renderSearchJson :: Int -> [SearchHitRow] -> BL.ByteString
+renderSearchJson total rows =
+    enc . E.pairs $
+        E.pair "total" (E.int total)
+            <> E.pair "hits" (E.list searchHitEnc rows)
 
 searchHitEnc :: SearchHitRow -> Encoding
 searchHitEnc r =

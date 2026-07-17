@@ -185,8 +185,7 @@ updateTask conn tid TaskUpdate{..} = do
                         then fromMaybe (taskBlockReason t) tuBlockReason
                         else Nothing
                 newNoCommit = fromMaybe (taskNoCommit t) tuNoCommit
-                -- Invariant: a claim is meaningful only while in_progress.
-                -- Moving anywhere else drops it, so no zombie claims survive.
+                -- Claims live only while in_progress (spec/schema.sql).
                 (newClaimBy, newClaimAt)
                     | newState == InProgress = (taskClaimedBy t, taskClaimedAt t)
                     | otherwise = (Nothing, Nothing)
