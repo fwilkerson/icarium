@@ -19,6 +19,9 @@ scratch_dir = ".icarium/scratch"
 max_minutes_per_dispatch = 30
 heartbeat_stale_seconds  = 300
 log_retention_runs       = 25
+# Provision the pinned fourmolu into each worktree; the pre-commit hook
+# needs it and make install does not reproduce it.
+worktree_setup = "scripts/worktree-init.sh"
 
 [categories]
 domains     = ["cli", "dispatch", "storage", "workflow"]
