@@ -28,3 +28,17 @@ Lint hints are design feedback, not mechanical fixes. When `hlint` flags somethi
 ## Fresh clone setup
 
 Install [direnv](https://direnv.net/) and run `direnv allow` at the repo root. The committed `.envrc` adds `bin/` to `PATH`, so bare `icarium` resolves to the local build artifact after `make install`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are icarium tasks in this repo's own `.icarium/` DB (dogfooding). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary, realized as icarium task states. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
