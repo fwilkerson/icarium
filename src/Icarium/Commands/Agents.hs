@@ -57,6 +57,9 @@ guide =
     \  icarium search \"query\"                 # FTS5; \"phrase\", UPPERCASE OR,\n\
     \                                         # --kind task|ctx, --limit N\n\
     \  Same cat/exists on `icarium ctx`.\n\
+    \  Add --json to task list/show, ctx list/show and search for stable\n\
+    \  machine-readable output (arrays for lists; show carries body_path,\n\
+    \  not body content).\n\
     \\n\
     \IDs\n\
     \  ULIDs. Any unique prefix works on the command line.\n\

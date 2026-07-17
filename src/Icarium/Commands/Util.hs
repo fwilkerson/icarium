@@ -29,6 +29,7 @@ module Icarium.Commands.Util (
     detectUtf8,
     detectTty,
     textOption,
+    jsonFlag,
 ) where
 
 import Data.Char (toUpper)
@@ -149,6 +150,14 @@ detectUtf8 = do
 textOption :: String -> String -> String -> Parser Text
 textOption flg mv hlp =
     T.pack <$> strOption (long flg <> metavar mv <> help hlp)
+
+-- | The read surface's @--json@ switch. Same wording everywhere it appears.
+jsonFlag :: Parser Bool
+jsonFlag =
+    switch
+        ( long "json"
+            <> help "Emit machine-readable JSON on stdout instead of the human table"
+        )
 
 requireTask :: Connection -> Text -> IO Text
 requireTask c input = do

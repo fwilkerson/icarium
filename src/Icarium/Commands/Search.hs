@@ -1,6 +1,7 @@
 module Icarium.Commands.Search (Options, parser, run) where
 
 import Control.Monad (forM_, void, when)
+import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -12,6 +13,7 @@ import Icarium.Commands.Util
 import Icarium.Db (withDbSync)
 import Icarium.Render (SearchHitRow (..))
 import Icarium.Render qualified as Render
+import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Search qualified as RS
 import Icarium.Types
@@ -27,6 +29,7 @@ data Options = Options
     , oExcludeDisciplines :: [Text]
     , oTitleOnly :: Bool
     , oBodyOnly :: Bool
+    , oJson :: Bool
     }
 
 parser :: Parser Options
@@ -63,6 +66,7 @@ parser =
         <*> many (textOption "exclude-discipline" "NAME" "Exclude entries tagged with this discipline (repeatable)")
         <*> switch (long "title-only" <> help "Match only against entry titles (mutually exclusive with --body-only)")
         <*> switch (long "body-only" <> help "Match only against entry bodies (mutually exclusive with --title-only)")
+        <*> jsonFlag
 
 kindReader :: ReadM NodeKind
 kindReader = eitherReader $ \case
@@ -91,9 +95,12 @@ run db o = do
                     }
         (total, hits) <- RS.searchEntries c (oQuery o) filters (oLimit o)
         rows <- buildRows c hits
-        utf8 <- detectUtf8
-        isTty <- detectTty
-        TIO.putStr (Render.renderSearchList utf8 isTty (oNoSnippet o) (oQuery o) total rows)
+        if oJson o
+            then BLC.putStrLn (Json.renderSearchJson rows)
+            else do
+                utf8 <- detectUtf8
+                isTty <- detectTty
+                TIO.putStr (Render.renderSearchList utf8 isTty (oNoSnippet o) (oQuery o) total rows)
   where
     validateCats c = do
         forM_ (oDomains o) $ \n -> void $ requireCategory c Domain n

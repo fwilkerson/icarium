@@ -26,6 +26,7 @@ library
                       Icarium.Db
                       Icarium.Config
                       Icarium.Render
+                      Icarium.Render.Json
                       Icarium.Git
                       Icarium.Dispatch
                       Icarium.Dispatch.Internal
@@ -112,6 +113,7 @@ test-suite icarium-test
                       TickSpec
                       TimeoutSpec
     build-depends:    base,
+                      aeson,
                       bytestring,
                       directory,
                       filepath,

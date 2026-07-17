@@ -1,6 +1,7 @@
 module Icarium.Commands.Ctx (Command, parser, run, autoDeriveDeps) where
 
 import Control.Monad (forM_, void, when)
+import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -17,6 +18,7 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Node (createContextWithBody)
 import Icarium.Render qualified as Render
+import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Edge qualified as RE
@@ -179,6 +181,7 @@ data ListOpts = ListOpts
     , lDomain :: Maybe Text
     , lDiscipline :: Maybe Text
     , lLimit :: Maybe Int
+    , lJson :: Bool
     }
 
 listP :: Parser ListOpts
@@ -196,6 +199,7 @@ listP =
                     <> help "Return at most N entries"
                 )
             )
+        <*> jsonFlag
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
@@ -209,8 +213,11 @@ runList db o = withDb db $ \c -> do
     cxs0 <- RCx.listContexts c staleFilter includeSuperseded (lDomain o) (lDiscipline o)
     let cxs = maybe cxs0 (`take` cxs0) (lLimit o)
     rows <- buildContextRows c cxs
-    utf8 <- detectUtf8
-    TIO.putStr (Render.renderContextList utf8 rows)
+    if lJson o
+        then BLC.putStrLn (Json.renderContextListJson rows)
+        else do
+            utf8 <- detectUtf8
+            TIO.putStr (Render.renderContextList utf8 rows)
 
 buildContextRows :: Connection -> [Context] -> IO [Render.ContextRow]
 buildContextRows c cxs = do
@@ -230,12 +237,16 @@ buildContextRows c cxs = do
 -- show
 -- =============================================================
 
-newtype ShowOpts = ShowOpts {sId :: Text}
+data ShowOpts = ShowOpts
+    { sId :: Text
+    , sJson :: Bool
+    }
 
 showP :: Parser ShowOpts
 showP =
     ShowOpts . T.pack
         <$> strArgument (metavar "CONTEXT_ID")
+        <*> jsonFlag
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = withDb db $ \c -> do
@@ -244,7 +255,9 @@ runShow db o = withDb db $ \c -> do
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
     cats <- RC.contextCategoriesFor c (contextId cx)
     let bodyPath = T.pack (ctxBodyPath (bodiesDir db) cxid)
-    TIO.putStr (Render.renderContext cx cats bodyPath)
+    if sJson o
+        then BLC.putStrLn (Json.renderContextShowJson cx cats bodyPath)
+        else TIO.putStr (Render.renderContext cx cats bodyPath)
 
 -- =============================================================
 -- update

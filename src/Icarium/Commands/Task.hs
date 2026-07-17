@@ -1,6 +1,7 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
 import Control.Monad (forM_, unless, void, when)
+import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -16,6 +17,7 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb, withDbSync)
 import Icarium.Node (createTaskWithBody)
 import Icarium.Render qualified as Render
+import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Edge qualified as RE
@@ -149,6 +151,7 @@ data ListOpts = ListOpts
     , lDiscipline :: Maybe Text
     , lAll :: Bool
     , lLimit :: Maybe Int
+    , lJson :: Bool
     }
 
 listP :: Parser ListOpts
@@ -175,6 +178,7 @@ listP =
                     <> help "Return at most N tasks"
                 )
             )
+        <*> jsonFlag
 
 defaultActiveStates :: [TaskState]
 defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
@@ -190,8 +194,11 @@ runList db o = withDb db $ \c -> do
     ts0 <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
     let ts = maybe ts0 (`take` ts0) (lLimit o)
     taskRows <- buildTaskRows c ts
-    utf8 <- detectUtf8
-    TIO.putStr (Render.renderTaskList utf8 taskRows)
+    if lJson o
+        then BLC.putStrLn (Json.renderTaskListJson taskRows)
+        else do
+            utf8 <- detectUtf8
+            TIO.putStr (Render.renderTaskList utf8 taskRows)
 
 -- | Load per-task categories and edge counts in batch, build TaskRow list.
 buildTaskRows :: Connection -> [Task] -> IO [Render.TaskRow]
@@ -217,6 +224,7 @@ buildTaskRows c ts = do
 data ShowOpts = ShowOpts
     { sId :: Text
     , sPrompt :: Bool
+    , sJson :: Bool
     }
 
 showP :: Parser ShowOpts
@@ -224,9 +232,12 @@ showP =
     ShowOpts . T.pack
         <$> strArgument (metavar "TASK_ID")
         <*> switch (long "prompt" <> help "Render task as an LLM prompt context block")
+        <*> jsonFlag
 
 runShow :: FilePath -> ShowOpts -> IO ()
 runShow db o = openDb db $ \c -> do
+    when (sPrompt o && sJson o) $
+        fatal 2 "--prompt and --json are mutually exclusive"
     tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
     mt <- RT.getTask c tid
     t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
@@ -245,9 +256,12 @@ runShow db o = openDb db $ \c -> do
             refs <- RE.referencedContexts c (taskId t)
             deps <- RE.dependencyTasks c (taskId t)
             cats <- RC.taskCategoriesFor c (taskId t)
-            utf8 <- detectUtf8
             let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
-            TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
+            if sJson o
+                then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps cats)
+                else do
+                    utf8 <- detectUtf8
+                    TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
   where
     openDb = if sPrompt o then withDbSync else withDb
 

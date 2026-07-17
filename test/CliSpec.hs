@@ -2,10 +2,14 @@ module CliSpec (tests) where
 
 import Control.Exception (bracket, evaluate)
 import Control.Monad (when)
+import Data.Aeson (Key, Object, Value (..), decode)
+import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace)
+import Data.Foldable (toList)
 import Data.List (dropWhileEnd, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe)
+import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
 import Database.SQLite.Simple (Only (..), Query (..), close, execute, execute_, open, query_)
@@ -203,6 +207,11 @@ tests =
         , testCase "category add: invalid name exits 2" testCategoryAddBadName
         , testCase "task start/done shorthands transition state" testTaskStartDone
         , testCase "task update --state accepts underscore spelling in_progress" testTaskStateUnderscoreAccepted
+        , -- --json on the read surface
+          testCase "task list/show --json: valid JSON, ids, body_path not body" testTaskJson
+        , testCase "ctx list/show --json: valid JSON, ids, body_path not body" testCtxJson
+        , testCase "search --json: valid JSON array carrying hit ids" testSearchJson
+        , testCase "task show --prompt --json exits 2" testTaskShowPromptJsonConflict
         ]
 
 testVersion :: IO ()
@@ -2238,3 +2247,89 @@ testTaskStateUnderscoreAccepted = withTempDb $ \db -> do
     let tid = head (words addOut)
     (code, _, _) <- runIcarium db ["task", "update", tid, "--state", "in_progress"]
     code @?= ExitSuccess
+
+-- =============================================================
+-- --json on the read surface
+-- =============================================================
+
+-- | Decode stdout as a JSON array of objects and pull each element's id.
+jsonIds :: String -> [String]
+jsonIds out = case decodeOut out of
+    Array vs -> map (expectField "id" . expectObject) (toList vs)
+    _ -> error ("expected a JSON array, got: " <> out)
+
+decodeOut :: String -> Value
+decodeOut out = fromMaybe (error ("not valid JSON: " <> out)) (decode (BLC.pack out))
+
+expectObject :: Value -> Object
+expectObject (Object o) = o
+expectObject v = error ("expected a JSON object, got: " <> show v)
+
+expectField :: Key -> Object -> String
+expectField k o = case KM.lookup k o of
+    Just (String t) -> T.unpack t
+    other -> error ("expected string field " <> show k <> ", got: " <> show other)
+
+testTaskJson :: IO ()
+testTaskJson = withTempDb $ \db -> do
+    (emptyCode, emptyOut, _) <- runIcarium db ["task", "list", "--json"]
+    emptyCode @?= ExitSuccess
+    jsonIds emptyOut @?= []
+
+    (_, addOut, _) <-
+        runIcarium db ["task", "add", "Json task", "--state", "ready", "--body", "unmistakable body prose"]
+    let tid = head (words addOut)
+
+    (lCode, lOut, _) <- runIcarium db ["task", "list", "--json"]
+    lCode @?= ExitSuccess
+    jsonIds lOut @?= [tid]
+
+    (sCode, sOut, _) <- runIcarium db ["task", "show", take 10 tid, "--json"]
+    sCode @?= ExitSuccess
+    let o = expectObject (decodeOut sOut)
+    expectField "id" o @?= tid
+    expectField "state" o @?= "ready"
+    assertBool "show carries body_path" (KM.member "body_path" o)
+    assertBool "show omits body content" (not ("unmistakable body prose" `isInfixOf` sOut))
+
+testCtxJson :: IO ()
+testCtxJson = withTempDb $ \db -> do
+    (emptyCode, emptyOut, _) <- runIcarium db ["ctx", "list", "--json"]
+    emptyCode @?= ExitSuccess
+    jsonIds emptyOut @?= []
+
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Json context", "--body", "unmistakable body prose"]
+    let cxid = head (words addOut)
+
+    (lCode, lOut, _) <- runIcarium db ["ctx", "list", "--json"]
+    lCode @?= ExitSuccess
+    jsonIds lOut @?= [cxid]
+
+    (sCode, sOut, _) <- runIcarium db ["ctx", "show", take 10 cxid, "--json"]
+    sCode @?= ExitSuccess
+    let o = expectObject (decodeOut sOut)
+    expectField "id" o @?= cxid
+    assertBool "show carries body_path" (KM.member "body_path" o)
+    assertBool "show omits body content" (not ("unmistakable body prose" `isInfixOf` sOut))
+
+testSearchJson :: IO ()
+testSearchJson = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "jsontoken searchable entry"]
+    let cxid = head (words addOut)
+
+    (missCode, missOut, _) <- runIcarium db ["search", "xyzzy_nothing_matches_this_99", "--json"]
+    missCode @?= ExitSuccess
+    jsonIds missOut @?= []
+
+    (code, out, _) <- runIcarium db ["search", "jsontoken", "--json"]
+    code @?= ExitSuccess
+    jsonIds out @?= [cxid]
+
+testTaskShowPromptJsonConflict :: IO ()
+testTaskShowPromptJsonConflict = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "conflicting flags task"]
+    let tid = head (words addOut)
+    (code, out, err) <- runIcarium db ["task", "show", tid, "--prompt", "--json"]
+    code @?= ExitFailure 2
+    out @?= ""
+    assertBool "stderr names both flags" ("--prompt" `isInfixOf` err && "--json" `isInfixOf` err)
