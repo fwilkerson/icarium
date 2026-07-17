@@ -8,8 +8,8 @@ build = "make install"
 test  = "cabal test all"
 
 [dispatch]
-model  = "claude-sonnet-5"
-effort = "medium"
+model  = "claude-opus-4-8"
+effort = "high"
 tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
