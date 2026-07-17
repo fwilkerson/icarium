@@ -1,13 +1,15 @@
 module CliSpec (tests) where
 
-import Control.Exception (bracket, evaluate)
-import Control.Monad (when)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (bracket, evaluate, try)
+import Control.Monad (forM, forM_, replicateM, when)
 import Data.Aeson (Key, Object, Value (..), decode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace)
 import Data.Foldable (toList)
-import Data.List (dropWhileEnd, isInfixOf, isPrefixOf)
+import Data.List (dropWhileEnd, isInfixOf, isPrefixOf, sort)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
@@ -94,6 +96,7 @@ tests =
         , testCase "task next prints id on non-empty" testTaskNextNonEmpty
         , testCase "task claim exits 1 on empty queue" testTaskClaimEmpty
         , testCase "task claim takes each task at most once" testTaskClaimDistinct
+        , testCase "task claim: racing processes partition the queue" testTaskClaimConcurrent
         , testCase "task claim records owner, shown by task show" testTaskClaimOwner
         , testCase "task claim --owner empty exits 2, claims nothing" testTaskClaimEmptyOwner
         , testCase "task done clears the claim" testTaskClaimClearedOnDone
@@ -215,7 +218,7 @@ tests =
         , -- --json on the read surface
           testCase "task list/show --json: valid JSON, ids, body_path not body" testTaskJson
         , testCase "ctx list/show --json: valid JSON, ids, body_path not body" testCtxJson
-        , testCase "search --json: valid JSON array carrying hit ids" testSearchJson
+        , testCase "search --json: {total, hits} object; total counts past --limit" testSearchJson
         , testCase "task show --prompt --json exits 2" testTaskShowPromptJsonConflict
         ]
 
@@ -368,6 +371,30 @@ testTaskClaimDistinct = withTempDb $ \db -> do
 
     (c3, _, _) <- runIcarium db ["task", "claim"]
     c3 @?= ExitFailure 1
+
+{- | The atomicity guarantee, observed rather than reasoned about: claims
+racing from separate processes must partition the queue. BEGIN IMMEDIATE
+plus busy_timeout means every claimer succeeds; none may repeat an id.
+-}
+testTaskClaimConcurrent :: IO ()
+testTaskClaimConcurrent = withTempDb $ \db -> do
+    ids <- forM [1 .. 4 :: Int] $ \i -> do
+        (_, out, _) <- runIcarium db ["task", "add", "Race " ++ show i, "--state", "ready"]
+        pure (head (words out))
+    boxes <- replicateM 4 newEmptyMVar
+    forM_ boxes $ \box -> forkIO $ do
+        r <- try (runIcarium db ["task", "claim"]) :: IO (Either IOError (ExitCode, String, String))
+        putMVar box r
+    results <- mapM takeMVar boxes
+    claimed <- forM results $ \case
+        Left e -> error ("claim process failed to run: " <> show e)
+        Right (code, out, err) -> do
+            code @?= ExitSuccess
+            assertBool ("no busy error: " <> err) (not ("busy" `isInfixOf` err))
+            pure (head (words out))
+    sort claimed @?= sort ids
+    (c5, _, _) <- runIcarium db ["task", "claim"]
+    c5 @?= ExitFailure 1
 
 testTaskClaimOwner :: IO ()
 testTaskClaimOwner = withTempDb $ \db -> do
@@ -1522,7 +1549,10 @@ runDispatch repo db mMode args = do
     absDb <- makeAbsolute db
     parentEnv <- getEnvironment
     let path0 = fromMaybe "" (lookup "PATH" parentEnv)
-        base = filter ((`notElem` ["PATH", "STUB_CLAUDE_MODE"]) . fst) parentEnv
+        -- ICARIUM_* must not leak in: when this suite itself runs inside a
+        -- dispatch worker, the inherited ICARIUM_TASK_ID poisons the nested
+        -- dispatch's icarium calls and the review tests fail with exit 3.
+        base = filter ((`notElem` ["PATH", "STUB_CLAUDE_MODE", "ICARIUM_TASK_ID", "ICARIUM_DB"]) . fst) parentEnv
         env =
             ("PATH", absFixtures <> ":" <> binDir <> ":" <> path0)
                 : maybe id (\m -> (("STUB_CLAUDE_MODE", m) :)) mMode base
@@ -2392,14 +2422,31 @@ testSearchJson :: IO ()
 testSearchJson = withTempDb $ \db -> do
     (_, addOut, _) <- runIcarium db ["ctx", "add", "jsontoken searchable entry"]
     let cxid = head (words addOut)
+        searchJson q extra = do
+            (code, out, _) <- runIcarium db (["search", q, "--json"] <> extra)
+            code @?= ExitSuccess
+            let o = expectObject (decodeOut out)
+                hits = case KM.lookup "hits" o of
+                    Just (Array vs) -> map (expectField "id" . expectObject) (toList vs)
+                    other -> error ("expected hits array, got: " <> show other)
+                total = case KM.lookup "total" o of
+                    Just (Number n) -> n
+                    other -> error ("expected numeric total, got: " <> show other)
+            pure (total, hits)
 
-    (missCode, missOut, _) <- runIcarium db ["search", "xyzzy_nothing_matches_this_99", "--json"]
-    missCode @?= ExitSuccess
-    jsonIds missOut @?= []
+    (missTotal, missHits) <- searchJson "xyzzy_nothing_matches_this_99" []
+    missTotal @?= 0
+    missHits @?= []
 
-    (code, out, _) <- runIcarium db ["search", "jsontoken", "--json"]
-    code @?= ExitSuccess
-    jsonIds out @?= [cxid]
+    (total, hits) <- searchJson "jsontoken" []
+    total @?= 1
+    hits @?= [cxid]
+
+    -- total counts all matches even when --limit truncates the hit list
+    (_, _, _) <- runIcarium db ["ctx", "add", "jsontoken second entry"]
+    (cappedTotal, cappedHits) <- searchJson "jsontoken" ["--limit", "1"]
+    cappedTotal @?= 2
+    length cappedHits @?= 1
 
 testTaskShowPromptJsonConflict :: IO ()
 testTaskShowPromptJsonConflict = withTempDb $ \db -> do
