@@ -16,7 +16,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
-import System.Process.Typed (proc, readProcess, setEnv, setWorkingDir)
+import System.Process.Typed (byteStringInput, proc, readProcess, setEnv, setStdin, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import TestHelpers (withTestRepo)
@@ -58,6 +58,15 @@ runIcariumEnvDb db args = do
     parentEnv <- getEnvironment
     let env = ("ICARIUM_DB", db) : filter ((/= "ICARIUM_DB") . fst) parentEnv
     (code, outBs, errBs) <- readProcess (setEnv env (proc absBin args))
+    pure (code, BLC.unpack outBs, BLC.unpack errBs)
+
+-- | Run icarium with the given string as its entire stdin.
+runIcariumStdin :: FilePath -> String -> [String] -> IO (ExitCode, String, String)
+runIcariumStdin db input args = do
+    (code, outBs, errBs) <-
+        readProcess $
+            setStdin (byteStringInput (BLC.pack input)) $
+                proc absBin (["--db", db] ++ args)
     pure (code, BLC.unpack outBs, BLC.unpack errBs)
 
 runIcariumBare :: [String] -> IO (ExitCode, String, String)
@@ -183,6 +192,17 @@ tests =
         , testCase "dispatch review: unreadable prompt_path fails closed before worker starts, dry-run too" testReviewerPromptUnreadableFailsClosed
         , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
         , testCase "dispatch stats: byte-for-byte summary, --since filters" testDispatchStats
+        , -- issue #13: empty bodies rejected, doctor notices strays
+          testCase "task add --body-stdin with empty stdin exits 2, files nothing" testAddEmptyBodyStdin
+        , testCase "add --body with empty/whitespace text exits 2 (task and ctx)" testAddEmptyBodyInline
+        , testCase "doctor: missing body file FAILs, ok after Write, abandoned exempt" testDoctorBodyCheck
+        , -- issue #14: only --stale/--not-stale touch the stale flag
+          testCase "ctx update: metadata-only change leaves stale untouched" testCtxUpdateStaleSemantics
+        , -- issue #15: category registration + state shorthands
+          testCase "category add: registers in toml+DB, idempotent, unlocks --domain" testCategoryAdd
+        , testCase "category add: invalid name exits 2" testCategoryAddBadName
+        , testCase "task start/done shorthands transition state" testTaskStartDone
+        , testCase "task update --state accepts underscore spelling in_progress" testTaskStateUnderscoreAccepted
         ]
 
 testVersion :: IO ()
@@ -2100,3 +2120,121 @@ testDispatchDepGateOnMerged = withDispatchRepo $ \dir db -> do
     (nextCode2, nextOut, _) <- runDispatch dir db Nothing ["task", "next"]
     nextCode2 @?= ExitSuccess
     assertBool "dependent is next after merge" (dependentTid `isInfixOf` nextOut)
+
+-- =============================================================
+-- empty-body rejection (issue #13)
+-- =============================================================
+
+testAddEmptyBodyStdin :: IO ()
+testAddEmptyBodyStdin = withTempDb $ \db -> do
+    (code, _, err) <- runIcariumStdin db "" ["task", "add", "empty stdin task", "--body-stdin"]
+    code @?= ExitFailure 2
+    assertBool "error names the empty body" ("empty body" `isInfixOf` err)
+    (_, lOut, _) <- runIcarium db ["task", "list"]
+    assertBool "nothing was filed" (not ("empty stdin task" `isInfixOf` lOut))
+
+testAddEmptyBodyInline :: IO ()
+testAddEmptyBodyInline = withTempDb $ \db -> do
+    (tCode, _, tErr) <- runIcarium db ["task", "add", "ws body task", "--body", "  \n "]
+    tCode @?= ExitFailure 2
+    assertBool "task error names empty body" ("empty body" `isInfixOf` tErr)
+    (cCode, _, cErr) <- runIcarium db ["ctx", "add", "ws body ctx", "--body", ""]
+    cCode @?= ExitFailure 2
+    assertBool "ctx error names empty body" ("empty body" `isInfixOf` cErr)
+
+testDoctorBodyCheck :: IO ()
+testDoctorBodyCheck = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "bodyless intermediate"]
+    let outLines = lines addOut
+        tid = head outLines
+        bodyPath = outLines !! 1
+    (_, out1, _) <- runIcarium db ["doctor"]
+    assertBool "FAIL body line present" ("FAIL  body" `isInfixOf` out1)
+    assertBool "failure names the task" (take 10 tid `isInfixOf` out1)
+    writeFile bodyPath "now populated"
+    (_, out2, _) <- runIcarium db ["doctor"]
+    assertBool "bodies check ok after Write" ("ok    bodies" `isInfixOf` out2)
+    -- an abandoned bodyless task is exempt (explicit dead end, not a defect)
+    (_, addOut2, _) <- runIcarium db ["task", "add", "junk to abandon"]
+    let tid2 = head (words addOut2)
+    (_, _, _) <- runIcarium db ["task", "update", tid2, "--state", "abandoned"]
+    (_, out3, _) <- runIcarium db ["doctor"]
+    assertBool "abandoned bodyless task exempt" ("ok    bodies" `isInfixOf` out3)
+
+-- =============================================================
+-- ctx update stale semantics (issue #14)
+-- =============================================================
+
+testCtxUpdateStaleSemantics :: IO ()
+testCtxUpdateStaleSemantics = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "stale semantics entry", "--body", "claim"]
+    let cid = take 10 (head (words addOut))
+        staleLine out = head [l | l <- lines out, "stale:" `isInfixOf` l]
+    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--title", "renamed"]
+    (_, sOut, _) <- runIcarium db ["ctx", "show", cid]
+    assertBool "title-only update leaves stale=no" ("no" `isInfixOf` staleLine sOut)
+    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--stale"]
+    (_, sOut2, _) <- runIcarium db ["ctx", "show", cid]
+    assertBool "--stale sets the flag" ("yes" `isInfixOf` staleLine sOut2)
+    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--not-stale"]
+    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--domain", ""]
+    (_, sOut3, _) <- runIcarium db ["ctx", "show", cid]
+    assertBool "metadata update after --not-stale leaves stale=no" ("no" `isInfixOf` staleLine sOut3)
+
+-- =============================================================
+-- category add (issue #15)
+-- =============================================================
+
+testCategoryAdd :: IO ()
+testCategoryAdd = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    -- unregistered domain errors and points at category add
+    (badCode, _, badErr) <- runIcariumIn dir db ["task", "add", "tagged task", "--domain", "infra"]
+    badCode @?= ExitFailure 2
+    assertBool "error suggests category add" ("category add" `isInfixOf` badErr)
+    (aCode, aOut, _) <- runIcariumIn dir db ["category", "add", "--axis", "domain", "infra"]
+    aCode @?= ExitSuccess
+    assertBool "reports registered" ("registered domain:infra" `isInfixOf` aOut)
+    (aCode2, aOut2, _) <- runIcariumIn dir db ["category", "add", "--axis", "domain", "infra"]
+    aCode2 @?= ExitSuccess
+    assertBool "second run is an idempotent no-op" ("already registered" `isInfixOf` aOut2)
+    toml <- readFile (dir <> "/icarium.toml")
+    assertBool "icarium.toml carries the new name" ("\"infra\"" `isInfixOf` toml)
+    -- toml and DB agree: sync sees no orphans
+    (sCode, _, sErr) <- runIcariumIn dir db ["category", "sync"]
+    sCode @?= ExitSuccess
+    assertBool "no orphan after add" (not ("orphan" `isInfixOf` sErr))
+    (tCode, _, _) <- runIcariumIn dir db ["task", "add", "tagged task", "--domain", "infra"]
+    tCode @?= ExitSuccess
+
+testCategoryAddBadName :: IO ()
+testCategoryAddBadName = withTempDb $ \db -> do
+    (code, _, err) <- runIcarium db ["category", "add", "--axis", "domain", "bad name!"]
+    code @?= ExitFailure 2
+    assertBool "error names the invalid name" ("invalid category name" `isInfixOf` err)
+
+-- =============================================================
+-- task start / done shorthands (issue #15)
+-- =============================================================
+
+testTaskStartDone :: IO ()
+testTaskStartDone = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "shorthand task", "--state", "ready"]
+    let tid = head (words addOut)
+    (sCode, sOut, _) <- runIcarium db ["task", "start", tid]
+    sCode @?= ExitSuccess
+    assertBool "start prints updated" ("updated" `isInfixOf` sOut)
+    (_, showOut, _) <- runIcarium db ["task", "show", tid]
+    assertBool "state is in_progress after start" ("in_progress" `isInfixOf` showOut)
+    (dCode, _, _) <- runIcarium db ["task", "done", tid]
+    dCode @?= ExitSuccess
+    (_, showOut2, _) <- runIcarium db ["task", "show", tid]
+    assertBool "state is done after done" ("done" `isInfixOf` showOut2)
+
+testTaskStateUnderscoreAccepted :: IO ()
+testTaskStateUnderscoreAccepted = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "underscore state task"]
+    let tid = head (words addOut)
+    (code, _, _) <- runIcarium db ["task", "update", tid, "--state", "in_progress"]
+    code @?= ExitSuccess

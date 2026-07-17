@@ -32,6 +32,8 @@ guide =
     \    2. Pipe a heredoc: `icarium task add \"Title\" --body-stdin <<'EOF'`\n\
     \       ...markdown... `EOF`. No temp file, no extra Write.\n\
     \  Do NOT author a separate temp file just to pass it back in.\n\
+    \  An empty --body/--body-stdin is an error; to defer the body, omit\n\
+    \  the flag (flow 1).\n\
     \\n\
     \  Later edits (body already populated): Read $(icarium <kind> path <id>)\n\
     \  then Edit. Claude Code's Edit tool requires a prior Read of the path.\n\
@@ -63,11 +65,21 @@ guide =
     \  icarium link add <task> depends-on <task>\n\
     \  icarium link add <task> references <ctx>\n\
     \\n\
+    \Categories (two axes: domain, discipline)\n\
+    \  --domain/--discipline values must already be registered:\n\
+    \  icarium category list\n\
+    \  icarium category add --axis domain <name>  # idempotent; updates\n\
+    \                                             # icarium.toml + DB\n\
+    \\n\
     \Task lifecycle\n\
     \  idea -> planned -> ready -> in-progress -> done\n\
     \                                         \\-> blocked  (requires --block-reason)\n\
     \  (abandoned is the dead-end state.) Dispatch picks up ready tasks whose\n\
     \  dependencies are done.\n\
+    \\n\
+    \  icarium task start <id>                # -> in-progress\n\
+    \  icarium task done <id>                 # -> done\n\
+    \  Other transitions: icarium task update <id> --state <state>\n\
     \\n\
     \Reviewers (if [review] is enabled in icarium.toml)\n\
     \  A reviewer agent grades your diff. If it returns `fail`, its findings are\n\

@@ -8,7 +8,9 @@ module Icarium.Commands.Category (
     syncCategories,
 ) where
 
-import Control.Monad (forM, forM_, when)
+import Control.Monad (forM, forM_, unless, void, when)
+import Data.Char (isAlphaNum, isAscii)
+import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -21,6 +23,8 @@ import Icarium.Commands.Util
 import Icarium.Config (
     CategoriesConfig (..),
     Config (..),
+    addCategoryToToml,
+    defaultConfigPath,
  )
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render
@@ -28,13 +32,18 @@ import Icarium.Repo.Category qualified as RC
 import Icarium.Types
 
 data Command
-    = List ListOpts
+    = Add AddOpts
+    | List ListOpts
     | Sync SyncOpts
 
 parser :: Parser Command
 parser =
     subparser
-        ( subcmd "list" "List categories (alias: ls)" (List <$> listP)
+        ( subcmd
+            "add"
+            "Register a category (updates icarium.toml and the DB; idempotent)."
+            (Add <$> addP)
+            <> subcmd "list" "List categories (alias: ls)" (List <$> listP)
             <> subcmd
                 "sync"
                 "Reconcile icarium.toml [categories] → DB. Use --prune to delete DB-only categories."
@@ -43,8 +52,57 @@ parser =
 
 run :: FilePath -> Command -> IO ()
 run db = \case
+    Add o -> runAdd db o
     List o -> runList db o
     Sync o -> runSync db o
+
+-- ------------------------------------------------------------------ add
+
+data AddOpts = AddOpts
+    { aAxis :: CategoryAxis
+    , aName :: Text
+    }
+
+addP :: Parser AddOpts
+addP =
+    AddOpts
+        <$> option
+            axisReader
+            ( long "axis"
+                <> metavar "AXIS"
+                <> help "Axis to register under (domain | discipline)."
+            )
+        <*> (T.pack <$> strArgument (metavar "NAME" <> help "Category name (letters, digits, . _ -)."))
+
+runAdd :: FilePath -> AddOpts -> IO ()
+runAdd db o = do
+    let name = aName o
+        axis = aAxis o
+        label = categoryAxisText axis <> ":" <> name
+    unless (validCategoryName name) $
+        fatal 2 ("invalid category name: '" <> T.unpack name <> "'; use letters, digits, '.', '_', '-'")
+    config <- requireConfig
+    let tomlNames = case axis of
+            Domain -> catDomains (cfgCategories config)
+            Discipline -> catDisciplines (cfgCategories config)
+        inToml = name `elem` tomlNames
+    withDb db $ \c -> do
+        mExisting <- RC.findCategory c axis name
+        if inToml && isJust mExisting
+            then TIO.putStrLn ("already registered " <> label)
+            else do
+                unless inToml $ do
+                    src <- TIO.readFile defaultConfigPath
+                    case addCategoryToToml axis name src of
+                        Left err -> fatal 2 err
+                        Right newSrc -> TIO.writeFile defaultConfigPath newSrc
+                when (isNothing mExisting) $
+                    void (RC.insertCategory c axis name)
+                TIO.putStrLn ("registered " <> label)
+
+validCategoryName :: Text -> Bool
+validCategoryName n =
+    not (T.null n) && T.all (\ch -> isAscii ch && (isAlphaNum ch || ch `elem` (".-_" :: String))) n
 
 -- ------------------------------------------------------------------ list
 

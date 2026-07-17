@@ -15,8 +15,12 @@ module Icarium.Config (
     -- * IO
     loadConfig,
     validateConfig,
+
+    -- * Editing
+    addCategoryToToml,
 ) where
 
+import Data.List (findIndex)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -24,7 +28,7 @@ import Data.Text.IO qualified as TIO
 import Toml (TomlCodec, (.=))
 import Toml qualified
 
-import Icarium.Types (Effort, effortText, parseEffort)
+import Icarium.Types (CategoryAxis (..), Effort, effortText, parseEffort)
 
 -- =============================================================
 -- Types
@@ -165,6 +169,62 @@ loadConfig fp = do
         Left errs -> Left (T.unpack (Toml.prettyTomlDecodeErrors errs))
         Right c -> validateConfig c
 
+{- | Append a category name to the axis's array in icarium.toml source text,
+preserving all other lines (comments included). Fails without modifying
+anything when the array line can't be located or the result no longer
+decodes — the caller falls back to telling the user to edit by hand.
+-}
+addCategoryToToml :: CategoryAxis -> Text -> Text -> Either String Text
+addCategoryToToml axis name src = do
+    let key = case axis of
+            Domain -> "domains"
+            Discipline -> "disciplines"
+        ls = T.lines src
+        manualHint =
+            "add \""
+                <> T.unpack name
+                <> "\" to the "
+                <> T.unpack key
+                <> " array in icarium.toml manually and run `icarium category sync`"
+    idx <- case findIndex (isArrayLine key) ls of
+        Just i -> Right i
+        Nothing ->
+            Left ("no single-line `" <> T.unpack key <> " = [...]` found in icarium.toml; " <> manualHint)
+    newLine <- insertIntoArray name (ls !! idx)
+    let out = T.unlines (take idx ls <> [newLine] <> drop (idx + 1) ls)
+    case Toml.decode configCodec out of
+        Left _ -> Left ("editing icarium.toml would corrupt it; " <> manualHint)
+        Right c
+            | name `elem` axisNames (cfgCategories c) -> Right out
+            | otherwise -> Left ("edit did not take effect; " <> manualHint)
+  where
+    axisNames = case axis of
+        Domain -> catDomains
+        Discipline -> catDisciplines
+
+-- | Matches @key = [ ... ]@ on one line, ignoring surrounding whitespace.
+isArrayLine :: Text -> Text -> Bool
+isArrayLine key l =
+    case T.stripPrefix key (T.stripStart l) of
+        Nothing -> False
+        Just rest -> case T.uncons (T.stripStart rest) of
+            Just ('=', arr) ->
+                let v = T.strip arr
+                 in "[" `T.isPrefixOf` v && "]" `T.isSuffixOf` v
+            _ -> False
+
+-- | Insert @"name"@ before the closing bracket of a single-line array.
+insertIntoArray :: Text -> Text -> Either String Text
+insertIntoArray name l =
+    let (beforeIncl, after) = T.breakOnEnd "]" l
+        before = T.dropEnd 1 beforeIncl
+        emptyArray = T.null (T.strip (T.drop 1 (snd (T.breakOn "[" before))))
+        quoted = "\"" <> name <> "\""
+        insertion = if emptyArray then quoted else ", " <> quoted
+     in if T.null beforeIncl
+            then Left ("no closing ] on line: " <> T.unpack l)
+            else Right (before <> insertion <> "]" <> after)
+
 -- | Template written by @icarium init@. Values must match the codec above.
 defaultConfigText :: Text
 defaultConfigText =
@@ -206,9 +266,10 @@ defaultConfigText =
     \# agreement_path = \".icarium/agreement.md\"\n\
     \\n\
     \[categories]\n\
-    \# Source of truth for the category vocabulary. Edit here, then run\n\
-    \# `icarium category sync` to apply changes to the DB. Use --prune to\n\
-    \# delete categories that have been removed from this list.\n\
+    \# Source of truth for the category vocabulary. Register new names with\n\
+    \# `icarium category add --axis domain <name>` (updates this file + DB),\n\
+    \# or edit here and run `icarium category sync` (--prune deletes removed\n\
+    \# names from the DB).\n\
     \domains     = [\"core\"]\n\
     \disciplines = [\"development\"]\n\
     \\n\

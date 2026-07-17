@@ -40,6 +40,8 @@ parser =
             <> subcmd "list" "List tasks (alias: ls)" (List <$> listP)
             <> subcmd "show" "Show task metadata. The body is intentionally not printed: Read $(icarium task path <id>) so a subsequent Edit can succeed (Claude Code's Edit tool requires a prior Read of the same path)." (Show <$> showP)
             <> subcmd "update" "Update task metadata. To edit the body: Read $(icarium task path <id>) then Edit." (Update <$> updateP)
+            <> subcmd "start" "Set state to in-progress. Shorthand for `update <id> --state in-progress`." (Update <$> stateShorthandP InProgress)
+            <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP Done)
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
             <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
             <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
@@ -293,6 +295,22 @@ updateP =
             ( flag' True (long "no-commit" <> help "Mark as side-effect-only (no code commits required)")
                 <|> flag' False (long "commit-required" <> help "Clear no-commit flag (commit required)")
             )
+
+-- | @task start@ / @task done@: an update that only sets the state.
+stateShorthandP :: TaskState -> Parser UpdateOpts
+stateShorthandP st = mk . T.pack <$> strArgument (metavar "TASK_ID")
+  where
+    mk tid =
+        UpdateOpts
+            { uId = tid
+            , uState = Just st
+            , uPriority = Nothing
+            , uTitle = Nothing
+            , uBlockReason = Nothing
+            , uDomain = Nothing
+            , uDiscipline = Nothing
+            , uNoCommit = Nothing
+            }
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do

@@ -63,17 +63,14 @@ taskStateText = \case
     Blocked -> "blocked"
     Abandoned -> "abandoned"
 
--- | CLI-facing parser: accepts hyphen form for InProgress.
+{- | CLI-facing parser. Canonical spelling is @in-progress@, but the
+underscore form is accepted too: @task show@ prints the stored
+@in_progress@, and pasting that back into @--state@ must not error.
+-}
 parseTaskState :: Text -> Maybe TaskState
 parseTaskState = \case
-    "idea" -> Just Idea
-    "planned" -> Just Planned
-    "ready" -> Just Ready
     "in-progress" -> Just InProgress
-    "done" -> Just Done
-    "blocked" -> Just Blocked
-    "abandoned" -> Just Abandoned
-    _ -> Nothing
+    other -> parseTaskStateDb other
 
 -- | Storage parser: accepts underscore form stored in the DB.
 parseTaskStateDb :: Text -> Maybe TaskState

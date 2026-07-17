@@ -128,7 +128,7 @@ cmdP =
                 "doctor"
                 ( info
                     (CmdDoctor <$> Doctor.parser <**> helper)
-                    (progDesc "Verify config, DB file, schema version, claude and git binaries, and orphaned dispatches.")
+                    (progDesc "Verify config, DB file, schema version, claude and git binaries, orphaned dispatches, and body files.")
                 )
             <> command
                 "task"
@@ -152,7 +152,7 @@ cmdP =
                 "category"
                 ( info
                     (CmdCategory <$> Category.parser <**> helper)
-                    (progDesc "Manage category vocabulary. Example: icarium category list --axis domain")
+                    (progDesc "Manage category vocabulary (add, list, sync). Example: icarium category add --axis domain infra")
                 )
             <> command
                 "dispatch"

@@ -1,12 +1,15 @@
 module Icarium.Commands.Doctor (Options, parser, run) where
 
 import Control.Monad (filterM)
+import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
 import Data.Time (UTCTime, getCurrentTime)
 import Options.Applicative
 import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..), exitWith)
 
+import Icarium.Bodies (bodiesDir, ctxBodyPath, taskBodyPath)
 import Icarium.Config (
     DispatchConfig (..),
     cfgDispatch,
@@ -15,9 +18,11 @@ import Icarium.Config (
  )
 import Icarium.Db (dbSchemaVersion, withDb)
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
+import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Repo.Task qualified as RT
 import Icarium.Schema (schemaVersion)
-import Icarium.Types (Dispatch (..))
+import Icarium.Types (Context (..), Dispatch (..), Task (..), TaskState (..))
 
 data Options = Options
 
@@ -42,7 +47,8 @@ run dbPath _ = do
             , checkBinary "git"
             ]
     orphans <- checkOrphanedDispatches dbPath
-    let checks = basic ++ orphans
+    bodies <- checkBodies dbPath
+    let checks = basic ++ orphans ++ bodies
     mapM_ printCheck checks
     if any isFail checks
         then exitWith (ExitFailure 2)
@@ -129,6 +135,47 @@ checkOrphanedDispatches dbPath = do
                     <> ": pid dead or heartbeat stale."
                     <> " Run `icarium dispatch recover` to reconcile."
             )
+
+{- | Every task/context row must have a non-empty body file on disk. This
+catches abandoned add-then-Write intermediates and out-of-band deletions
+(issue #13). Abandoned tasks are exempt — they're explicit dead ends.
+-}
+checkBodies :: FilePath -> IO [Check]
+checkBodies dbPath = do
+    dbOk <- doesFileExist dbPath
+    if not dbOk
+        then pure []
+        else do
+            (tasks, ctxs) <- withDb dbPath $ \conn -> do
+                ts <- RT.listTasks conn [] False Nothing Nothing
+                cxs <- RCx.listContexts conn Nothing True Nothing Nothing
+                pure (ts, cxs)
+            let live = filter ((/= Abandoned) . taskState) tasks
+            taskFails <- mapM (bodyFailure "task" taskBodyPath . taskId) live
+            ctxFails <- mapM (bodyFailure "ctx" ctxBodyPath . contextId) ctxs
+            let fails = concat (taskFails ++ ctxFails)
+            pure $
+                if null fails
+                    then [Check "bodies" (OK "every task/ctx body file present and non-empty")]
+                    else fails
+  where
+    bodyFailure :: String -> (FilePath -> Text -> FilePath) -> Text -> IO [Check]
+    bodyFailure kind pathFn nid = do
+        let fp = pathFn (bodiesDir dbPath) nid
+        exists <- doesFileExist fp
+        problem <-
+            if not exists
+                then pure (Just "body file missing")
+                else do
+                    content <- TIO.readFile fp
+                    pure $
+                        if T.null (T.strip content)
+                            then Just "body file empty"
+                            else Nothing
+        pure
+            [ Check "body" (FAIL (kind <> " " <> T.unpack (T.take 10 nid) <> ": " <> msg <> " — Write markdown to $(icarium " <> kind <> " path " <> T.unpack (T.take 10 nid) <> ")"))
+            | Just msg <- [problem]
+            ]
 
 isOrphanedDispatch :: UTCTime -> Int -> Dispatch -> IO Bool
 isOrphanedDispatch now staleSec d = do

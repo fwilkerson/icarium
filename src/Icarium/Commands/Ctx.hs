@@ -267,11 +267,15 @@ updateP =
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
 
+-- Must use flag' (no default) so a metadata-only update leaves the stale
+-- bit untouched: `switch` always succeeds, so the first alternative would
+-- yield Just True even without --stale on the command line (issue #14).
 staleFlag :: Parser (Maybe Bool)
 staleFlag =
-    (Just True <$ switch (long "stale" <> help "Mark entry as stale"))
-        <|> (Just False <$ switch (long "not-stale" <> help "Mark entry as not stale"))
-        <|> pure Nothing
+    optional
+        ( flag' True (long "stale" <> help "Mark entry as stale")
+            <|> flag' False (long "not-stale" <> help "Mark entry as not stale")
+        )
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do

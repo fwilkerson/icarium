@@ -115,10 +115,20 @@ bodyInputParser =
                 <> help "Read body from stdin (recommended for agents: pipe a heredoc). Alternative: omit and Write to the body path printed on stdout."
             )
 
+{- | Explicit body flags must carry content; a silent empty body files a
+title with no contract (issue #13). BodyNone stays legal: the
+add-then-Write flow defers the body on purpose.
+-}
 resolveBody :: BodyInput -> IO Text
 resolveBody BodyNone = pure ""
-resolveBody (BodyInline t) = pure t
-resolveBody BodyStdin = TIO.getContents
+resolveBody (BodyInline t) = requireBodyContent "--body" t
+resolveBody BodyStdin = TIO.getContents >>= requireBodyContent "--body-stdin"
+
+requireBodyContent :: String -> Text -> IO Text
+requireBodyContent flagName t
+    | T.null (T.strip t) =
+        fatal 2 (flagName <> ": empty body; to defer the body, omit the flag and Write to the path printed on stdout")
+    | otherwise = pure t
 
 -- | Shorthand for a subcommand with helper automatically attached.
 subcmd :: String -> String -> Parser a -> Mod CommandFields a
@@ -175,7 +185,11 @@ requireCategory c axis name = do
                     <> T.unpack (categoryAxisText axis)
                     <> ": "
                     <> T.unpack name
-                    <> "; add it to icarium.toml and run 'icarium category sync'"
+                    <> "; register it with `icarium category add --axis "
+                    <> T.unpack (categoryAxisText axis)
+                    <> " "
+                    <> T.unpack name
+                    <> "` (existing: `icarium category list`)"
 
 {- | Validate a @--domain@/@--discipline@ flag value for update commands.
 @Nothing@   = flag not given → no-op.
