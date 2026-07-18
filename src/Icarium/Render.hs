@@ -5,6 +5,7 @@ module Icarium.Render (
     renderTaskList,
     mkBar,
     renderContext,
+    isRetired,
     ContextRow (..),
     renderContextList,
     CurationQueueRow (..),

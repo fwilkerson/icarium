@@ -1,6 +1,6 @@
 ---
 name: curate-ctx
-description: Walk the ctx curation queue entry by entry — propose a disposition with reasoning, confirm with the human, record via `icarium ctx curate`. Use when the user says "curate ctx", "run the ctx sweep", "triage context entries", or invokes /curate-ctx. Requires a working dir with .icarium/ or icarium.toml.
+description: Walk the ctx curation queue entry by entry — propose a disposition with reasoning, confirm with the human, record via `icarium ctx curate`. Use when the user says "curate ctx", "run the ctx sweep", "sweep the context entries", or invokes /curate-ctx. Requires a working dir with .icarium/ or icarium.toml.
 argument-hint: "[--older-than DAYS]"
 allowed-tools: [Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion]
 ---

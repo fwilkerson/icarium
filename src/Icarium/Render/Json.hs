@@ -22,7 +22,7 @@ import Data.Aeson.Encoding qualified as E
 import Data.ByteString.Lazy qualified as BL
 import Data.Text (Text)
 
-import Icarium.Render (ContextRow (..), CurationQueueRow (..), SearchHitRow (..), TaskRow (..))
+import Icarium.Render (ContextRow (..), CurationQueueRow (..), SearchHitRow (..), TaskRow (..), isRetired)
 import Icarium.Repo.Search (SearchHit (..))
 import Icarium.Types
 
@@ -89,7 +89,7 @@ renderContextShowJson :: Context -> [Category] -> Text -> Maybe CurationEvent ->
 renderContextShowJson cx cats bodyPath mEvent =
     enc . E.pairs $
         contextCore cx
-            <> E.pair "retired" (E.bool (maybe False (dispositionRetires . curationDisposition) mEvent))
+            <> E.pair "retired" (E.bool (isRetired mEvent))
             <> E.pair "curation" (maybe E.null_ curationEnc mEvent)
             <> E.pair "body_path" (E.text bodyPath)
             <> catsSeries cats

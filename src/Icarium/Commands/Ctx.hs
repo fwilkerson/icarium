@@ -357,7 +357,7 @@ runCurateRecord db o cid disp = do
         fatal 2 "--older-than applies to the queue form (bare `icarium ctx curate`)"
     withDb db $ \c -> do
         cxid <- resolveOrFatal (RCx.resolveContextId c cid)
-        artifact <- resolveArtifact c disp (cArtifact o)
+        artifact <- requireArtifact c disp (cArtifact o)
         void $ RCur.insertCuration c cxid disp artifact (cNote o)
         TIO.putStrLn ("curated " <> cxid <> " " <> dispositionText disp)
 
@@ -365,8 +365,8 @@ runCurateRecord db o cid disp = do
 trail for content that went somewhere. Task/context artifacts are
 resolved to canonical full ids before storage.
 -}
-resolveArtifact :: Connection -> Disposition -> Maybe Text -> IO (Maybe Text)
-resolveArtifact c disp mArtifact = case (disp, mArtifact) of
+requireArtifact :: Connection -> Disposition -> Maybe Text -> IO (Maybe Text)
+requireArtifact c disp mArtifact = case (disp, mArtifact) of
     (Guidance, Nothing) -> missing "guidance" "the destination doc/skill path"
     (Rule, Nothing) -> missing "rule" "the rule/invariant/test name"
     (Refactor, Nothing) -> missing "refactor" "the filed task id"
