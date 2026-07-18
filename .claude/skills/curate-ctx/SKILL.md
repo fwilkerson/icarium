@@ -1,13 +1,13 @@
 ---
 name: curate-ctx
-description: Walk the ctx curation queue entry by entry — propose a disposition with reasoning, confirm with the human, record via `icarium ctx curate`. Use when the user says "curate ctx", "run the ctx sweep", "sweep the context entries", or invokes /curate-ctx. Requires a working dir with .icarium/ or icarium.toml.
+description: Walk the ctx curation queue — vet each entry against the current code, decide a disposition, record via `icarium ctx curate`, and hand the human a reviewable ledger. Use when the user says "curate ctx", "run the ctx sweep", "sweep the context entries", or invokes /curate-ctx. Requires a working dir with .icarium/ or icarium.toml.
 argument-hint: "[--older-than DAYS]"
 allowed-tools: [Read, Edit, Write, Grep, Glob, Bash, AskUserQuestion]
 ---
 
 # /curate-ctx — sweep accumulated context entries
 
-You are running the curation sweep (ADR 0001, vocabulary in CONTEXT.md). The tool records outcomes; judgment stays with the human. You propose, they decide.
+You are running the curation sweep (ADR 0001, vocabulary in CONTEXT.md). Vet each entry against the code, decide, record; the human reviews the ledger at the end. A wrong call is cheap to reverse (a later `keep` revives), so a decided sweep beats a queue of questions.
 
 ## Dispositions
 
@@ -21,12 +21,13 @@ guidance/rule/refactor/stale retire the entry (category injection stops; explici
 
 ## Loop
 
-1. `icarium ctx curate --json` — bare lists never-curated entries. Pass through `--older-than DAYS` if given; if the bare queue is empty, suggest `--older-than 90` before declaring the sweep done.
+1. `icarium ctx curate --json` — bare lists never-curated entries. Pass through `--older-than DAYS` if given; if the bare queue is empty, run `--older-than 90` before declaring the sweep done.
 2. Per entry, oldest first:
    a. `Read $(icarium ctx path <id>)` and `icarium ctx show <id>`. Check who points at it (`linked_count`, `icarium ctx children <id>`) — a well-referenced entry leans keep.
-   b. Form one proposed disposition with a one-line reason. Signals: repeated in dispatch prompts but never actionable → guidance; states a "never/always" the code could enforce → rule; complains about code shape → refactor; superseded or contradicted by current code → stale; still the best short answer to a live question → keep.
-   c. AskUserQuestion: proposed disposition first, labeled "(Recommended)", the plausible alternatives after; reason in the description. Offer "skip" via an option when genuinely unsure.
-   d. Do the paperwork the disposition implies, then record:
+   b. **Vet**: check every claim the code can settle — grep the named functions, flags, files, tests; run the commands the entry describes if cheap. Done when each claim is marked *holds*, *contradicted*, or *unsettleable*. A contradicted or code-absorbed claim is the strongest stale/graduated signal; `keep` is only available to an entry whose claims hold today.
+   c. Decide one disposition. Signals: repeated in dispatch prompts but never actionable → guidance; states a "never/always" the code could enforce → rule; complains about code shape → refactor; contradicted or superseded → stale; still the best short answer to a live question → keep.
+   d. Escalate to AskUserQuestion only when: vetting left a load-bearing claim unsettleable; the disposition would create or reshape a human-owned document (new ADR, CONTEXT.md); or the call hinges on the human's plans or priorities rather than code truth. Everything else: record without asking.
+   e. Do the paperwork the disposition implies, then record:
       - guidance: move the content into the doc/skill (write the edit now), then
         `icarium ctx curate <id> guidance --artifact <path>`
       - rule: encode it if small (lint config, test, invariant); else park as refactor instead.
@@ -36,11 +37,10 @@ guidance/rule/refactor/stale retire the entry (category injection stops; explici
         `icarium ctx curate <id> refactor --artifact <task-id>`
       - keep: `icarium ctx curate <id> keep`
       - stale: `icarium ctx curate <id> stale [--artifact <superseding-ctx-id>]`
-      Add `--note` when the reason won't be obvious later.
-3. After the queue: one-paragraph summary — counts per disposition, artifacts created, anything skipped and why.
+      Always pass `--note`: what you vetted and why this disposition — the note is the human's audit trail.
+3. After the queue, present the **ledger**: one line per entry — disposition, reason, what vetting showed — plus artifacts created. The human reverses any call by naming it; apply reversals with a fresh `ctx curate` event.
 
 ## Constraints
 
-- Never batch-record without per-entry confirmation; one AskUserQuestion per entry (group at most 3-4 trivially-similar entries into one question).
+- Group trivially-similar entries when escalating; one question covers at most 3-4 entries.
 - Don't delete entries or rewrite their bodies; retirement is the mechanism.
-- A wrong call is cheap to reverse (a later `keep` revives) — bias toward deciding over skipping.
