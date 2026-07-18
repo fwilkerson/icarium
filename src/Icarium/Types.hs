@@ -24,6 +24,10 @@ module Icarium.Types (
     ReviewVerdict (..),
     reviewVerdictText,
     parseReviewVerdict,
+    Disposition (..),
+    dispositionText,
+    parseDisposition,
+    dispositionRetires,
 
     -- * Records
     Task (..),
@@ -31,6 +35,7 @@ module Icarium.Types (
     Edge (..),
     Category (..),
     Dispatch (..),
+    CurationEvent (..),
 ) where
 
 import Data.Text (Text)
@@ -223,7 +228,6 @@ data Context = Context
     { contextId :: Text
     , contextTitle :: Text
     , contextBody :: Text
-    , contextStale :: Bool
     , contextCreatedAt :: Text
     , contextUpdatedAt :: Text
     }
@@ -233,7 +237,6 @@ instance FromRow Context where
     fromRow =
         Context
             <$> field
-            <*> field
             <*> field
             <*> field
             <*> field
@@ -310,6 +313,59 @@ instance FromField ReviewVerdict where
     fromField = enumFromField "review verdict" parseReviewVerdict
 instance ToField ReviewVerdict where
     toField = toField . reviewVerdictText
+
+-- | Outcome of curating a context entry (ADR 0001).
+data Disposition = Guidance | Rule | Refactor | Keep | Stale
+    deriving (Show, Eq)
+
+dispositionText :: Disposition -> Text
+dispositionText = \case
+    Guidance -> "guidance"
+    Rule -> "rule"
+    Refactor -> "refactor"
+    Keep -> "keep"
+    Stale -> "stale"
+
+parseDisposition :: Text -> Maybe Disposition
+parseDisposition = \case
+    "guidance" -> Just Guidance
+    "rule" -> Just Rule
+    "refactor" -> Just Refactor
+    "keep" -> Just Keep
+    "stale" -> Just Stale
+    _ -> Nothing
+
+{- | ADR 0001: an entry whose latest disposition is anything but 'keep'
+is retired. Mirrors the SQL @retired_context@ view.
+-}
+dispositionRetires :: Disposition -> Bool
+dispositionRetires = (/= Keep)
+
+instance FromField Disposition where
+    fromField = enumFromField "disposition" parseDisposition
+instance ToField Disposition where
+    toField = toField . dispositionText
+
+-- | A row in @context_curation@; append-only, latest event wins.
+data CurationEvent = CurationEvent
+    { curationId :: Text
+    , curationContextId :: Text
+    , curationDisposition :: Disposition
+    , curationArtifact :: Maybe Text
+    , curationNote :: Maybe Text
+    , curationCreatedAt :: Text
+    }
+    deriving (Show, Eq)
+
+instance FromRow CurationEvent where
+    fromRow =
+        CurationEvent
+            <$> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
+            <*> field
 
 {- | A row in the @dispatches@ table. Columns kept in the order the
 schema declares them so @FromRow@ lines up with @SELECT *@.

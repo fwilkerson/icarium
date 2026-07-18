@@ -12,7 +12,7 @@ module Icarium.Repo.Search (
 import Data.List (sortBy)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, Query (..), SQLData (..), query)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), query, (:.) (..))
 
 import Icarium.Repo.Internal (taskCols)
 import Icarium.Types
@@ -26,7 +26,7 @@ data SearchHit = SearchHit
     , hitTitleMatch :: Bool
     , hitBodyMatch :: Bool
     , hitState :: Maybe TaskState
-    , hitStale :: Bool
+    , hitRetired :: Bool
     }
 
 data SearchScope = ScopeAll | ScopeTitle | ScopeBody
@@ -137,7 +137,7 @@ matchesBody pq body = case pq of
 
 {- | Search tasks and context for @q@. Returns @(total, results)@ where
 @total@ is the count before the limit is applied. Results are ranked:
-title hits first, non-stale before stale within the same tier, then
+title hits first, current before retired within the same tier, then
 updated_at DESC.
 -}
 searchEntries :: Connection -> Text -> SearchFilters -> Int -> IO (Int, [SearchHit])
@@ -156,7 +156,7 @@ searchEntries conn q filters limit
   where
     pq = parseQuery q
     rankHit a b = case compare (hitTitleMatch b) (hitTitleMatch a) of
-        EQ -> case compare (hitStale a) (hitStale b) of
+        EQ -> case compare (hitRetired a) (hitRetired b) of
             EQ -> compare (hitUpdatedAt b) (hitUpdatedAt a)
             o -> o
         o -> o
@@ -242,12 +242,12 @@ searchTasks conn pq filters = do
             , hitTitleMatch = matchesTitle pq (taskTitle t)
             , hitBodyMatch = matchesBody pq (taskBody t)
             , hitState = Just (taskState t)
-            , hitStale = False
+            , hitRetired = False
             }
 
 searchContexts :: Connection -> ParsedQuery -> SearchFilters -> IO [SearchHit]
 searchContexts conn pq filters = do
-    rows <- query conn sql allParams :: IO [Context]
+    rows <- query conn sql allParams :: IO [Context :. Only Bool]
     pure (map toHit rows)
   where
     ftsQ = buildFts5Query (sfScope filters) pq
@@ -264,11 +264,12 @@ searchContexts conn pq filters = do
         | otherwise = " AND " <> T.intercalate " AND " catCl
     sql =
         Query $
-            "SELECT id, title, body, stale, created_at, updated_at FROM context"
+            "SELECT id, title, body, created_at, updated_at,"
+                <> " id IN (SELECT context_id FROM retired_context) FROM context"
                 <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'context')"
                 <> extraWhere
     allParams = SQLText ftsQ : catPs
-    toHit cx =
+    toHit (cx :. Only retired) =
         SearchHit
             { hitId = contextId cx
             , hitKind = ContextNode
@@ -278,5 +279,5 @@ searchContexts conn pq filters = do
             , hitTitleMatch = matchesTitle pq (contextTitle cx)
             , hitBodyMatch = matchesBody pq (contextBody cx)
             , hitState = Nothing
-            , hitStale = contextStale cx
+            , hitRetired = retired
             }

@@ -137,7 +137,7 @@ tests =
         , testCase "search: OR returns union of token matches" testSearchOrSemantics
         , testCase "search: space-separated tokens find underscore-joined corpus entry" testSearchSnakeCaseFallback
         , testCase "search: --limit truncation shows footer with total count" testSearchTruncationFooter
-        , testCase "search: stale context ranks below live context at same relevance" testSearchStaleLast
+        , testCase "search: retired context ranks below current context at same relevance" testSearchRetiredLast
         , testCase "search: snippet collapses embedded newlines to single line" testSearchSnippetSingleLine
         , testCase "search: match-source indicator [t] shown for title-only match" testSearchMatchSourceTitle
         , testCase "search: match-source indicator [b] shown for body-only match" testSearchMatchSourceBody
@@ -208,8 +208,10 @@ tests =
           testCase "task add --body-stdin with empty stdin exits 2, files nothing" testAddEmptyBodyStdin
         , testCase "add --body with empty/whitespace text exits 2 (task and ctx)" testAddEmptyBodyInline
         , testCase "doctor: missing body file FAILs, ok after Write, abandoned exempt" testDoctorBodyCheck
-        , -- issue #14: only --stale/--not-stale touch the stale flag
-          testCase "ctx update: metadata-only change leaves stale untouched" testCtxUpdateStaleSemantics
+        , testCase "ctx curate records events; show renders latest; list hides retired" testCtxCurateLifecycle
+        , testCase "ctx curate validation: artifact rules per disposition" testCtxCurateValidation
+        , testCase "ctx curate queue: never-curated, --older-than, --json" testCtxCurateQueue
+        , testCase "task show --prompt: retired ref delivered, stale ref never" testPromptRetiredRefs
         , -- issue #15: category registration + state shorthands
           testCase "category add: registers in toml+DB, idempotent, unlocks --domain" testCategoryAdd
         , testCase "category add: invalid name exits 2" testCategoryAddBadName
@@ -802,20 +804,19 @@ testSearchTruncationFooter = withTempDb $ \db -> do
     code2 @?= ExitSuccess
     assertBool "no footer when all results fit" (not ("showing" `isInfixOf` out2))
 
-testSearchStaleLast :: IO ()
-testSearchStaleLast = withTempDb $ \db -> do
+testSearchRetiredLast :: IO ()
+testSearchRetiredLast = withTempDb $ \db -> do
     (_, liveOut, _) <- runIcarium db ["ctx", "add", "zqtoken live entry"]
     let liveId = take 10 (head (words liveOut))
-    (_, staleOut, _) <- runIcarium db ["ctx", "add", "zqtoken stale entry"]
-    let staleId = take 10 (head (words staleOut))
-    -- mark the stale entry as stale
-    (_, _, _) <- runIcarium db ["ctx", "update", staleId, "--stale"]
+    (_, retiredOut, _) <- runIcarium db ["ctx", "add", "zqtoken retired entry"]
+    let retiredId = take 10 (head (words retiredOut))
+    (_, _, _) <- runIcarium db ["ctx", "curate", retiredId, "stale"]
     (code, out, _) <- runIcarium db ["search", "zqtoken"]
     code @?= ExitSuccess
     let outLines = lines out
         liveIdx = head [i | (i, l) <- zip [0 :: Int ..] outLines, liveId `isInfixOf` l]
-        staleIdx = head [i | (i, l) <- zip [0 :: Int ..] outLines, staleId `isInfixOf` l]
-    assertBool "live entry ranks above stale entry" (liveIdx < staleIdx)
+        retiredIdx = head [i | (i, l) <- zip [0 :: Int ..] outLines, retiredId `isInfixOf` l]
+    assertBool "live entry ranks above retired entry" (liveIdx < retiredIdx)
 
 testSearchSnippetSingleLine :: IO ()
 testSearchSnippetSingleLine = withTempDb $ \db -> do
@@ -2277,24 +2278,119 @@ testDoctorBodyCheck = withTempDb $ \db -> do
     assertBool "abandoned bodyless task exempt" ("ok    bodies" `isInfixOf` out3)
 
 -- =============================================================
--- ctx update stale semantics (issue #14)
+-- ctx curate (ADR 0001)
 -- =============================================================
 
-testCtxUpdateStaleSemantics :: IO ()
-testCtxUpdateStaleSemantics = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["ctx", "add", "stale semantics entry", "--body", "claim"]
+testCtxCurateLifecycle :: IO ()
+testCtxCurateLifecycle = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "curated entry", "--body", "claim"]
     let cid = take 10 (head (words addOut))
-        staleLine out = head [l | l <- lines out, "stale:" `isInfixOf` l]
-    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--title", "renamed"]
-    (_, sOut, _) <- runIcarium db ["ctx", "show", cid]
-    assertBool "title-only update leaves stale=no" ("no" `isInfixOf` staleLine sOut)
-    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--stale"]
+    -- never curated: current, no curated line
+    (_, sOut0, _) <- runIcarium db ["ctx", "show", cid]
+    assertBool "starts current" ("status:   current" `isInfixOf` sOut0)
+    assertBool "no curated line before any event" (not ("curated:" `isInfixOf` sOut0))
+    -- guidance retires the entry and records the artifact
+    (gCode, _, _) <- runIcarium db ["ctx", "curate", cid, "guidance", "--artifact", "docs/foo.md"]
+    gCode @?= ExitSuccess
+    (_, sOut1, _) <- runIcarium db ["ctx", "show", cid]
+    assertBool "guidance retires" ("status:   retired" `isInfixOf` sOut1)
+    assertBool "latest event rendered" ("curated:  guidance" `isInfixOf` sOut1)
+    assertBool "artifact rendered" ("artifact: docs/foo.md" `isInfixOf` sOut1)
+    -- retired entries hidden from ctx list by default, shown with --retired
+    (_, lOut, _) <- runIcarium db ["ctx", "list"]
+    assertBool "retired hidden from list" (not ("curated entry" `isInfixOf` lOut))
+    (_, lrOut, _) <- runIcarium db ["ctx", "list", "--retired"]
+    assertBool "shown under --retired" ("curated entry" `isInfixOf` lrOut)
+    assertBool "[retired] marker" ("[retired]" `isInfixOf` lrOut)
+    -- a later keep event revives the entry
+    (kCode, _, _) <- runIcarium db ["ctx", "curate", cid, "keep"]
+    kCode @?= ExitSuccess
     (_, sOut2, _) <- runIcarium db ["ctx", "show", cid]
-    assertBool "--stale sets the flag" ("yes" `isInfixOf` staleLine sOut2)
-    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--not-stale"]
-    (_, _, _) <- runIcarium db ["ctx", "update", cid, "--domain", ""]
-    (_, sOut3, _) <- runIcarium db ["ctx", "show", cid]
-    assertBool "metadata update after --not-stale leaves stale=no" ("no" `isInfixOf` staleLine sOut3)
+    assertBool "keep revives" ("status:   current" `isInfixOf` sOut2)
+    -- old flags are gone
+    (uCode, _, _) <- runIcarium db ["ctx", "update", cid, "--stale"]
+    assertBool "ctx update --stale removed" (uCode /= ExitSuccess)
+
+testCtxCurateValidation :: IO ()
+testCtxCurateValidation = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "validated entry", "--body", "claim"]
+    let cid = take 10 (head (words addOut))
+    -- guidance/rule/refactor require an artifact; error names the fix
+    (c1, _, e1) <- runIcarium db ["ctx", "curate", cid, "guidance"]
+    c1 @?= ExitFailure 2
+    assertBool "error names --artifact" ("--artifact" `isInfixOf` e1)
+    -- refactor artifact must resolve to a task id
+    (c2, _, e2) <- runIcarium db ["ctx", "curate", cid, "refactor", "--artifact", "nosuchtask"]
+    c2 @?= ExitFailure 2
+    assertBool "refactor rejects unknown task" ("task" `isInfixOf` e2)
+    (_, tOut, _) <- runIcarium db ["task", "add", "extracted refactor", "--state", "ready"]
+    let tid = take 10 (head (words tOut))
+    (c3, _, _) <- runIcarium db ["ctx", "curate", cid, "refactor", "--artifact", tid]
+    c3 @?= ExitSuccess
+    -- keep rejects an artifact
+    (c4, _, e4) <- runIcarium db ["ctx", "curate", cid, "keep", "--artifact", "docs/x.md"]
+    c4 @?= ExitFailure 2
+    assertBool "keep rejects artifact" ("keep" `isInfixOf` e4)
+    -- stale artifact, when given, must resolve to a context entry
+    (c5, _, e5) <- runIcarium db ["ctx", "curate", cid, "stale", "--artifact", "nosuchctx"]
+    c5 @?= ExitFailure 2
+    assertBool "stale rejects unknown ctx artifact" ("context" `isInfixOf` e5)
+    -- bad disposition is a usage error listing the vocabulary
+    (c6, _, e6) <- runIcarium db ["ctx", "curate", cid, "bogus"]
+    assertBool "bad disposition rejected" (c6 /= ExitSuccess)
+    assertBool "error lists dispositions" ("guidance" `isInfixOf` e6)
+
+testCtxCurateQueue :: IO ()
+testCtxCurateQueue = withTempDb $ \db -> do
+    (_, aOut, _) <- runIcarium db ["ctx", "add", "queue alpha entry"]
+    let aId = take 10 (head (words aOut))
+    (_, bOut, _) <- runIcarium db ["ctx", "add", "queue beta entry"]
+    let bId = take 10 (head (words bOut))
+    (_, _, _) <- runIcarium db ["ctx", "curate", bId, "keep"]
+    -- bare queue: never-curated only
+    (code, out, _) <- runIcarium db ["ctx", "curate"]
+    code @?= ExitSuccess
+    assertBool "never-curated entry queued" (aId `isInfixOf` out)
+    assertBool "never-curated label shown" ("never curated" `isInfixOf` out)
+    assertBool "curated entry not in bare queue" (not (bId `isInfixOf` out))
+    -- --older-than 0 adds the aged entry with its last disposition
+    (code2, out2, _) <- runIcarium db ["ctx", "curate", "--older-than", "0"]
+    code2 @?= ExitSuccess
+    assertBool "aged entry joins queue" (bId `isInfixOf` out2)
+    assertBool "aged entry shows last disposition" ("keep" `isInfixOf` out2)
+    -- --json is machine-readable with last_curation null / object
+    (code3, out3, _) <- runIcarium db ["ctx", "curate", "--older-than", "0", "--json"]
+    code3 @?= ExitSuccess
+    case decode (BLC.pack out3) :: Maybe [Object] of
+        Nothing -> assertBool "queue --json parses" False
+        Just objs -> do
+            length objs @?= 2
+            let lastCurations = [KM.lookup "last_curation" o | o <- objs]
+            assertBool "one never-curated (null)" (Just Null `elem` lastCurations)
+    -- empty queue exits 0
+    (_, _, _) <- runIcarium db ["ctx", "curate", aId, "keep"]
+    (code4, out4, _) <- runIcarium db ["ctx", "curate"]
+    code4 @?= ExitSuccess
+    assertBool "empty queue message" ("nothing to curate" `isInfixOf` out4)
+
+testPromptRetiredRefs :: IO ()
+testPromptRetiredRefs = withTempDb $ \db -> do
+    (_, tOut, _) <- runIcarium db ["task", "add", "prompt task", "--state", "ready"]
+    let tid = take 10 (head (words tOut))
+    (_, rOut, _) <- runIcarium db ["ctx", "add", "refactored ref", "--body", "xrefactorbody"]
+    let rId = take 10 (head (words rOut))
+    (_, sOut, _) <- runIcarium db ["ctx", "add", "staled ref", "--body", "xstalebody"]
+    let sId = take 10 (head (words sOut))
+    (_, _, _) <- runIcarium db ["link", "add", tid, "references", rId]
+    (_, _, _) <- runIcarium db ["link", "add", tid, "references", sId]
+    (_, tOut2, _) <- runIcarium db ["task", "add", "refactor target", "--state", "ready"]
+    let tid2 = take 10 (head (words tOut2))
+    (_, _, _) <- runIcarium db ["ctx", "curate", rId, "refactor", "--artifact", tid2]
+    (_, _, _) <- runIcarium db ["ctx", "curate", sId, "stale"]
+    (code, out, _) <- runIcarium db ["task", "show", tid, "--prompt"]
+    code @?= ExitSuccess
+    assertBool "refactor-retired ref still injected" ("xrefactorbody" `isInfixOf` out)
+    assertBool "stale ref never injected" (not ("xstalebody" `isInfixOf` out))
 
 -- =============================================================
 -- category add (issue #15)

@@ -22,6 +22,7 @@ import Icarium.Migrations (Migration (..), migrations, mkSqlMigration)
 import Icarium.Render (renderTaskPrompt)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RK
+import Icarium.Repo.Curation qualified as RCur
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Search (ParsedQuery (..), Term (..), parseQuery)
@@ -43,12 +44,20 @@ tests =
         , testGroup
             "categoryMatchedContexts"
             [ testCase "both-axis match appears under Related context" testBothAxisMatch
-            , testCase "stale context excluded from auto-pull" testStaleExcluded
+            , testCase "retired context excluded from auto-pull" testRetiredExcluded
+            , testCase "keep-curated context still auto-pulls" testKeepStillCurrent
             , testCase "zero categories yields empty result" testNoCats
             , testCase "explicit ref deduped from auto-pull" testDedup
             , testCase "cap at 5, ordered most-recent-first" testCap
             , testCase "one-axis match excluded when task has both axes" testOneAxisMismatch
-            , testCase "stale explicit ref still renders under refs" testStaleRef
+            ]
+        , testGroup
+            "curation (ADR 0001: derived retirement)"
+            [ testCase "latest event wins: stale then keep revives the entry" testLatestEventWins
+            , testCase "refactor-retired explicit ref still delivered" testRetiredRefDelivered
+            , testCase "stale explicit ref never delivered" testStaleRefNeverDelivered
+            , testCase "deleting an entry cascades to its curation events" testCurationCascade
+            , testCase "migration 13 backfills stale rows, drops the column" testMigration13Backfill
             ]
         , testGroup
             "schema"
@@ -241,14 +250,23 @@ testBothAxisMatch = withTestDb $ \c -> do
     assertBool "Hedge sentence present" ("use judgment" `T.isInfixOf` prompt)
     assertBool "Context title in prompt" ("Match K" `T.isInfixOf` prompt)
 
-testStaleExcluded :: IO ()
-testStaleExcluded = withTestDb $ \c -> do
+testRetiredExcluded :: IO ()
+testRetiredExcluded = withTestDb $ \c -> do
     domCat <- mkCat c Domain "cli"
-    kid <- mkContext c "Stale K" "stale body"
+    kid <- mkContext c "Retired K" "retired body"
     attachContextCats c kid [domCat]
-    void $ RK.updateContext c kid RK.emptyUpdate{RK.cuStale = Just True}
+    void $ RCur.insertCuration c kid Guidance (Just "docs/foo.md") Nothing
     result <- RK.categoryMatchedContexts c [domCat] 5
     null result @?= True
+
+testKeepStillCurrent :: IO ()
+testKeepStillCurrent = withTestDb $ \c -> do
+    domCat <- mkCat c Domain "cli"
+    kid <- mkContext c "Kept K" "kept body"
+    attachContextCats c kid [domCat]
+    void $ RCur.insertCuration c kid Keep Nothing Nothing
+    result <- RK.categoryMatchedContexts c [domCat] 5
+    map contextId result @?= [kid]
 
 testNoCats :: IO ()
 testNoCats = withTestDb $ \c -> do
@@ -302,17 +320,103 @@ testOneAxisMismatch = withTestDb $ \c -> do
     result <- RK.categoryMatchedContexts c [domCat, discCat] 5
     null result @?= True
 
-testStaleRef :: IO ()
-testStaleRef = withTestDb $ \c -> do
-    kid <- mkContext c "Stale ref" "stale ref body"
-    void $ RK.updateContext c kid RK.emptyUpdate{RK.cuStale = Just True}
-    mk <- RK.getContext c kid
-    case mk of
-        Nothing -> fail "context not found after insert"
-        Just k -> do
-            let prompt = renderTaskPrompt minTask [k] [] []
-            assertBool "stale ref body in prompt" ("stale ref body" `T.isInfixOf` prompt)
-            assertBool "Referenced context header" ("## Referenced context" `T.isInfixOf` prompt)
+-- =============================================================
+-- Curation tests (ADR 0001)
+-- =============================================================
+
+{- | Same-second events tie-break on id; pin distinct created_at values so
+the test exercises the ordering contract, not ULID luck.
+-}
+insertCurationAt :: Connection -> Text -> Text -> Disposition -> Text -> IO ()
+insertCurationAt c eid kid disp at =
+    execute
+        c
+        (Query "INSERT INTO context_curation (id, context_id, disposition, created_at) VALUES (?,?,?,?)")
+        (eid, kid, disp, at)
+
+testLatestEventWins :: IO ()
+testLatestEventWins = withTestDb $ \c -> do
+    kid <- mkContext c "Revived K" "body"
+    insertCurationAt c "01EV0000000000000000000001" kid Stale "2026-01-01 00:00:00"
+    retired1 <- RCur.retiredContextIds c [kid]
+    retired1 @?= [kid]
+    insertCurationAt c "01EV0000000000000000000002" kid Keep "2026-01-02 00:00:00"
+    retired2 <- RCur.retiredContextIds c [kid]
+    retired2 @?= []
+    mEvent <- RCur.latestCuration c kid
+    fmap curationDisposition mEvent @?= Just Keep
+
+mkTaskWithRef :: Connection -> Text -> IO (Text, Text)
+mkTaskWithRef c title = do
+    tid <-
+        RT.insertTask
+            c
+            RT.NewTask
+                { RT.ntTitle = title
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    kid <- mkContext c (title <> " ref") (title <> " ref body")
+    void $ RE.insertEdge c References TaskNode tid ContextNode kid
+    pure (tid, kid)
+
+testRetiredRefDelivered :: IO ()
+testRetiredRefDelivered = withTestDb $ \c -> do
+    (tid, kid) <- mkTaskWithRef c "Refactored"
+    void $ RCur.insertCuration c kid Refactor (Just tid) Nothing
+    refs <- RE.referencedContexts c tid
+    map contextId refs @?= [kid]
+    let prompt = renderTaskPrompt minTask refs [] []
+    assertBool "retired ref body in prompt" ("Refactored ref body" `T.isInfixOf` prompt)
+
+testStaleRefNeverDelivered :: IO ()
+testStaleRefNeverDelivered = withTestDb $ \c -> do
+    (tid, kid) <- mkTaskWithRef c "Staled"
+    void $ RCur.insertCuration c kid Stale Nothing Nothing
+    refs <- RE.referencedContexts c tid
+    refs @?= []
+
+testCurationCascade :: IO ()
+testCurationCascade = withTestDb $ \c -> do
+    kid <- mkContext c "Doomed K" "body"
+    void $ RCur.insertCuration c kid Keep Nothing Nothing
+    void $ RK.deleteContext c kid
+    evs <- query_ c "SELECT id FROM context_curation" :: IO [Only Text]
+    evs @?= []
+
+{- | applySchema always stamps the latest schemaVersion, so a v12 DB can't
+be built that way; hand-write the pre-migration-13 context table (with the
+stale column and view) instead.
+-}
+testMigration13Backfill :: IO ()
+testMigration13Backfill = do
+    conn <- open ":memory:"
+    execSql
+        conn
+        "CREATE TABLE context (\
+        \id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', \
+        \stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0,1)), \
+        \created_at TEXT NOT NULL DEFAULT (datetime('now')), \
+        \updated_at TEXT NOT NULL DEFAULT (datetime('now'))); \
+        \CREATE VIEW stale_context AS SELECT k.* FROM context k WHERE k.stale = 1;"
+    execute_
+        conn
+        "INSERT INTO context (id, title, stale, updated_at) VALUES \
+        \('01MIGSTALE0000000000000001', 'Old stale', 1, '2026-01-01 00:00:00'), \
+        \('01MIGLIVE00000000000000002', 'Live', 0, '2026-01-01 00:00:00')"
+    let m13 = case filter ((== 13) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 13 not registered"
+    migrationUp m13 conn
+    cols <- query_ conn "SELECT name FROM pragma_table_info('context')" :: IO [Only Text]
+    assertBool "stale column dropped" (Only ("stale" :: Text) `notElem` cols)
+    evs <- query_ conn "SELECT id, context_id, disposition FROM context_curation" :: IO [(Text, Text, Text)]
+    evs @?= [("backfill-01MIGSTALE0000000000000001", "01MIGSTALE0000000000000001", "stale")]
+    retired <- query_ conn "SELECT context_id FROM retired_context" :: IO [Only Text]
+    retired @?= [Only "01MIGSTALE0000000000000001"]
+    close conn
 
 -- =============================================================
 -- Schema tests

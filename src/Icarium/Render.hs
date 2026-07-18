@@ -7,6 +7,8 @@ module Icarium.Render (
     renderContext,
     ContextRow (..),
     renderContextList,
+    CurationQueueRow (..),
+    renderCurationQueue,
     formatLinkedCount,
     renderEdgeLine,
     renderCategory,
@@ -48,9 +50,10 @@ data TaskRow = TaskRow
 
 @utf8@: True → Unicode tree glyphs; False → ASCII fallback.
 @bodyPath@: path to the body file on disk (agents @Read@ this to see content).
+@retiredIds@: refs among these ids get a [retired] marker in the links tree.
 -}
-renderTaskHuman :: Bool -> Task -> Text -> [Context] -> [Task] -> [Category] -> Text
-renderTaskHuman utf8 t bodyPath refs deps cats =
+renderTaskHuman :: Bool -> Task -> Text -> [Context] -> [Task] -> [Category] -> [Text] -> Text
+renderTaskHuman utf8 t bodyPath refs deps cats retiredIds =
     T.unlines $
         [ "id:        " <> taskId t
         , "title:     " <> taskTitle t
@@ -66,7 +69,7 @@ renderTaskHuman utf8 t bodyPath refs deps cats =
                ]
             <> categoriesBlock cats
             <> [""]
-            <> linksSection utf8 t deps refs
+            <> linksSection utf8 t deps refs retiredIds
 
 priorityLine :: Task -> Text
 priorityLine t = case taskPriority t of
@@ -94,9 +97,9 @@ claimLines t =
 All depends-on edges first (sorted by target id ASC), then references.
 Last edge gets └─ (or \- in ASCII mode); others get ├─ (or +-).
 -}
-linksSection :: Bool -> Task -> [Task] -> [Context] -> [Text]
-linksSection _ _ [] [] = ["## Links", "", "(none)", ""]
-linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
+linksSection :: Bool -> Task -> [Task] -> [Context] -> [Text] -> [Text]
+linksSection _ _ [] [] _ = ["## Links", "", "(none)", ""]
+linksSection utf8 t deps refs retiredIds = ["## Links", "", rootLine] <> edgeLines <> [""]
   where
     rootLine = T.take 10 (taskId t) <> "  " <> taskTitle t
 
@@ -119,7 +122,7 @@ linksSection utf8 t deps refs = ["## Links", "", rootLine] <> edgeLines <> [""]
             titStr = either taskTitle contextTitle e
             suffix = case e of
                 Left dep -> "  [" <> taskStateText (taskState dep) <> "]"
-                Right ref -> if contextStale ref then "  [STALE]" else ""
+                Right ref -> if contextId ref `elem` retiredIds then "  [retired]" else ""
          in g <> " " <> padr kindWidth kindStr <> "  " <> idStr <> "  " <> titStr <> suffix
 
     edgeLines = zipWith mkEdge [0 ..] allEdges
@@ -297,22 +300,42 @@ formatEdgeCounts d r =
 -- Context rendering
 -- =============================================================
 
-renderContext :: Context -> [Category] -> Text -> Text
-renderContext k cats bodyPath =
+{- | @mEvent@: the entry's latest curation event; drives the derived
+status line (current/retired) and the curated line.
+-}
+renderContext :: Context -> [Category] -> Text -> Maybe CurationEvent -> Text
+renderContext k cats bodyPath mEvent =
     T.unlines $
         [ "id:       " <> contextId k
         , "title:    " <> contextTitle k
-        , "stale:    " <> (if contextStale k then "yes" else "no")
-        , "created:  " <> contextCreatedAt k
-        , "updated:  " <> contextUpdatedAt k
-        , "body:     " <> bodyPath
+        , "status:   " <> (if isRetired mEvent then "retired" else "current")
         ]
+            <> curatedLine
+            <> [ "created:  " <> contextCreatedAt k
+               , "updated:  " <> contextUpdatedAt k
+               , "body:     " <> bodyPath
+               ]
             <> categoriesBlock cats
+  where
+    curatedLine = case mEvent of
+        Nothing -> []
+        Just e ->
+            [ "curated:  "
+                <> dispositionText (curationDisposition e)
+                <> "  "
+                <> curationCreatedAt e
+                <> maybe "" ("  artifact: " <>) (curationArtifact e)
+            ]
+
+-- | Derived visibility: current = never curated or latest 'keep'.
+isRetired :: Maybe CurationEvent -> Bool
+isRetired = maybe False (dispositionRetires . curationDisposition)
 
 data ContextRow = ContextRow
     { crContext :: Context
     , crCats :: [Category]
     , crLinked :: Int
+    , crRetired :: Bool
     }
 
 -- | Format a linked-count badge. Empty string when count is 0.
@@ -334,8 +357,35 @@ renderContextList utf8 rows = T.unlines $ map row rows
             catPart = padr catWidth (formatCats (crCats cr))
             linked = formatLinkedCount (crLinked cr)
             linkedPart = if T.null linked then "" else "  " <> linked
-            stalePart = if contextStale k then "  [stale]" else ""
-         in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> stalePart
+            retiredPart = if crRetired cr then "  [retired]" else ""
+         in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> retiredPart
+
+-- =============================================================
+-- Curation queue rendering
+-- =============================================================
+
+data CurationQueueRow = CurationQueueRow
+    { cqContext :: Context
+    , cqCats :: [Category]
+    , cqLastEvent :: Maybe CurationEvent -- Nothing = never curated
+    }
+
+renderCurationQueue :: Bool -> [CurationQueueRow] -> Text
+renderCurationQueue _ [] = "(nothing to curate)\n"
+renderCurationQueue utf8 rows = T.unlines $ map row rows
+  where
+    titleWidth = min recommendedTitleMax (maxLen recommendedTitleMax (map (T.length . contextTitle . cqContext) rows))
+    catWidth = maxLen 3 (map (T.length . formatCats . cqCats) rows)
+
+    row cq =
+        let k = cqContext cq
+            idPart = "  " <> T.take 10 (contextId k)
+            titPart = padr titleWidth (truncateTitle utf8 titleWidth (contextTitle k))
+            catPart = padr catWidth (formatCats (cqCats cq))
+            lastPart = case cqLastEvent cq of
+                Nothing -> "never curated"
+                Just e -> dispositionText (curationDisposition e) <> " " <> curationCreatedAt e
+         in idPart <> "  " <> titPart <> "  " <> catPart <> "  " <> lastPart
 
 renderEdgeLine :: Edge -> Text
 renderEdgeLine e =
@@ -574,7 +624,7 @@ searchBadge h = case hitKind h of
     TaskNode -> case hitState h of
         Just s -> "[" <> stateBadgeText s <> "]"
         Nothing -> ""
-    ContextNode -> if hitStale h then "[stale]" else ""
+    ContextNode -> if hitRetired h then "[retired]" else ""
 
 extractSnippet :: Bool -> Text -> Text -> Text
 extractSnippet _ _ "" = ""

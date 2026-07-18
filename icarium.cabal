@@ -45,6 +45,7 @@ library
                       Icarium.Repo.Internal
                       Icarium.Repo.Task
                       Icarium.Repo.Context
+                      Icarium.Repo.Curation
                       Icarium.Repo.Edge
                       Icarium.Repo.Category
                       Icarium.Repo.Dispatch

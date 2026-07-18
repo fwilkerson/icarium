@@ -34,10 +34,26 @@ CREATE TABLE context (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     body        TEXT NOT NULL DEFAULT '',            -- markdown
-    stale       INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0,1)),
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Append-only record of curation decisions (ADR 0001). An entry's
+-- visibility (current/retired) is derived from its latest event; there is
+-- no stored staleness flag.
+CREATE TABLE context_curation (
+    id          TEXT PRIMARY KEY,                    -- ULID
+    context_id  TEXT NOT NULL REFERENCES context(id),
+    disposition TEXT NOT NULL
+                CHECK (disposition IN ('guidance','rule','refactor','keep','stale')),
+    artifact    TEXT,   -- where the content went: doc/skill path (guidance),
+                        -- rule/test name (rule), task id (refactor),
+                        -- superseding entry id (stale, optional)
+    note        TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX context_curation_context_idx ON context_curation(context_id);
 
 -- =============================================================
 -- Categories (two independent axes, user-defined vocabulary)
@@ -149,6 +165,14 @@ BEGIN
                          OR (dst_kind='context' AND dst_id=OLD.id);
 END;
 
+-- Connections do not enable PRAGMA foreign_keys, so the context_curation
+-- FK does not cascade on its own.
+CREATE TRIGGER context_curation_cascade_delete
+AFTER DELETE ON context
+BEGIN
+    DELETE FROM context_curation WHERE context_id = OLD.id;
+END;
+
 -- =============================================================
 -- Dispatches — one row per invocation of the headless agent.
 -- A task is "in progress" iff it has a dispatch with outcome IS NULL.
@@ -254,11 +278,26 @@ SELECT *
 FROM dispatches
 WHERE outcome IS NULL;
 
--- Context entries marked stale.
-CREATE VIEW stale_context AS
-SELECT k.*
-FROM context k
-WHERE k.stale = 1;
+-- Latest curation event per entry; history is never rewritten, the latest
+-- event wins. created_at has second resolution; ULID ids break same-second
+-- ties (ids embed a ms timestamp; same-ms writes for one entry don't
+-- happen — curation is one CLI call per entry).
+CREATE VIEW context_latest_curation AS
+SELECT cc.*
+FROM context_curation cc
+WHERE cc.id = (
+    SELECT id FROM context_curation
+    WHERE context_id = cc.context_id
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+);
+
+-- Effective retirement: current = never curated or latest 'keep';
+-- retired = latest is guidance/rule/refactor/stale.
+CREATE VIEW retired_context AS
+SELECT context_id, disposition
+FROM context_latest_curation
+WHERE disposition <> 'keep';
 
 -- =============================================================
 -- updated_at maintenance

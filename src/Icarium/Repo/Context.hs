@@ -2,6 +2,7 @@ module Icarium.Repo.Context (
     NewContext (..),
     ContextUpdate (..),
     emptyUpdate,
+    contextCols,
     insertContext,
     getContext,
     getContextsByPrefix,
@@ -41,13 +42,12 @@ data NewContext = NewContext
     , ncBody :: Text
     }
 
-data ContextUpdate = ContextUpdate
+newtype ContextUpdate = ContextUpdate
     { cuTitle :: Maybe Text
-    , cuStale :: Maybe Bool
     }
 
 emptyUpdate :: ContextUpdate
-emptyUpdate = ContextUpdate Nothing Nothing
+emptyUpdate = ContextUpdate Nothing
 
 insertContext :: Connection -> NewContext -> IO Text
 insertContext conn NewContext{..} = do
@@ -59,12 +59,15 @@ insertContext conn NewContext{..} = do
     Fts.indexEntry conn cid ContextNode ncTitle ncBody
     pure cid
 
+contextCols :: Text
+contextCols = "id, title, body, created_at, updated_at"
+
 getContext :: Connection -> Text -> IO (Maybe Context)
 getContext conn cid = do
     rows <-
         query
             conn
-            "SELECT id, title, body, stale, created_at, updated_at FROM context WHERE id = ?"
+            (Query $ "SELECT " <> contextCols <> " FROM context WHERE id = ?")
             (Only cid)
     pure $ case rows of
         (k : _) -> Just k
@@ -72,36 +75,37 @@ getContext conn cid = do
 
 -- | Context entries whose ULID starts with @prefix@.
 getContextsByPrefix :: Connection -> Text -> IO [Context]
-getContextsByPrefix conn = prefixLookup conn "context" "id, title, body, stale, created_at, updated_at"
+getContextsByPrefix conn = prefixLookup conn "context" contextCols
 
 -- | Resolve a user-supplied string to a canonical context ULID via prefix match.
 resolveContextId :: Connection -> Text -> IO (Either String Text)
 resolveContextId conn = resolveByPrefix (getContextsByPrefix conn) contextId "context"
 
-{- | List context entries. @staleFilter@: @Nothing@ = all entries,
-@Just True@ = stale only, @Just False@ = exclude stale.
+{- | List context entries. @retiredFilter@: @Nothing@ = all entries,
+@Just True@ = retired only, @Just False@ = current only (see the
+@retired_context@ view for the derived predicate).
 @includeSuperseded@: @False@ excludes entries that are the @dst@ of a
 @supersedes@ edge (i.e. older versions); @True@ keeps all entries.
 -}
 listContexts :: Connection -> Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> IO [Context]
-listContexts conn staleFilter includeSuperseded mDomain mDisc =
+listContexts conn retiredFilter includeSuperseded mDomain mDisc =
     query conn q params
   where
-    (whereClause, params) = ctxCatWhere staleFilter includeSuperseded mDomain mDisc
-    q = Query $ "SELECT id, title, body, stale, created_at, updated_at FROM context" <> whereClause <> " ORDER BY created_at ASC"
+    (whereClause, params) = ctxCatWhere retiredFilter includeSuperseded mDomain mDisc
+    q = Query $ "SELECT " <> contextCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
 
 ctxCatWhere :: Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
-ctxCatWhere staleFilter includeSuperseded mDomain mDisc =
+ctxCatWhere retiredFilter includeSuperseded mDomain mDisc =
     let catSubq axis =
             "id IN (SELECT context_id FROM context_categories cc"
                 <> " JOIN categories c ON c.id = cc.category_id"
                 <> " WHERE c.axis = '"
                 <> axis
                 <> "' AND c.name = ?)"
-        staleClauses = case staleFilter of
+        retiredClauses = case retiredFilter of
             Nothing -> []
-            Just True -> ["stale = 1"]
-            Just False -> ["stale = 0"]
+            Just True -> ["id IN (SELECT context_id FROM retired_context)"]
+            Just False -> ["id NOT IN (SELECT context_id FROM retired_context)"]
         catFilters =
             catMaybes
                 [ fmap (\n -> (catSubq "domain", SQLText n)) mDomain
@@ -111,7 +115,7 @@ ctxCatWhere staleFilter includeSuperseded mDomain mDisc =
             [ "id NOT IN (SELECT dst_id FROM edges WHERE kind = 'supersedes' AND dst_kind = 'context')"
             | not includeSuperseded
             ]
-        clauses = staleClauses <> supersededClause <> map fst catFilters
+        clauses = retiredClauses <> supersededClause <> map fst catFilters
         catParams = map snd catFilters
      in case clauses of
             [] -> ("", [])
@@ -124,12 +128,10 @@ updateContext conn cid ContextUpdate{..} = do
         Nothing -> pure False
         Just k -> do
             let newTitle = fromMaybe (contextTitle k) cuTitle
-                newStale = fromMaybe (contextStale k) cuStale
-                staleInt = if newStale then 1 else 0 :: Int
             execute
                 conn
-                (Query "UPDATE context SET title=?, stale=? WHERE id=?")
-                (newTitle, staleInt, cid)
+                (Query "UPDATE context SET title=? WHERE id=?")
+                (newTitle, cid)
             when (isJust cuTitle) $
                 Fts.indexEntry conn cid ContextNode newTitle (contextBody k)
             pure True
@@ -171,9 +173,10 @@ contextExists conn cid = do
     pure (not (null rows))
 
 {- | Context entries whose categories AND-intersect with the given
-category list (one condition per axis present in the input). Excludes
-stale entries. Returns [] immediately when the input list is empty.
-Cap limits results; order is most-recently-created first.
+category list (one condition per axis present in the input). Current
+entries only — retired entries never auto-pull. Returns [] immediately
+when the input list is empty. Cap limits results; order is
+most-recently-created first.
 -}
 categoryMatchedContexts :: Connection -> [Category] -> Int -> IO [Context]
 categoryMatchedContexts conn cats cap
@@ -196,8 +199,10 @@ categoryMatchedContexts conn cats cap
             <> [axisClause "discipline" discs | not (null discs)]
     q =
         Query $
-            "SELECT id, title, body, stale, created_at, updated_at FROM context"
-                <> " WHERE stale = 0 AND "
+            "SELECT "
+                <> contextCols
+                <> " FROM context"
+                <> " WHERE id NOT IN (SELECT context_id FROM retired_context) AND "
                 <> T.intercalate " AND " clauses
                 <> " ORDER BY created_at DESC LIMIT ?"
     params = map SQLText domains <> map SQLText discs <> [SQLInteger (fromIntegral cap)]

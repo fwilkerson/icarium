@@ -1,8 +1,8 @@
 module Icarium.Commands.Ctx (Command, parser, run, autoDeriveDeps) where
 
-import Control.Monad (forM_, void, when)
+import Control.Monad (forM, forM_, void, when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
-import Data.Maybe (catMaybes, fromMaybe, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -21,6 +21,7 @@ import Icarium.Render qualified as Render
 import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
+import Icarium.Repo.Curation qualified as RCur
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -30,6 +31,7 @@ data Command
     | List ListOpts
     | Show ShowOpts
     | Update UpdateOpts
+    | Curate CurateOpts
     | Rm RmOpts
     | Path PathOpts
     | Cat CatOpts
@@ -44,6 +46,7 @@ parser =
             <> subcmd "list" "List context entries (alias: ls)" (List <$> listP)
             <> subcmd "show" "Show context metadata. The body is intentionally not printed: Read $(icarium ctx path <id>) so a subsequent Edit can succeed (Claude Code's Edit tool requires a prior Read of the same path)." (Show <$> showP)
             <> subcmd "update" "Update context metadata. To edit the body: Read $(icarium ctx path <id>) then Edit." (Update <$> updateP)
+            <> subcmd "curate" "Record a curation disposition for an entry (guidance | rule | refactor | keep | stale). Bare form lists the curation queue: never-curated entries, plus aged ones with --older-than." (Curate <$> curateP)
             <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
             <> subcmd "path" "Print body file path for a context entry (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
             <> subcmd "cat" "Print body of a context entry to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
@@ -58,6 +61,7 @@ run db = \case
     List o -> runList db o
     Show o -> runShow db o
     Update o -> runUpdate db o
+    Curate o -> runCurate db o
     Rm o -> runRm db o
     Path o -> runPath db o
     Cat o -> runCat db o
@@ -176,7 +180,7 @@ autoDeriveDeps c [] (Just tid) = do
 -- =============================================================
 
 data ListOpts = ListOpts
-    { lStale :: Bool
+    { lRetired :: Bool
     , lAll :: Bool
     , lDomain :: Maybe Text
     , lDiscipline :: Maybe Text
@@ -187,8 +191,8 @@ data ListOpts = ListOpts
 listP :: Parser ListOpts
 listP =
     ListOpts
-        <$> switch (long "stale" <> help "Only entries flagged stale")
-        <*> switch (long "all" <> help "Include stale entries and older versions superseded by another entry. By default ctx list shows only current heads (non-stale, not superseded).")
+        <$> switch (long "retired" <> help "Only retired entries (latest curation disposition is guidance/rule/refactor/stale)")
+        <*> switch (long "all" <> help "Include retired entries and older versions superseded by another entry. By default ctx list shows only current heads (not retired, not superseded).")
         <*> optional (textOption "domain" "NAME" "Filter by domain category")
         <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
         <*> optional
@@ -205,12 +209,12 @@ runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
     forM_ (lDomain o) $ \n -> void $ requireCategory c Domain n
     forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
-    let staleFilter
-            | lStale o = Just True -- stale only
+    let retiredFilter
+            | lRetired o = Just True -- retired only
             | lAll o = Nothing -- show all
-            | otherwise = Just False -- hide stale (default)
+            | otherwise = Just False -- hide retired (default)
     let includeSuperseded = lAll o
-    cxs0 <- RCx.listContexts c staleFilter includeSuperseded (lDomain o) (lDiscipline o)
+    cxs0 <- RCx.listContexts c retiredFilter includeSuperseded (lDomain o) (lDiscipline o)
     let cxs = maybe cxs0 (`take` cxs0) (lLimit o)
     rows <- buildContextRows c cxs
     if lJson o
@@ -224,11 +228,13 @@ buildContextRows c cxs = do
     let ids = map contextId cxs
     catsBatch <- RC.contextCategoriesBatch c ids
     countsBatch <- RE.contextInboundCounts c ids
+    retiredIds <- RCur.retiredContextIds c ids
     pure
         [ Render.ContextRow
             { Render.crContext = cx
             , Render.crCats = fromMaybe [] (lookup (contextId cx) catsBatch)
             , Render.crLinked = fromMaybe 0 (lookup (contextId cx) countsBatch)
+            , Render.crRetired = contextId cx `elem` retiredIds
             }
         | cx <- cxs
         ]
@@ -254,10 +260,11 @@ runShow db o = withDb db $ \c -> do
     mcx <- RCx.getContext c cxid
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
     cats <- RC.contextCategoriesFor c (contextId cx)
+    mEvent <- RCur.latestCuration c (contextId cx)
     let bodyPath = T.pack (ctxBodyPath (bodiesDir db) cxid)
     if sJson o
-        then BLC.putStrLn (Json.renderContextShowJson cx cats bodyPath)
-        else TIO.putStr (Render.renderContext cx cats bodyPath)
+        then BLC.putStrLn (Json.renderContextShowJson cx cats bodyPath mEvent)
+        else TIO.putStr (Render.renderContext cx cats bodyPath mEvent)
 
 -- =============================================================
 -- update
@@ -266,7 +273,6 @@ runShow db o = withDb db $ \c -> do
 data UpdateOpts = UpdateOpts
     { uId :: Text
     , uTitle :: Maybe Text
-    , uStale :: Maybe Bool
     , uDomain :: Maybe Text
     , uDiscipline :: Maybe Text
     }
@@ -276,19 +282,8 @@ updateP =
     UpdateOpts . T.pack
         <$> strArgument (metavar "CONTEXT_ID")
         <*> optional (textOption "title" "TEXT" "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `ctx list`.")
-        <*> staleFlag
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
-
--- Must use flag' (no default) so a metadata-only update leaves the stale
--- bit untouched: `switch` always succeeds, so the first alternative would
--- yield Just True even without --stale on the command line (issue #14).
-staleFlag :: Parser (Maybe Bool)
-staleFlag =
-    optional
-        ( flag' True (long "stale" <> help "Mark entry as stale")
-            <|> flag' False (long "not-stale" <> help "Mark entry as not stale")
-        )
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
 runUpdate db o = withDb db $ \c -> do
@@ -296,11 +291,7 @@ runUpdate db o = withDb db $ \c -> do
     -- Validate categories before any mutation.
     mDomCat <- resolveAxisFlag c Domain (uDomain o)
     mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
-    let upd =
-            RCx.emptyUpdate
-                { RCx.cuTitle = uTitle o
-                , RCx.cuStale = uStale o
-                }
+    let upd = RCx.emptyUpdate{RCx.cuTitle = uTitle o}
     ok <- RCx.updateContext c cxid upd
     if ok
         then do
@@ -313,6 +304,99 @@ runUpdate db o = withDb db $ \c -> do
                 forM_ mCat $ \cat -> RC.attachContextCategory c cxid (categoryId cat)
             TIO.putStrLn ("updated " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (uId o))
+
+-- =============================================================
+-- curate
+-- =============================================================
+
+data CurateOpts = CurateOpts
+    { cId :: Maybe Text
+    , cDisposition :: Maybe Text
+    , cArtifact :: Maybe Text
+    , cNote :: Maybe Text
+    , cOlderThan :: Maybe Int
+    , cJson :: Bool
+    }
+
+curateP :: Parser CurateOpts
+curateP =
+    CurateOpts
+        <$> optional (T.pack <$> strArgument (metavar "CONTEXT_ID" <> help "Entry to curate; omit to list the queue"))
+        <*> optional (T.pack <$> strArgument (metavar "DISPOSITION" <> help "guidance | rule | refactor | keep | stale"))
+        <*> optional (textOption "artifact" "X" "Where the content went: doc/skill path (guidance), rule/test name (rule), task id (refactor), superseding entry id (stale, optional). Rejected for keep.")
+        <*> optional (textOption "note" "TEXT" "Freeform note on the decision")
+        <*> optional
+            ( option
+                auto
+                ( long "older-than"
+                    <> metavar "DAYS"
+                    <> help "Queue form only: also list entries whose latest curation event is at least DAYS days old"
+                )
+            )
+        <*> jsonFlag
+
+runCurate :: FilePath -> CurateOpts -> IO ()
+runCurate db o = case (cId o, cDisposition o) of
+    (Nothing, _) -> runCurateQueue db o
+    (Just cid, Nothing) ->
+        fatal 2 $
+            "missing disposition; usage: icarium ctx curate "
+                <> T.unpack cid
+                <> " <guidance|rule|refactor|keep|stale>"
+    (Just cid, Just dispText) -> case parseDisposition dispText of
+        Nothing ->
+            fatal 2 $
+                "invalid disposition: "
+                    <> T.unpack dispText
+                    <> "; accepted: guidance, rule, refactor, keep, stale"
+        Just disp -> runCurateRecord db o cid disp
+
+runCurateRecord :: FilePath -> CurateOpts -> Text -> Disposition -> IO ()
+runCurateRecord db o cid disp = do
+    when (isJust (cOlderThan o)) $
+        fatal 2 "--older-than applies to the queue form (bare `icarium ctx curate`)"
+    withDb db $ \c -> do
+        cxid <- resolveOrFatal (RCx.resolveContextId c cid)
+        artifact <- resolveArtifact c disp (cArtifact o)
+        void $ RCur.insertCuration c cxid disp artifact (cNote o)
+        TIO.putStrLn ("curated " <> cxid <> " " <> dispositionText disp)
+
+{- | Enforce the artifact rule per disposition; the sweep must leave a
+trail for content that went somewhere. Task/context artifacts are
+resolved to canonical full ids before storage.
+-}
+resolveArtifact :: Connection -> Disposition -> Maybe Text -> IO (Maybe Text)
+resolveArtifact c disp mArtifact = case (disp, mArtifact) of
+    (Guidance, Nothing) -> missing "guidance" "the destination doc/skill path"
+    (Rule, Nothing) -> missing "rule" "the rule/invariant/test name"
+    (Refactor, Nothing) -> missing "refactor" "the filed task id"
+    (Refactor, Just a) -> Just <$> requireTask c a
+    (Stale, Just a) -> Just <$> requireContext c a
+    (Keep, Just _) -> fatal 2 "keep records no artifact; drop --artifact"
+    (_, a) -> pure a
+  where
+    missing name what =
+        fatal 2 (name <> " requires " <> what <> ": rerun with --artifact <X>")
+
+runCurateQueue :: FilePath -> CurateOpts -> IO ()
+runCurateQueue db o = do
+    when (isJust (cArtifact o) || isJust (cNote o)) $
+        fatal 2 "--artifact/--note apply to the record form: icarium ctx curate <CONTEXT_ID> <DISPOSITION>"
+    withDb db $ \c -> do
+        queue <- RCur.curationQueue c (cOlderThan o)
+        rows <- forM queue $ \(cx, mEvent) -> do
+            cats <- RC.contextCategoriesFor c (contextId cx)
+            pure
+                Render.CurationQueueRow
+                    { Render.cqContext = cx
+                    , Render.cqCats = cats
+                    , Render.cqLastEvent = mEvent
+                    }
+        if cJson o
+            then BLC.putStrLn (Json.renderCurationQueueJson rows)
+            else do
+                utf8 <- detectUtf8
+                TIO.putStr (Render.renderCurationQueue utf8 rows)
 
 -- =============================================================
 -- rm

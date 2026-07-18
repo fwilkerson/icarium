@@ -13,6 +13,7 @@ module Icarium.Render.Json (
     renderTaskShowJson,
     renderContextListJson,
     renderContextShowJson,
+    renderCurationQueueJson,
     renderSearchJson,
 ) where
 
@@ -21,7 +22,7 @@ import Data.Aeson.Encoding qualified as E
 import Data.ByteString.Lazy qualified as BL
 import Data.Text (Text)
 
-import Icarium.Render (ContextRow (..), SearchHitRow (..), TaskRow (..))
+import Icarium.Render (ContextRow (..), CurationQueueRow (..), SearchHitRow (..), TaskRow (..))
 import Icarium.Repo.Search (SearchHit (..))
 import Icarium.Types
 
@@ -41,14 +42,14 @@ taskRowEnc r =
             <> E.pair "references_count" (E.int (trRefs r))
 
 -- | Mirrors 'Icarium.Render.renderTaskHuman': metadata, body path, links.
-renderTaskShowJson :: Task -> Text -> [Context] -> [Task] -> [Category] -> BL.ByteString
-renderTaskShowJson t bodyPath refs deps cats =
+renderTaskShowJson :: Task -> Text -> [Context] -> [Task] -> [Category] -> [Text] -> BL.ByteString
+renderTaskShowJson t bodyPath refs deps cats retiredIds =
     enc . E.pairs $
         taskCore t
             <> E.pair "body_path" (E.text bodyPath)
             <> catsSeries cats
             <> E.pair "depends_on" (E.list taskLinkEnc deps)
-            <> E.pair "references" (E.list contextLinkEnc refs)
+            <> E.pair "references" (E.list (contextLinkEnc retiredIds) refs)
 
 taskCore :: Task -> Series
 taskCore t =
@@ -79,30 +80,51 @@ contextRowEnc :: ContextRow -> Encoding
 contextRowEnc r =
     E.pairs $
         contextCore (crContext r)
+            <> E.pair "retired" (E.bool (crRetired r))
             <> catsSeries (crCats r)
             <> E.pair "linked_count" (E.int (crLinked r))
 
-renderContextShowJson :: Context -> [Category] -> Text -> BL.ByteString
-renderContextShowJson cx cats bodyPath =
+-- | @mEvent@: latest curation event; @retired@ + @curation@ derive from it.
+renderContextShowJson :: Context -> [Category] -> Text -> Maybe CurationEvent -> BL.ByteString
+renderContextShowJson cx cats bodyPath mEvent =
     enc . E.pairs $
         contextCore cx
+            <> E.pair "retired" (E.bool (maybe False (dispositionRetires . curationDisposition) mEvent))
+            <> E.pair "curation" (maybe E.null_ curationEnc mEvent)
             <> E.pair "body_path" (E.text bodyPath)
             <> catsSeries cats
+
+curationEnc :: CurationEvent -> Encoding
+curationEnc e =
+    E.pairs $
+        E.pair "disposition" (E.text (dispositionText (curationDisposition e)))
+            <> E.pair "artifact" (maybeText (curationArtifact e))
+            <> E.pair "note" (maybeText (curationNote e))
+            <> E.pair "created_at" (E.text (curationCreatedAt e))
+
+-- | @last_curation@ is null for never-curated entries.
+renderCurationQueueJson :: [CurationQueueRow] -> BL.ByteString
+renderCurationQueueJson = enc . E.list queueRowEnc
+  where
+    queueRowEnc r =
+        E.pairs $
+            contextCore (cqContext r)
+                <> catsSeries (cqCats r)
+                <> E.pair "last_curation" (maybe E.null_ curationEnc (cqLastEvent r))
 
 contextCore :: Context -> Series
 contextCore cx =
     E.pair "id" (E.text (contextId cx))
         <> E.pair "title" (E.text (contextTitle cx))
-        <> E.pair "stale" (E.bool (contextStale cx))
         <> E.pair "created_at" (E.text (contextCreatedAt cx))
         <> E.pair "updated_at" (E.text (contextUpdatedAt cx))
 
-contextLinkEnc :: Context -> Encoding
-contextLinkEnc cx =
+contextLinkEnc :: [Text] -> Context -> Encoding
+contextLinkEnc retiredIds cx =
     E.pairs $
         E.pair "id" (E.text (contextId cx))
             <> E.pair "title" (E.text (contextTitle cx))
-            <> E.pair "stale" (E.bool (contextStale cx))
+            <> E.pair "retired" (E.bool (contextId cx `elem` retiredIds))
 
 -- =============================================================
 -- Search
@@ -127,7 +149,7 @@ searchHitEnc r =
                 <> E.pair "kind" (E.text (nodeKindText (hitKind h)))
                 <> E.pair "title" (E.text (hitTitle h))
                 <> E.pair "state" (maybe E.null_ (E.text . taskStateText) (hitState h))
-                <> E.pair "stale" (E.bool (hitStale h))
+                <> E.pair "retired" (E.bool (hitRetired h))
                 <> E.pair "updated_at" (E.text (hitUpdatedAt h))
                 <> E.pair "title_match" (E.bool (hitTitleMatch h))
                 <> E.pair "body_match" (E.bool (hitBodyMatch h))

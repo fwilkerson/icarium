@@ -25,6 +25,7 @@ import Icarium.Render qualified as Render
 import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
+import Icarium.Repo.Curation qualified as RCur
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
@@ -267,12 +268,13 @@ runShow db o = do
                 refs <- RE.referencedContexts c (taskId t)
                 deps <- RE.dependencyTasks c (taskId t)
                 cats <- RC.taskCategoriesFor c (taskId t)
+                retiredIds <- RCur.retiredContextIds c (map contextId refs)
                 let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
                 if sJson o
-                    then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps cats)
+                    then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps cats retiredIds)
                     else do
                         utf8 <- detectUtf8
-                        TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats)
+                        TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats retiredIds)
   where
     openDb = if sPrompt o then withDbSync else withDb
 

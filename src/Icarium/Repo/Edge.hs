@@ -109,17 +109,22 @@ getEdgesByPrefix conn = prefixLookup conn "edges" edgeCols
 resolveEdgeId :: Connection -> Text -> IO (Either String Text)
 resolveEdgeId conn = resolveByPrefix (getEdgesByPrefix conn) edgeId "edge"
 
--- | Context entries linked by @references@ edges from the given task.
+{- | Context entries linked by @references@ edges from the given task.
+An explicit reference delivers regardless of retirement — except
+disposition 'stale', which is known-wrong content and never surfaces
+(ADR 0001).
+-}
 referencedContexts :: Connection -> Text -> IO [Context]
 referencedContexts conn tid =
     query
         conn
-        "SELECT cx.id, cx.title, cx.body, cx.stale, cx.created_at, cx.updated_at \
+        "SELECT cx.id, cx.title, cx.body, cx.created_at, cx.updated_at \
         \FROM edges e \
         \JOIN context cx ON cx.id = e.dst_id \
         \WHERE e.kind = 'references' \
         \  AND e.src_kind = 'task' AND e.src_id = ? \
         \  AND e.dst_kind = 'context' \
+        \  AND cx.id NOT IN (SELECT context_id FROM retired_context WHERE disposition = 'stale') \
         \ORDER BY e.created_at ASC"
         (Only tid)
 
@@ -219,7 +224,7 @@ contextDerivedFromDispatch conn tid startedAt mEndedAt =
         Just _ -> " AND cx.created_at <= ?"
     q =
         Query $
-            "SELECT cx.id, cx.title, cx.body, cx.stale, cx.created_at, cx.updated_at \
+            "SELECT cx.id, cx.title, cx.body, cx.created_at, cx.updated_at \
             \FROM edges e \
             \JOIN context cx ON cx.id = e.src_id \
             \WHERE e.kind = 'derived_from' \
