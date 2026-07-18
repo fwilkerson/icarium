@@ -4,6 +4,13 @@ A workflow store for headless-agent development: tasks, durable context, and
 dispatch state in one sqlite DB, so dispatched agents inherit accumulated
 project reasoning instead of starting cold.
 
+A dispatch prompt is built from the task body plus its explicitly
+`references`-linked ctx entries, ctx entries matching the task's
+domain/discipline categories (capped, deduped), and its dependency tasks —
+so durable rationale captured as tagged ctx entries reaches future agents in
+that space automatically. Storage split: bodies are files, the DB keeps the
+relational layer (ADR 0002).
+
 ## Language
 
 ### Context lifecycle
