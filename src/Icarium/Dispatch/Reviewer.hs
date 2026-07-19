@@ -101,6 +101,13 @@ defaultReviewerPrompt =
     \- Middle Man -- a layer that mostly just delegates onward.\n\
     \- Refused Bequest -- an implementer ignoring most of what it inherits.\n\
     \\n\
+    \# Reporting bar\n\
+    \\n\
+    \Report every issue you find, including ones you are uncertain about or\n\
+    \consider minor -- attach a severity rather than withholding. The status\n\
+    \verdict is the filter, not the findings list: minor concerns belong in the\n\
+    \findings under warn, not omitted.\n\
+    \\n\
     \# Output\n\
     \\n\
     \Respond with ONLY a YAML block in this exact format:\n\

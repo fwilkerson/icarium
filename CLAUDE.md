@@ -17,6 +17,11 @@ Tests should cover the **interface and larger functional units**. Get nuanced on
 
 If a function is hard to test, that's usually a design signal — extract the pure core, then the test is easy. Don't reach for mocks first.
 
+## Code style
+
+- Comments explain WHY (a hidden constraint, a workaround, a non-obvious invariant), never WHAT the code does.
+- Pre-1.0: no backwards-compatibility shims for removed or changed surfaces. Design for correctness, not minimal change.
+
 ## Error handling
 
 For multi-step `IO` where any step can fail: use `ExceptT Text IO` rather than nested `case`-of-`Either`. More than two levels of nesting is the signal. `throwE` to exit early; `runExceptT` at the boundary to handle the outcome once.

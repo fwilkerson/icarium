@@ -34,4 +34,3 @@ enabled      = true
 model        = "claude-sonnet-5"
 effort       = "medium"
 max_attempts = 2
-prompt_path  = ".icarium/reviewer.md"
