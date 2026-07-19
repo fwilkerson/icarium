@@ -16,7 +16,7 @@ import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..))
 import Database.SQLite.Simple (Only (..), Query (..), close, execute, execute_, open, query_)
 import Icarium.Schema (execSql, schemaSql, schemaVersion)
-import System.Directory (createDirectoryIfMissing, doesFileExist, makeAbsolute, setModificationTime)
+import System.Directory (createDirectoryIfMissing, doesFileExist, makeAbsolute, removeFile, setModificationTime)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, (</>))
@@ -177,7 +177,9 @@ tests =
         , -- worktree dispatch + merge (stub claude on PATH)
           testCase "dispatch: invoking checkout untouched from dirty feature branch" testDispatchInvokingCheckoutUntouched
         , testCase "dispatch: child icarium hits parent DB, no nested store" testDispatchNoNestedStore
-        , testCase "dispatch: success parks the branch (merge_sha NULL, task done)" testDispatchParks
+        , testCase "dispatch: success auto-merges (base advances, branch deleted, task done)" testDispatchAutoMerges
+        , testCase "dispatch: blocked auto-merge stays parked, exit 3 names fixing command" testDispatchAutoMergeBlockedParks
+        , testCase "dispatch run (drain): dependency chain lands in one invocation" testDrainAutoMergesChain
         , testCase "dispatch merge: fast-forward in place when base checked out clean" testMergeFFInPlace
         , testCase "dispatch merge: fast-forward via temp worktree when base checked out elsewhere" testMergeFFTempWorktree
         , testCase "dispatch merge: dirty base checkout is fatal" testMergeDirtyBaseFatal
@@ -1650,9 +1652,28 @@ parkedId dir db = firstListId . snd3 <$> runDispatch dir db Nothing ["dispatch",
   where
     snd3 (_, b, _) = b
 
+-- | Id prefix of the first `dispatch list` row carrying the given badge.
+badgedId :: FilePath -> FilePath -> String -> IO String
+badgedId dir db badge = do
+    (_, out, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    pure $ case filter (badge `isInfixOf`) (lines out) of
+        (l : _) -> head (words l)
+        [] -> ""
+
+{- | Dispatch with a throwaway dirty file in the base checkout, so the
+auto-merge blocks and the dispatch parks (the run exits 3 by design).
+Restores the checkout before returning the run's result.
+-}
+runDispatchParked :: FilePath -> FilePath -> [String] -> IO (ExitCode, String, String)
+runDispatchParked dir db args = do
+    writeFile (dir </> "dirty-blocker.txt") "block auto-merge\n"
+    r <- runDispatch dir db (Just "commit") (["dispatch", "run"] <> args)
+    removeFile (dir </> "dirty-blocker.txt")
+    pure r
+
 -- Scenario 1: dispatch from a checkout on a different branch with a dirty
--- tree; the invoking checkout's branch, dirtiness, and base ref are untouched,
--- and no worktree is left behind.
+-- tree; the invoking checkout's branch and dirtiness are untouched, the
+-- auto-merge lands on base via a temp worktree, and none are left behind.
 testDispatchInvokingCheckoutUntouched :: IO ()
 testDispatchInvokingCheckoutUntouched = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "stub task"
@@ -1667,13 +1688,11 @@ testDispatchInvokingCheckoutUntouched = withDispatchRepo $ \dir db -> do
     branch @?= "feature"
     status <- gitOut dir ["status", "--porcelain"]
     assertBool "founder's dirty file survives" ("founder.txt" `isInfixOf` status)
-    mainAfter <- gitOut dir ["rev-parse", "main"]
-    mainAfter @?= baseSha
+    mainParent <- gitOut dir ["rev-parse", "main~1"]
+    assertBool "base fast-forwarded from its old tip" (mainParent == baseSha)
 
     brs <- dispatchBranches dir
-    assertBool "a dispatch branch was created" (not (null brs))
-    parent <- gitOut dir ["rev-parse", head brs <> "~1"]
-    assertBool "dispatch branch was cut from the base sha" (parent == baseSha)
+    assertBool "dispatch branch deleted after landing" (null brs)
     wc <- worktreeCount dir
     wc @?= 1
 
@@ -1687,40 +1706,74 @@ testDispatchNoNestedStore = withDispatchRepo $ \dir db -> do
     report <- readFile (dir </> ".icarium" </> ("stub-report-" <> tid <> ".txt"))
     assertBool "child icarium exited 0 against the parent DB" ("rc=0" `isInfixOf` report)
     assertBool "no nested .icarium/icarium.db created in the worktree" ("nested=no" `isInfixOf` report)
-    park <- parkedId dir db
-    assertBool "dispatch parked" (not (null park))
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "dispatch landed" ("[success]" `isInfixOf` listOut)
 
--- Scenario 3: a committed success parks — outcome success, merge_sha NULL,
--- [parked] badge, branch present, base unmoved, task done, worktree gone.
-testDispatchParks :: IO ()
-testDispatchParks = withDispatchRepo $ \dir db -> do
-    tid <- addReadyTask dir db "park task"
+-- Scenario 3: a committed success auto-merges — base advances, branch
+-- deleted, dispatch stamped merged, task done, no parked leftovers.
+testDispatchAutoMerges :: IO ()
+testDispatchAutoMerges = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "auto-merge task"
     baseSha <- gitOut dir ["rev-parse", "main"]
-    (code, _, _) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    (code, out, _) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
     code @?= ExitSuccess
+    assertBool "landing reported" ("merged" `isInfixOf` out)
 
+    mainAfter <- gitOut dir ["rev-parse", "main"]
+    assertBool "base advanced" (mainAfter /= baseSha)
+    brs <- dispatchBranches dir
+    assertBool "dispatch branch deleted after landing" (null brs)
     (_, parkedOut, _) <- runDispatch dir db Nothing ["dispatch", "list", "--parked"]
-    assertBool "[parked] badge present" ("[parked]" `isInfixOf` parkedOut)
-    let did = firstListId parkedOut
-    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
-    assertBool "outcome success" ("success" `isInfixOf` showOut)
-    assertBool "merged: no (parked ...)" ("no (parked; land with `icarium dispatch merge`)" `isInfixOf` showOut)
-    assertBool "notes say parked" ("parked" `isInfixOf` showOut)
-
+    assertBool "nothing parked" (not ("[parked]" `isInfixOf` parkedOut))
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "badge is [success], not [parked]" ("[success]" `isInfixOf` listOut)
     (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
     assertBool "task moved to done" ("done" `isInfixOf` taskOut)
-    brs <- dispatchBranches dir
-    assertBool "dispatch branch retained" (not (null brs))
-    mainAfter <- gitOut dir ["rev-parse", "main"]
-    mainAfter @?= baseSha
     wc <- worktreeCount dir
     wc @?= 1
+
+-- Scenario 3b: auto-merge blocked (dirty base checkout) — dispatch stays
+-- parked, task stays done, exit 3, error names the fixing command.
+testDispatchAutoMergeBlockedParks :: IO ()
+testDispatchAutoMergeBlockedParks = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "blocked auto-merge task"
+    baseSha <- gitOut dir ["rev-parse", "main"]
+    writeFile (dir </> "local.txt") "uncommitted local edit\n"
+    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitFailure 3
+    assertBool "error names the fixing command" ("icarium dispatch merge" `isInfixOf` err)
+    park <- parkedId dir db
+    assertBool "dispatch parked" (not (null park))
+    (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", park]
+    assertBool "blocked reason persisted to notes" ("dirty tree" `isInfixOf` showOut)
+    mainAfter <- gitOut dir ["rev-parse", "main"]
+    mainAfter @?= baseSha
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task still done" ("done" `isInfixOf` taskOut)
+
+-- Scenario 3c: the drain auto-merges per success, so a dependency chain
+-- lands in a single `dispatch run` with no manual merge interleaving.
+testDrainAutoMergesChain :: IO ()
+testDrainAutoMergesChain = withDispatchRepo $ \dir db -> do
+    depTid <- addReadyTask dir db "chain dependency"
+    (_, addOut, _) <-
+        runDispatch dir db Nothing ["task", "add", "chain dependent", "--state", "ready", "--depends-on", depTid]
+    let dependentTid = head (words addOut)
+    (code, out, _) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
+    code @?= ExitSuccess
+    length (filter ("merged " `isPrefixOf`) (lines out)) @?= 2
+    (_, t1, _) <- runDispatch dir db Nothing ["task", "show", depTid]
+    assertBool "dependency done" ("done" `isInfixOf` t1)
+    (_, t2, _) <- runDispatch dir db Nothing ["task", "show", dependentTid]
+    assertBool "dependent done" ("done" `isInfixOf` t2)
+    brs <- dispatchBranches dir
+    assertBool "no leftover dispatch branches" (null brs)
 
 -- Scenario 4a: base checked out here and clean -> FF in place, HEAD advances.
 testMergeFFInPlace :: IO ()
 testMergeFFInPlace = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "ff task"
-    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    _ <- runDispatchParked dir db [tid]
     before <- gitOut dir ["rev-parse", "HEAD"]
     did <- parkedId dir db
     (code, out, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
@@ -1741,8 +1794,8 @@ testMergeFFTempWorktree :: IO ()
 testMergeFFTempWorktree = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "ff-temp task"
     baseSha <- gitOut dir ["rev-parse", "main"]
+    _ <- runDispatchParked dir db [tid]
     _ <- gitOut dir ["checkout", "-b", "feature"]
-    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
     did <- parkedId dir db
     (code, out, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
     code @?= ExitSuccess
@@ -1760,7 +1813,7 @@ testMergeFFTempWorktree = withDispatchRepo $ \dir db -> do
 testMergeDirtyBaseFatal :: IO ()
 testMergeDirtyBaseFatal = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "dirty-base task"
-    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    _ <- runDispatchParked dir db [tid]
     did <- parkedId dir db
     writeFile (dir </> "local.txt") "uncommitted local edit\n"
     (code, _, err) <- runDispatch dir db Nothing ["dispatch", "merge", did]
@@ -1776,7 +1829,7 @@ testMergeRebaseRegate = withDispatchRepo $ \dir db -> do
     let gateLog = dir </> ".icarium" </> "gate.log"
     writeFile (dir </> "icarium.toml") (stubTomlWith ("echo gate-ran >> " <> gateLog) Nothing Nothing)
     tid <- addReadyTask dir db "rebase task"
-    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    _ <- runDispatchParked dir db [tid]
     did <- parkedId dir db
     atPark <- countLines gateLog
 
@@ -1798,7 +1851,7 @@ testMergeRebaseRegate = withDispatchRepo $ \dir db -> do
 testMergeConflictParked :: IO ()
 testMergeConflictParked = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "conflict task"
-    _ <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    _ <- runDispatchParked dir db [tid]
     did <- parkedId dir db
     -- create a conflicting commit on main touching the stub's file
     writeFile (dir </> ("stub-" <> tid <> ".txt")) "conflicting content\n"
@@ -1822,8 +1875,11 @@ testMergeAllPartial = withDispatchRepo $ \dir db -> do
     tid1 <- addReadyTask dir db "all task one"
     tid2 <- addReadyTask dir db "all task two"
     tid3 <- addReadyTask dir db "all task three"
-    (code0, _, _) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
-    code0 @?= ExitSuccess
+    -- blocked auto-merges leave all three parked; the drain reports that
+    -- as exit 3 (some dispatches stayed parked)
+    (code0, _, err0) <- runDispatchParked dir db []
+    code0 @?= ExitFailure 3
+    assertBool "drain names the bulk fixing command" ("icarium dispatch merge --all" `isInfixOf` err0)
     -- conflict with the third parked branch's file on main
     writeFile (dir </> ("stub-" <> tid3 <> ".txt")) "conflicting content\n"
     _ <- gitOut dir ["add", "-A"]
@@ -2136,7 +2192,7 @@ testReviewerSeesBodyFileEdits = withDispatchRepo $ \dir db -> do
     let tid = head (words addOut)
     (code, _, _) <- runDispatch dir db (Just "proof") ["dispatch", "run", tid]
     code @?= ExitSuccess
-    reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
+    reviewerPrompt <- readFile (dir </> ".icarium" </> "stub-reviewer-prompt.txt")
     assertBool "reviewer prompt contains the mid-run body edit" ("xproof1" `isInfixOf` reviewerPrompt)
     -- An appended ## Proof section is an exempt addition: the body-change
     -- report must not flag it.
@@ -2159,11 +2215,11 @@ testReviewerBodyTamperReport = withDispatchRepo $ \dir db -> do
     let tid = head (words addOut)
     (code, _, _) <- runDispatch dir db (Just "tamper") ["dispatch", "run", tid]
     code @?= ExitSuccess
-    reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
+    reviewerPrompt <- readFile (dir </> ".icarium" </> "stub-reviewer-prompt.txt")
     assertBool "report says yes" ("task body changed during run: yes" `isInfixOf` reviewerPrompt)
     assertBool "old text quoted" ("> criteria: prove it" `isInfixOf` reviewerPrompt)
     assertBool "new text quoted" ("> criteria: tampered xtamper1" `isInfixOf` reviewerPrompt)
-    did <- parkedId dir db
+    did <- badgedId dir db "[success]"
     (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
     assertBool
         "dispatch show records body_changed yes"
@@ -2172,7 +2228,7 @@ testReviewerBodyTamperReport = withDispatchRepo $ \dir db -> do
 {- | Retry laundering: attempt 1 tampers and is failed by its reviewer;
 attempt 2 changes nothing. The retry must diff against the FIRST-attempt
 baseline, so attempt 2's report (the captured one — the stub overwrites per
-review) still says yes and the surviving parked dispatch records the flag.
+review) still says yes and the surviving dispatch records the flag.
 -}
 testReviewerRetryKeepsTamperBaseline :: IO ()
 testReviewerRetryKeepsTamperBaseline = withDispatchRepo $ \dir db -> do
@@ -2185,14 +2241,14 @@ testReviewerRetryKeepsTamperBaseline = withDispatchRepo $ \dir db -> do
     code @?= ExitSuccess
     (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
     assertBool "attempt 1 recorded as failure" ("[failure]" `isInfixOf` listOut)
-    assertBool "attempt 2 parked as success" ("[parked]" `isInfixOf` listOut)
-    reviewerPrompt <- readFile (dir </> "stub-reviewer-prompt.txt")
+    assertBool "attempt 2 landed as success" ("[success]" `isInfixOf` listOut)
+    reviewerPrompt <- readFile (dir </> ".icarium" </> "stub-reviewer-prompt.txt")
     assertBool "attempt-2 report still says yes" ("task body changed during run: yes" `isInfixOf` reviewerPrompt)
     assertBool "inherited tamper quoted" ("> criteria: tampered xlaunder1" `isInfixOf` reviewerPrompt)
-    did <- parkedId dir db
+    did <- badgedId dir db "[success]"
     (_, showOut, _) <- runDispatch dir db Nothing ["dispatch", "show", did]
     assertBool
-        "parked dispatch records body_changed yes"
+        "surviving dispatch records body_changed yes"
         (any (\l -> words l == ["body_changed:", "yes"]) (lines showOut))
 
 -- Scenario: an unreadable [review] prompt_path must fail closed before the
@@ -2215,19 +2271,20 @@ testReviewerPromptUnreadableFailsClosed = withDispatchRepo $ \dir db -> do
     (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
     assertBool "task still ready" ("ready" `isInfixOf` taskOut)
 
--- Scenario: park-by-default means a dependency going `done` is not enough
--- for its dependents — its work must be IN base. Without the merged gate,
--- the drain would dispatch the dependent against a base missing the
--- dependency's changes.
+-- Scenario: a dependency going `done` is not enough for its dependents —
+-- its work must be IN base. When the auto-merge blocks (dispatch parked),
+-- the merged gate must keep holding the dependent; without it the drain
+-- would dispatch against a base missing the dependency's changes.
 testDispatchDepGateOnMerged :: IO ()
 testDispatchDepGateOnMerged = withDispatchRepo $ \dir db -> do
     depTid <- addReadyTask dir db "dep gate dependency"
     (_, addOut, _) <-
         runDispatch dir db Nothing ["task", "add", "dep gate dependent", "--state", "ready", "--depends-on", depTid]
     let dependentTid = head (words addOut)
-    -- drain: dispatches the dependency, parks it, then must find no eligible task
-    (code, _, drainErr) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
-    code @?= ExitSuccess
+    -- drain with the auto-merge blocked: the dependency parks, so the
+    -- dependent must not become eligible; the drain reports parked leftovers
+    (code, _, drainErr) <- runDispatchParked dir db []
+    code @?= ExitFailure 3
     assertBool "drain stopped on empty queue after parking the dependency" ("ready queue empty" `isInfixOf` drainErr)
     (nextCode, _, _) <- runDispatch dir db Nothing ["task", "next"]
     nextCode @?= ExitFailure 1

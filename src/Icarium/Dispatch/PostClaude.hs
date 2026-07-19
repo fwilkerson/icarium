@@ -140,8 +140,9 @@ handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
         Right (Just ()) ->
             runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha
 
-{- | Reviewer gate, then park: the dispatch branch is left for
-@icarium dispatch merge@ to land. Nothing here touches the base branch.
+{- | Reviewer gate, then park: the dispatch branch is left for the CLI
+layer's auto-merge (or @icarium dispatch merge@) to land. Nothing here
+touches the base branch.
 -}
 runReviewThenPark ::
     DispatchCtx ->
@@ -185,11 +186,13 @@ runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
             dr <- finish OFailure Nothing ("reviewer: fail\n" <> findings)
             pure (PCRetry dr findings)
         _ -> do
+            -- Parked-ness is derived (merge_sha NULL), so the note records
+            -- only what stays true after the branch lands.
             let notes = case mReviewResult of
                     Just (_, rr)
                         | rrVerdict rr == RVWarn ->
-                            "parked; reviewer warn\n" <> rrFindings rr
-                    _ -> "parked"
+                            "reviewer warn\n" <> rrFindings rr
+                    _ -> "gates passed"
             dr <- finish OSuccess Nothing notes
             case mReviewResult of
                 Just (task, rr) | rrVerdict rr == RVWarn -> do

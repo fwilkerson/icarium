@@ -11,11 +11,12 @@ mode="${STUB_CLAUDE_MODE:-commit}"
 tid="${ICARIUM_TASK_ID:-unknown}"
 
 # The reviewer invocation carries no ICARIUM_TASK_ID; in proof and tamper
-# modes it records the prompt it was given (next to the main repo, so it
-# survives worktree teardown). All other invocations discard the prompt.
+# modes it records the prompt it was given (in the main repo's gitignored
+# .icarium/, so it survives worktree teardown without dirtying the base
+# checkout). All other invocations discard the prompt.
 if { [ "$mode" = proof ] || [ "$mode" = tamper ] || [ "$mode" = launder ]; } && [ -z "${ICARIUM_TASK_ID:-}" ]; then
     common="$(git rev-parse --path-format=absolute --git-common-dir)"
-    cat > "$common/../stub-reviewer-prompt.txt"
+    cat > "$common/../.icarium/stub-reviewer-prompt.txt"
 else
     cat > /dev/null # consume the prompt
 fi
@@ -87,7 +88,7 @@ case "$mode" in
         # recorded prompt is attempt 2's -- which must still report the
         # inherited tamper against the FIRST-attempt baseline.
         common="$(git rev-parse --path-format=absolute --git-common-dir)"
-        count="$common/../stub-launder-count"
+        count="$common/../.icarium/stub-launder-count"
         if [ -n "${ICARIUM_TASK_ID:-}" ]; then
             init
             if [ ! -f "$count" ]; then

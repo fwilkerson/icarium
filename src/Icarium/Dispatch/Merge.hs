@@ -41,40 +41,47 @@ data MergeOutcome
 {- | Land one parked dispatch on its base: fast-forward when the base
 hasn't moved since the park; otherwise rebase the branch in a rebuilt
 worktree, re-run the gates against the post-rebase state, then
-fast-forward. A conflict or gate failure leaves the dispatch parked with
-updated notes. On success the dispatch is stamped merged and its branch
-deleted. Preconditions (outcome success, not already merged) are the
-caller's job.
+fast-forward. Any blocked outcome leaves the dispatch parked and persists
+its reason to the dispatch notes. On success the dispatch is stamped
+merged and its branch deleted. Preconditions (outcome success, not
+already merged) are the caller's job.
 -}
 mergeParked :: Config -> Connection -> Dispatch -> IO MergeOutcome
-mergeParked cfg conn d = fmap (either id MergeLanded) . runExceptT $ do
-    let did = dispatchId d
-        branch = dispatchBranch d
-        base = dispatchBaseBranch d
-    liftIO (Git.revParse "." branch) >>= \case
-        Left _ -> throwE (MergeBlocked 1 ("branch missing (deleted manually?): " <> branch))
-        Right _ -> pure ()
-    ffPossible <- liftIO (Git.mergeBaseIsAncestor "." base branch)
-    unless ffPossible (rebaseThenGate cfg conn did branch base)
-    landFF did base branch
-    newSha <-
-        liftIO (Git.revParse "." base)
-            >>= either (throwE . MergeBlocked 1 . T.pack . show) pure
-    liftIO (RD.setMerged conn did newSha)
-    -- `branch -d` checks merged-ness against HEAD, which may be an
-    -- unrelated checkout; the sha equality proves the branch landed.
-    branchSha <- liftIO (fromRight "" <$> Git.revParse "." branch)
-    when (branchSha == newSha) $
-        liftIO (void (Git.deleteBranchForce "." branch))
-    pure newSha
+mergeParked cfg conn d = do
+    out <- fmap (either id MergeLanded) . runExceptT $ attempt
+    case out of
+        MergeBlocked _ note -> RD.updateNotes conn (dispatchId d) note
+        _ -> pure ()
+    pure out
+  where
+    attempt = do
+        let did = dispatchId d
+            branch = dispatchBranch d
+            base = dispatchBaseBranch d
+        liftIO (Git.revParse "." branch) >>= \case
+            Left _ -> throwE (MergeBlocked 1 ("branch missing (deleted manually?): " <> branch))
+            Right _ -> pure ()
+        ffPossible <- liftIO (Git.mergeBaseIsAncestor "." base branch)
+        unless ffPossible (rebaseThenGate cfg did branch base)
+        landFF did base branch
+        newSha <-
+            liftIO (Git.revParse "." base)
+                >>= either (throwE . MergeBlocked 1 . T.pack . show) pure
+        liftIO (RD.setMerged conn did newSha)
+        -- `branch -d` checks merged-ness against HEAD, which may be an
+        -- unrelated checkout; the sha equality proves the branch landed.
+        branchSha <- liftIO (fromRight "" <$> Git.revParse "." branch)
+        when (branchSha == newSha) $
+            liftIO (void (Git.deleteBranchForce "." branch))
+        pure newSha
 
 {- | Rebase the parked branch onto the current base tip and re-run the
 gates there. Note the rebase rewrites the parked branch even when the
 gates then fail — the pre-rebase commits stay reachable via the reflog,
 and retrying the merge after a fix is a plain FF.
 -}
-rebaseThenGate :: Config -> Connection -> Text -> Text -> Text -> ExceptT MergeOutcome IO ()
-rebaseThenGate cfg conn did branch base = do
+rebaseThenGate :: Config -> Text -> Text -> Text -> ExceptT MergeOutcome IO ()
+rebaseThenGate cfg did branch base = do
     let dcfg = cfgDispatch cfg
     cc <-
         maybe (throwE (MergeBlocked 2 "no [commands] section configured")) pure (cfgCommands cfg)
@@ -89,17 +96,14 @@ rebaseThenGate cfg conn did branch base = do
             liftIO $ do
                 Git.rebaseAbort wt
                 teardownWorktree "." dcfg wt
-                RD.updateNotes conn did ("merge conflict; needs manual rebase onto " <> base)
-            throwE (MergeBlocked 3 ("rebase onto " <> base <> " failed; dispatch stays parked"))
+            throwE (MergeBlocked 3 ("merge conflict; needs manual rebase onto " <> base))
         Right () -> do
             gateResult <- liftIO . runExceptT $ do
                 ExceptT (runGate wt (ccBuild cc))
                 ExceptT (runGate wt (ccTest cc))
             liftIO (teardownWorktree "." dcfg wt)
             case gateResult of
-                Left note -> do
-                    liftIO (RD.updateNotes conn did ("gates failed after rebase: " <> note))
-                    throwE (MergeBlocked 3 ("gates failed after rebase; dispatch stays parked: " <> note))
+                Left note -> throwE (MergeBlocked 3 ("gates failed after rebase: " <> note))
                 Right () -> pure ()
 
 -- | Fast-forward base to the dispatch branch, wherever base lives.

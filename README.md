@@ -4,7 +4,7 @@ icarium gives you three things in one local CLI:
 
 - **Tasks** — a small backlog with states, priorities, and dependencies.
 - **Knowledge** — context entries (domain notes) you attach to tasks; the dispatcher pulls relevant ones into the agent's prompt.
-- **Dispatch** — runs a headless Claude agent against a ready task in its own git worktree; if `build`/`test` (and an optional reviewer) pass, the branch is parked, and `dispatch merge` (or `dispatch merge --all`) lands it on the integration branch.
+- **Dispatch** — runs a headless Claude agent against a ready task in its own git worktree; if `build`/`test` (and an optional reviewer) pass, the branch lands on the integration branch automatically. A merge that can't land (conflict, dirty checkout) parks instead — recover with `dispatch merge`.
 
 Storage is a local SQLite DB. It's a tool for one developer, or a small team.
 
@@ -50,7 +50,7 @@ to reconcile the DB (`--prune` to drop removed ones).
 
 ```toml
 [project]
-# Branch parked dispatches land on via `dispatch merge`.
+# Branch successful dispatches land on.
 integration_branch = "main"
 
 [commands]
@@ -127,7 +127,7 @@ with newly-added `## Proof` / `## Notes` sections exempt. The reviewer weighs it
 yes/no persists as `body_changed` on the dispatch row (`dispatch show`) since reviewer logs rotate.
 
 ```
-worker → diff → reviewer ─┬─ pass / warn → park (land with `dispatch merge`)
+worker → diff → reviewer ─┬─ pass / warn → land (parks if the merge is blocked)
                           └─ fail        → retry (findings injected) or block
 ```
 
@@ -144,8 +144,8 @@ findings:
 
 **Verdicts.**
 
-- **`pass`** — the branch is parked for `dispatch merge`.
-- **`warn`** — the branch is parked, but the findings are captured as a context entry titled
+- **`pass`** — the branch lands.
+- **`warn`** — the branch lands too, but the findings are captured as a context entry titled
   `reviewer warn: <task title>` (body = the YAML), tagged with the task's categories and linked
   back to it with a `references` edge for provenance. Surfaces via `icarium ctx list`,
   `icarium search`, and `icarium link list --from <task>` so the concern isn't lost.
@@ -176,29 +176,30 @@ id), so a project file can't drop the escalation protocol. An unreadable `agreem
 before the worker starts, same as the reviewer's `prompt_path`. Preview the full prompt with
 `dispatch run <id> --dry-run`.
 
-**Park by default.** On success the branch is *parked*, not merged: the task moves to `done`, the
-worktree is torn down (the branch is retained), and `dispatch list --parked` shows what's waiting to
-land. On failure the task moves to `blocked`, any dirty tree is checkpointed as a `wip:` commit on
-the retained branch, and the worktree is removed.
+**Attempt-then-park.** On success the task moves to `done`, the worktree is torn down, and the
+branch is **merged onto the integration branch immediately**. Merge-queue semantics:
 
-**Landing — `dispatch merge <id>`.** Merge-queue semantics:
-
-- Base unmoved since the park → fast-forward. If the integration branch is checked out and clean the
-  tree advances in place; otherwise its ref is fast-forwarded via a throwaway worktree.
+- Base unmoved since the dispatch → fast-forward. If the integration branch is checked out and
+  clean the tree advances in place; otherwise its ref is fast-forwarded via a throwaway worktree.
 - Base moved → the branch is rebased in a rebuilt worktree, the `build`/`test` gates are **re-run**
-  there (the reviewer is not), then it fast-forwards. A rebase conflict or a re-run gate failure
-  leaves the dispatch parked with a note and exits non-zero — fix it and run `dispatch merge` again.
+  there (the reviewer is not), then it fast-forwards.
 
-On a successful land the merge sha is recorded and the branch deleted.
+On a successful land the merge sha is recorded and the branch deleted. A merge that can't land — a
+rebase conflict, a re-run gate failure, a dirty checkout of the integration branch — leaves the
+dispatch **parked** with a note and exits 3: the work was accepted, but it isn't in base yet.
+`dispatch list --parked` shows what's waiting; fix the blocker and land it with
+`dispatch merge <id>` (same semantics as above). The drain continues past a blocked merge and
+reports at the end. On failure the task moves to `blocked`, any dirty tree is checkpointed as a
+`wip:` commit on the retained branch, and the worktree is removed.
 
 **`dispatch merge --all`** lands every parked dispatch oldest-first with the same per-dispatch
-semantics — after a drain, one command lands the lot. A dispatch that conflicts (or fails its
-re-run gates) stays parked with a note while the rest continue; the exit code is non-zero if
-anything failed to land. Because dependents only become ready once their dependency's branch is
-*merged*, the drain-then-land loop for dependent chains is: `dispatch run` → `dispatch merge --all`
-→ repeat.
+semantics. A dispatch that conflicts (or fails its re-run gates) stays parked with a note while the
+rest continue; the exit code is non-zero if anything failed to land. Auto-merge only ever attempts
+the *just-finished* dispatch — previously parked ones need a human, so they are retried only by an
+explicit `dispatch merge`.
 
-`dispatch run` (no task ID) drains the ready queue in priority order. "Ready" is stricter than
+`dispatch run` (no task ID) drains the ready queue in priority order, landing each success before
+picking the next task — so a dependency chain lands in a single drain. "Ready" is stricter than
 `state='ready'`: the `ready_tasks` view also requires every `depends_on` upstream to be `done`
 **and merged** — a parked (successful but unlanded) dependency still blocks its dependents.
 In-progress or blocked upstreams are not satisfied. If `worktree_setup` exits 75 (no capacity) the

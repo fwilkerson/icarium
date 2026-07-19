@@ -152,6 +152,7 @@ runRun db o = do
                             Right res -> do
                                 D.applyOutcomeToTask c task res
                                 summarize res
+                                autoMerge cfg c res >>= mapM_ (uncurry reportSingleAutoMerge)
         Nothing -> do
             forM_ (rMax o) $ \n ->
                 when (n <= 0) $ fatal 2 "max must be > 0"
@@ -163,6 +164,7 @@ runRun db o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
+            parkedCount <- newIORef (0 :: Int)
             withDbSync db $ \conn -> do
                 let ctx =
                         DrainCtx
@@ -171,9 +173,13 @@ runRun db o = do
                             , dctxCfg = cfg
                             , dctxMCap = rMax o
                             , dctxSigCount = sigCount
+                            , dctxParkedCount = parkedCount
                             , dctxConn = conn
                             }
                 drainLoop ctx 0
+            parked <- readIORef parkedCount
+            when (parked > 0) $
+                fatal 3 "some dispatches stayed parked; land with `icarium dispatch merge --all`"
 
 data DrainCtx = DrainCtx
     { dctxDb :: FilePath
@@ -181,6 +187,7 @@ data DrainCtx = DrainCtx
     , dctxCfg :: Config
     , dctxMCap :: Maybe Int
     , dctxSigCount :: IORef Int
+    , dctxParkedCount :: IORef Int
     , dctxConn :: Connection
     }
 
@@ -226,13 +233,61 @@ drainLoop ctx !i
                                 <> " \x2014 "
                                 <> D.dresNotes res
                         printSummary res
+                        stopped <-
+                            autoMerge cfg conn res >>= \case
+                                Nothing -> pure False
+                                Just (d, out) -> case out of
+                                    MergeLanded sha -> False <$ TIO.putStrLn (landedLine d sha)
+                                    MergeBlocked _ note -> do
+                                        modifyIORef (dctxParkedCount ctx) (+ 1)
+                                        False <$ TIO.hPutStrLn stderr ("icarium: " <> stillParkedLine d note)
+                                    -- Worktree back-pressure is machine-level: the next
+                                    -- dispatch would hit the same wall, so stop the drain.
+                                    MergeStopped note -> do
+                                        modifyIORef (dctxParkedCount ctx) (+ 1)
+                                        True <$ TIO.hPutStrLn stderr ("icarium: " <> note <> "; stopping")
                         n <- readIORef (dctxSigCount ctx)
-                        if n >= 1
-                            then
-                                hPutStrLn
-                                    stderr
-                                    "icarium: SIGINT received; stopping after current dispatch"
-                            else drainLoop ctx (i + 1)
+                        unless stopped $
+                            if n >= 1
+                                then
+                                    hPutStrLn
+                                        stderr
+                                        "icarium: SIGINT received; stopping after current dispatch"
+                                else drainLoop ctx (i + 1)
+
+{- | Land a just-successful dispatch immediately (attempt-then-park).
+Returns Nothing when there is nothing to land: dry-run, non-success, or
+already merged (no-commit successes are pre-stamped merged).
+-}
+autoMerge :: Config -> Connection -> D.DispatchResult -> IO (Maybe (Dispatch, MergeOutcome))
+autoMerge cfg c res
+    | Just did <- D.dresDispatchId res
+    , OSuccess <- D.dresOutcome res =
+        RD.getDispatch c did >>= \case
+            Just d | Nothing <- dispatchMergeSha d -> Just . (d,) <$> mergeParked cfg c d
+            _ -> pure Nothing
+    | otherwise = pure Nothing
+
+{- | Single-run reporting: a dispatch that stays parked is an incomplete
+outcome — exit 3, naming the fixing command.
+-}
+reportSingleAutoMerge :: Dispatch -> MergeOutcome -> IO ()
+reportSingleAutoMerge d = \case
+    MergeLanded sha -> TIO.putStrLn (landedLine d sha)
+    MergeBlocked _ note -> stillParked note
+    MergeStopped note -> stillParked note
+  where
+    stillParked note = fatal 3 (T.unpack (stillParkedLine d note))
+
+stillParkedLine :: Dispatch -> Text -> Text
+stillParkedLine d note =
+    "dispatch "
+        <> T.take 10 (dispatchId d)
+        <> " parked: "
+        <> note
+        <> "; fix and run `icarium dispatch merge "
+        <> T.take 10 (dispatchId d)
+        <> "`"
 
 -- | Print the enriched summary block; does not exit on failure.
 printSummary :: D.DispatchResult -> IO ()
@@ -265,9 +320,10 @@ printSummary r = do
     case D.dresBaseSha r of
         Nothing -> pure ()
         Just sha -> do
-            -- Diff against the dispatch branch: the invoking checkout's HEAD
-            -- never advances now that successful runs park. The branch may
-            -- already be gone (no-commit) — changedFiles returns [] then.
+            -- Diff against the dispatch branch, which still exists here:
+            -- the auto-merge (which deletes it) runs after this summary. The
+            -- branch may be gone for no-commit runs — changedFiles returns
+            -- [] then.
             files <- Git.changedFiles "." sha (D.dresBranch r)
             case files of
                 [] -> pure ()

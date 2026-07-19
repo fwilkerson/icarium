@@ -21,6 +21,21 @@ split is decided; adding an axis means choosing a side there.
 
 ## Language
 
+### Dispatch lifecycle
+
+**Landed / Merged**:
+A dispatch branch that is in the integration branch. Distinct from task
+state: `done` means the work was accepted (gates and reviewer passed);
+only *merged* satisfies dependents.
+
+**Parked**:
+A successful dispatch whose branch could not land automatically — the
+merge was blocked (conflict, dirty checkout, gate failure after rebase).
+An exception state needing a human, not a resting state: every success
+attempts to land immediately.
+_Avoid_: park-by-default (the pre-auto-merge model, where parked was the
+normal post-success state)
+
 ### Context lifecycle
 
 **Context entry (ctx)**:
