@@ -4,7 +4,7 @@ import Control.Monad (forM, forM_, mfilter, unless, void, when)
 import Data.Either (fromRight)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.List (nub)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -131,7 +131,11 @@ runRun db o = do
         Just rawId ->
             withDbSync db $ \c -> do
                 tid <- resolveOrFatal (RT.resolveTaskId c rawId)
-                mt <- RT.getTask c tid
+                -- A dry run previews; it must not move the task.
+                mt <-
+                    if rDryRun o
+                        then RT.getTask c tid
+                        else defaultOwner >>= RT.claimTask c tid
                 case mt of
                     Nothing -> fatal 1 ("task not found: " <> T.unpack tid)
                     Just task -> do
@@ -148,7 +152,9 @@ runRun db o = do
                                     , D.drBaseOverride = rBase o
                                     }
                         case eres of
-                            Left err -> fatal 3 (T.unpack (worktreeErrorText err))
+                            Left err -> do
+                                release c o task
+                                fatal 3 (T.unpack (worktreeErrorText err))
                             Right res -> do
                                 D.applyOutcomeToTask c task res
                                 summarize res
@@ -201,10 +207,16 @@ drainLoop ctx !i
             opts = dctxOpts ctx
             cfg = dctxCfg ctx
             db = dctxDb ctx
-        ts <- RT.listTasks conn [] True []
-        case ts of
-            [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
-            (t : _) -> do
+        -- Claiming is the selection: taking the queue head and marking it
+        -- in_progress is one atomic step, so racing drains cannot pick the
+        -- same task. A dry run previews the head instead, moving nothing.
+        mt <-
+            if rDryRun opts
+                then listToMaybe <$> RT.listTasks conn [] True []
+                else defaultOwner >>= RT.claimNextTask conn
+        case mt of
+            Nothing -> hPutStrLn stderr "icarium: ready queue empty; stopping"
+            Just t -> do
                 hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
                 eres <-
                     D.dispatch
@@ -219,12 +231,16 @@ drainLoop ctx !i
                             , D.drBaseOverride = rBase opts
                             }
                 case eres of
-                    -- The task was never touched; capacity may free up later
-                    -- (back-pressure), while a setup error would just repeat.
-                    Left err@(WtNoCapacity _) ->
+                    -- No work started, so the claim is released either way:
+                    -- capacity may free up later (back-pressure), while a
+                    -- setup error would just repeat.
+                    Left err@(WtNoCapacity _) -> do
+                        release conn opts t
                         hPutStrLn stderr $
                             "icarium: " <> T.unpack (worktreeErrorText err) <> "; stopping"
-                    Left err -> fatal 3 (T.unpack (worktreeErrorText err))
+                    Left err -> do
+                        release conn opts t
+                        fatal 3 (T.unpack (worktreeErrorText err))
                     Right res -> do
                         D.applyOutcomeToTask conn t res
                         TIO.hPutStrLn stderr $
@@ -247,13 +263,21 @@ drainLoop ctx !i
                                         modifyIORef (dctxParkedCount ctx) (+ 1)
                                         True <$ TIO.hPutStrLn stderr ("icarium: " <> note <> "; stopping")
                         n <- readIORef (dctxSigCount ctx)
-                        unless stopped $
+                        -- A dry run leaves the task ready, so recursing would
+                        -- preview the same head forever.
+                        unless (stopped || rDryRun opts) $
                             if n >= 1
                                 then
                                     hPutStrLn
                                         stderr
                                         "icarium: SIGINT received; stopping after current dispatch"
                                 else drainLoop ctx (i + 1)
+
+{- | Undo a claim whose dispatch never started (no-op under --dry-run,
+which never claimed).
+-}
+release :: Connection -> RunOpts -> Task -> IO ()
+release conn opts t = unless (rDryRun opts) $ RT.releaseTask conn (taskId t)
 
 {- | Land a just-successful dispatch immediately (attempt-then-park).
 Returns Nothing when there is nothing to land: dry-run, non-success, or

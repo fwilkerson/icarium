@@ -188,6 +188,9 @@ tests =
         , testCase "dispatch merge --all: lands clean branches, conflict stays parked, exit 3" testMergeAllPartial
         , testCase "dispatch merge --all: nothing parked is a friendly no-op" testMergeAllEmpty
         , testCase "dispatch merge: --all and DISPATCH_ID are mutually exclusive" testMergeArgValidation
+        , testCase "dispatch run (drain): task claimed (in_progress + owner) while worker runs" testDrainClaimsTask
+        , testCase "dispatch run TASK_ID: task claimed while worker runs" testTargetedDispatchClaimsTask
+        , testCase "dispatch run: racing drains never select the same task" testDrainClaimIsAtomic
         , testCase "dispatch: claude failure blocks task, retains branch, removes worktree" testDispatchFailBlocks
         , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
         , testCase "dispatch: worktree_setup exit 75 stops drain cleanly" testWorktreeSetup75
@@ -1769,6 +1772,59 @@ testDrainAutoMergesChain = withDispatchRepo $ \dir db -> do
     assertBool "dependent done" ("done" `isInfixOf` t2)
     brs <- dispatchBranches dir
     assertBool "no leftover dispatch branches" (null brs)
+
+{- | The drain claims mechanically: by the time the worker runs, the task
+is in_progress with an owner stamp — not merely hidden from the ready
+queue by its open dispatch row.
+-}
+testDrainClaimsTask :: IO ()
+testDrainClaimsTask = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "claim probe task"
+    (code, _, _) <- runDispatch dir db (Just "claimprobe") ["dispatch", "run"]
+    code @?= ExitSuccess
+    assertClaimedDuringRun dir tid
+
+-- | A targeted dispatch claims the same way; only selection differs.
+testTargetedDispatchClaimsTask :: IO ()
+testTargetedDispatchClaimsTask = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "targeted claim probe"
+    (code, _, _) <- runDispatch dir db (Just "claimprobe") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    assertClaimedDuringRun dir tid
+
+-- | Read the claimprobe stub's snapshot of `task show` taken mid-dispatch.
+assertClaimedDuringRun :: FilePath -> String -> IO ()
+assertClaimedDuringRun dir tid = do
+    probe <- readFile (dir </> ".icarium" </> ("stub-claim-" <> tid <> ".txt"))
+    assertBool ("state in_progress during dispatch: " <> probe) ("in_progress" `isInfixOf` probe)
+    assertBool ("owner stamped during dispatch: " <> probe) ("owner:  " `isInfixOf` probe)
+    assertBool ("claim time stamped during dispatch: " <> probe) ("claimed:  " `isInfixOf` probe)
+
+{- | Selection and the in-progress transition are one atomic claim, so
+racing drains partition the queue. Asserted on the dispatch rows rather
+than exit codes: a claimer that loses the write lock is a separate defect
+(01KXSQB39R). @nocommit@ keeps the two runs off each other's merges, so
+the only thing under test is selection.
+-}
+testDrainClaimIsAtomic :: IO ()
+testDrainClaimIsAtomic = withDispatchRepo $ \dir db -> do
+    _ <- addReadyTask dir db "race alpha"
+    _ <- addReadyTask dir db "race beta"
+    -- Widen the window the old read-then-dispatch shape raced in: without
+    -- an atomic claim both drains sit in setup holding the same task.
+    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "sleep 1") Nothing)
+    boxes <- replicateM 2 newEmptyMVar
+    forM_ boxes $ \box -> forkIO $ do
+        r <-
+            try (runDispatch dir db (Just "nocommit") ["dispatch", "run", "--max", "1"]) ::
+                IO (Either IOError (ExitCode, String, String))
+        putMVar box r
+    mapM_ takeMVar boxes
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    let rows = filter (not . null) (lines listOut)
+        dispatched t = length (filter (t `isInfixOf`) rows)
+    dispatched "race alpha" @?= 1
+    dispatched "race beta" @?= 1
 
 -- Scenario 4a: base checked out here and clean -> FF in place, HEAD advances.
 testMergeFFInPlace :: IO ()

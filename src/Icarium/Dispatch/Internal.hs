@@ -48,7 +48,6 @@ import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Edge qualified as RE
-import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
 -- =============================================================
@@ -237,14 +236,6 @@ doRealAttempt conn req attempt mFindings mBaseline = do
                             , RD.ndLogPath = Just logPath
                             , RD.ndPid = Nothing
                             }
-
-                    void $
-                        RT.updateTask
-                            conn
-                            (taskId task)
-                            RT.emptyUpdate
-                                { RT.tuState = Just InProgress
-                                }
 
                     prompt <- buildPrompt conn task mAgreement mFindings
 

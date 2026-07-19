@@ -109,6 +109,15 @@ case "$mode" in
         fi
         exit 0
         ;;
+    claimprobe)
+        init
+        # Record how the task looks WHILE the worker runs: the dispatcher
+        # must have claimed it (in_progress + owner stamp) before this point.
+        icarium task show "$tid" > "$(dirname "$ICARIUM_DB")/stub-claim-$tid.txt" 2>&1
+        commit_work
+        result
+        exit 0
+        ;;
     icarium)
         init
         # Nested-store regression: a child `icarium` with no --db must resolve

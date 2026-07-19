@@ -1,6 +1,5 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
-import Control.Exception (SomeException, catch)
 import Control.Monad (forM, forM_, unless, void, when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace)
@@ -11,11 +10,8 @@ import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
-import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
-import System.Posix.Unistd (getSystemID, nodeName)
-import System.Posix.User (getEffectiveUserName)
 
 import Icarium.Bodies (bodiesDir, readBody, taskBodyPath)
 import Icarium.Commands.Util
@@ -434,23 +430,10 @@ runClaim db o = do
         fatal 2 "--owner must not be empty"
     withDb db $ \c -> do
         owner <- maybe defaultOwner pure (clOwner o)
-        mtid <- RT.claimNextTask c owner
-        case mtid of
+        mt <- RT.claimNextTask c owner
+        case mt of
             Nothing -> exitWith (ExitFailure 1)
-            Just tid -> TIO.putStrLn tid
-
-{- | Who a claim is stamped for when @--owner@ is absent. ICARIUM_OWNER lets
-a supervisor name its agents; the user\@host fallback at least distinguishes
-machines.
--}
-defaultOwner :: IO Text
-defaultOwner =
-    lookupEnv "ICARIUM_OWNER" >>= \case
-        Just s | not (all isSpace s) -> pure (T.strip (T.pack s))
-        _ -> do
-            user <- getEffectiveUserName `catch` \(_ :: SomeException) -> pure "unknown"
-            host <- nodeName <$> getSystemID
-            pure (T.pack (user <> "@" <> host))
+            Just t -> TIO.putStrLn (taskId t)
 
 -- =============================================================
 -- path

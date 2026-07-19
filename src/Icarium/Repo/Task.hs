@@ -9,6 +9,8 @@ module Icarium.Repo.Task (
     resolveTaskId,
     listTasks,
     claimNextTask,
+    claimTask,
+    releaseTask,
     updateTask,
     deleteTask,
     listTaskIdTimes,
@@ -18,7 +20,7 @@ module Icarium.Repo.Task (
     taskExists,
 ) where
 
-import Control.Monad (when)
+import Control.Monad (void, when)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -131,7 +133,8 @@ listTasks conn filterStates readyOnly cats = do
     buildQ t o = Query $ "SELECT " <> taskCols "" <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
 
 {- | Take the head of the ready queue, mark it in-progress and stamp
-@owner@ on it. Returns the claimed id, or Nothing when nothing is ready.
+@owner@ on it. Returns the claimed task as it now stands, or Nothing when
+nothing is ready.
 
 @BEGIN IMMEDIATE@ acquires the write lock before the read, so concurrent
 claims serialise and the loser re-reads a queue the winner has already
@@ -139,20 +142,43 @@ shortened. A deferred transaction (sqlite-simple's @withTransaction@)
 would not do: both callers would read the same head row, then one would
 fail to upgrade its read lock — which @busy_timeout@ cannot resolve.
 -}
-claimNextTask :: Connection -> Text -> IO (Maybe Text)
+claimNextTask :: Connection -> Text -> IO (Maybe Task)
 claimNextTask conn owner = withImmediateTransaction conn $ do
     rows <- query_ conn (Query $ "SELECT id FROM ready_tasks ORDER BY " <> readyOrder <> " LIMIT 1")
     case rows of
         [] -> pure Nothing
         (Only tid : _) -> do
-            execute
-                conn
-                ( Query
-                    "UPDATE tasks SET state='in_progress', claimed_by=?, \
-                    \claimed_at=datetime('now') WHERE id=?"
-                )
-                (owner, tid)
-            pure (Just tid)
+            stampClaim conn tid owner
+            getTask conn tid
+
+{- | Claim a named task regardless of queue position or state. @dispatch
+run TASK_ID@ re-runs tasks that are blocked or already in progress, so a
+compare-and-swap on 'Ready' would refuse the cases it exists to serve;
+naming the task is itself the selection.
+-}
+claimTask :: Connection -> Text -> Text -> IO (Maybe Task)
+claimTask conn tid owner = do
+    stampClaim conn tid owner
+    getTask conn tid
+
+stampClaim :: Connection -> Text -> Text -> IO ()
+stampClaim conn tid owner =
+    execute
+        conn
+        ( Query
+            "UPDATE tasks SET state='in_progress', claimed_by=?, \
+            \claimed_at=datetime('now') WHERE id=?"
+        )
+        (owner, tid)
+
+{- | Hand a claimed task back to the queue: state 'Ready' also clears the
+claim stamp (see 'updateTask'). For a claim whose work never started —
+worktree setup failed, capacity ran out — leaving it in_progress would
+strand it outside both the ready queue and @dispatch recover@.
+-}
+releaseTask :: Connection -> Text -> IO ()
+releaseTask conn tid =
+    void $ updateTask conn tid emptyUpdate{tuState = Just Ready}
 
 {- | Apply a sparse update. Returns True iff a row was affected.
 When the title changes, updates the FTS5 entry to keep search current.

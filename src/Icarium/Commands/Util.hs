@@ -26,6 +26,7 @@ module Icarium.Commands.Util (
     resolveBody,
 
     -- * Small helpers
+    defaultOwner,
     subcmd,
     detectUtf8,
     detectTty,
@@ -33,7 +34,8 @@ module Icarium.Commands.Util (
     jsonFlag,
 ) where
 
-import Data.Char (toUpper)
+import Control.Exception (SomeException, catch)
+import Data.Char (isSpace, toUpper)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -44,12 +46,27 @@ import Options.Applicative
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
+import System.Posix.Unistd (getSystemID, nodeName)
+import System.Posix.User (getEffectiveUserName)
 
 import Icarium.Config (Config, defaultConfigPath, loadConfig)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
+
+{- | Who a claim is stamped for when no owner is given. ICARIUM_OWNER lets
+a supervisor name its agents; the user\@host fallback at least distinguishes
+machines.
+-}
+defaultOwner :: IO Text
+defaultOwner =
+    lookupEnv "ICARIUM_OWNER" >>= \case
+        Just s | not (all isSpace s) -> pure (T.strip (T.pack s))
+        _ -> do
+            user <- getEffectiveUserName `catch` \(_ :: SomeException) -> pure "unknown"
+            host <- nodeName <$> getSystemID
+            pure (T.pack (user <> "@" <> host))
 
 fatal :: Int -> String -> IO a
 fatal code msg = do
