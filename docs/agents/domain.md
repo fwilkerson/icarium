@@ -38,6 +38,14 @@ Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
         └── docs/adr/
 ```
 
+## How these docs grow
+
+Pure accrual: docs change only when a decision happens. Wayfinding and
+grilling sessions mint ADRs; `/domain-modeling` updates `CONTEXT.md`; the ctx
+curation sweep retires stale ctx entries. There is no standing doc-maintenance
+sweep. If a session trips over a stale or missing doc, file a tracked task for
+it — never fix-silently-later or skip-silently.
+
 ## Use the glossary's vocabulary
 
 When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
