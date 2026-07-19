@@ -147,8 +147,8 @@ checkBodies dbPath = do
         then pure []
         else do
             (tasks, ctxs) <- withDb dbPath $ \conn -> do
-                ts <- RT.listTasks conn [] False Nothing Nothing
-                cxs <- RCx.listContexts conn Nothing True Nothing Nothing
+                ts <- RT.listTasks conn [] False []
+                cxs <- RCx.listContexts conn Nothing True []
                 pure (ts, cxs)
             let live = filter ((/= Abandoned) . taskState) tasks
             taskFails <- mapM (bodyFailure "task" taskBodyPath . taskId) live

@@ -50,6 +50,8 @@ tests =
             , testCase "explicit ref deduped from auto-pull" testDedup
             , testCase "cap at 5, ordered most-recent-first" testCap
             , testCase "one-axis match excluded when task has both axes" testOneAxisMismatch
+            , testCase "workflow axis (kind) does not narrow the pull" testKindIgnored
+            , testCase "kind alone matches nothing" testKindOnlyMatchesNothing
             ]
         , testGroup
             "curation (ADR 0001: derived retirement)"
@@ -70,6 +72,7 @@ tests =
             , testCase "bad SQL rolls back; user_version unchanged" testMigrateBadSqlRollback
             , testCase "user_version=0 with existing tables: stamps schemaVersion, no DDL re-run" testMigrateVersionZeroWithSchema
             , testCase "full migration chain runs from an empty DB to schemaVersion" testMigrateChainFromEmpty
+            , testCase "migration 14 widens the axis CHECK, keeping rows and FKs" testMigration14KindAxis
             ]
         , testGroup
             "dispatch token columns"
@@ -310,6 +313,33 @@ testCap = withTestDb $ \c -> do
     result <- RK.categoryMatchedContexts c [domCat] 5
     length result @?= 5
     map contextId result @?= reverse (tail kids)
+
+{- | The load-bearing property of the workflow axis: adding a @kind@ to a
+task must pull exactly the context it pulled without one. If @kind@ ever
+becomes a retrieval axis, every clause ANDs — and no context carries a
+kind, so auto-pull would silently return nothing.
+-}
+testKindIgnored :: IO ()
+testKindIgnored = withTestDb $ \c -> do
+    domCat <- mkCat c Domain "cli"
+    discCat <- mkCat c Discipline "haskell"
+    kindCat <- mkCat c Kind "bug"
+    kid <- mkContext c "Retrieval-tagged K" "body"
+    attachContextCats c kid [domCat, discCat]
+    without <- RK.categoryMatchedContexts c [domCat, discCat] 5
+    with <- RK.categoryMatchedContexts c [domCat, discCat, kindCat] 5
+    map contextId with @?= map contextId without
+    map contextId with @?= [kid]
+
+-- | A kind on its own is not a retrieval axis, so it matches nothing.
+testKindOnlyMatchesNothing :: IO ()
+testKindOnlyMatchesNothing = withTestDb $ \c -> do
+    kindCat <- mkCat c Kind "bug"
+    kid <- mkContext c "Untagged K" "body"
+    -- Even a context wrongly carrying the kind must not auto-pull on it.
+    attachContextCats c kid [kindCat]
+    result <- RK.categoryMatchedContexts c [kindCat] 5
+    null result @?= True
 
 testOneAxisMismatch :: IO ()
 testOneAxisMismatch = withTestDb $ \c -> do
@@ -782,7 +812,7 @@ testResolveNodeAmbiguous = withTestDb $ \c -> do
 
 testSyncInserts :: IO ()
 testSyncInserts = withTestDb $ \conn -> do
-    let cfg = CategoriesConfig{catDomains = ["cli"], catDisciplines = ["haskell"]}
+    let cfg = CategoriesConfig{catDomains = ["cli"], catDisciplines = ["haskell"], catKinds = []}
     rpt <- syncCategories conn cfg False
     srInserted rpt @?= [(Domain, "cli"), (Discipline, "haskell")]
     null (srOrphans rpt) @?= True
@@ -794,7 +824,7 @@ testSyncInserts = withTestDb $ \conn -> do
 testSyncOrphanNoPrune :: IO ()
 testSyncOrphanNoPrune = withTestDb $ \conn -> do
     _ <- RC.insertCategory conn Domain "stale-domain"
-    let cfg = CategoriesConfig{catDomains = [], catDisciplines = []}
+    let cfg = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
     rpt <- syncCategories conn cfg False
     null (srInserted rpt) @?= True
     length (srOrphans rpt) @?= 1
@@ -806,7 +836,7 @@ testSyncOrphanNoPrune = withTestDb $ \conn -> do
 testSyncPrunesUnused :: IO ()
 testSyncPrunesUnused = withTestDb $ \conn -> do
     _ <- RC.insertCategory conn Domain "stale-domain"
-    let cfg = CategoriesConfig{catDomains = [], catDisciplines = []}
+    let cfg = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
     rpt <- syncCategories conn cfg True
     null (srInserted rpt) @?= True
     null (srOrphans rpt) @?= True
@@ -829,7 +859,7 @@ testSyncBlocksInUse = withTestDb $ \conn -> do
                 , RT.ntNoCommit = False
                 }
     RC.attachTaskCategory conn tid cid
-    let cfg = CategoriesConfig{catDomains = [], catDisciplines = []}
+    let cfg = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
     rpt <- syncCategories conn cfg True
     null (srInserted rpt) @?= True
     null (srOrphans rpt) @?= True
@@ -1490,7 +1520,7 @@ mkDepPair c = do
     pure (dep, dependent)
 
 readyIds :: Connection -> IO [Text]
-readyIds c = map taskId <$> RT.listTasks c [] True Nothing Nothing
+readyIds c = map taskId <$> RT.listTasks c [] True []
 
 testParkedDepBlocks :: IO ()
 testParkedDepBlocks = withTestDb $ \c -> do
@@ -1533,6 +1563,68 @@ testMigration10ReplacesView = withBaseTestDb $ \conn -> do
     assertBool
         "recreated view gates on unmerged dispatches"
         (any (\(Only s) -> "merge_sha IS NULL" `T.isInfixOf` s) sql)
+
+{- | Migration 14 rebuilds `categories` to widen its axis CHECK. The rebuild
+must keep existing rows, keep the child link tables pointing at the new
+table (FK cascade still fires), and accept the new axis.
+-}
+testMigration14KindAxis :: IO ()
+testMigration14KindAxis = withBaseTestDb $ \conn -> do
+    -- Restore the v13 shape verbatim: CHECK without 'kind'. Rebuilt from
+    -- scratch (children first) so no ALTER-rename semantics are involved in
+    -- the fixture itself.
+    execSql
+        conn
+        "DROP TABLE task_categories;\n\
+        \DROP TABLE context_categories;\n\
+        \DROP TABLE categories;\n\
+        \CREATE TABLE categories (\n\
+        \  id   TEXT PRIMARY KEY,\n\
+        \  axis TEXT NOT NULL CHECK (axis IN ('domain','discipline')),\n\
+        \  name TEXT NOT NULL,\n\
+        \  UNIQUE (axis, name));\n\
+        \CREATE TABLE task_categories (\n\
+        \  task_id     TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\n\
+        \  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,\n\
+        \  PRIMARY KEY (task_id, category_id));\n\
+        \CREATE TABLE context_categories (\n\
+        \  context_id  TEXT NOT NULL REFERENCES context(id) ON DELETE CASCADE,\n\
+        \  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,\n\
+        \  PRIMARY KEY (context_id, category_id));"
+    tid <-
+        RT.insertTask
+            conn
+            RT.NewTask
+                { RT.ntTitle = "Tagged"
+                , RT.ntBody = ""
+                , RT.ntState = Ready
+                , RT.ntPriority = Nothing
+                , RT.ntNoCommit = False
+                }
+    cid <- RC.insertCategory conn Domain "cli"
+    RC.attachTaskCategory conn tid cid
+
+    let m14 = case filter ((== 14) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 14 not registered"
+    migrationUp m14 conn
+
+    survivors <- RC.listCategories conn Nothing
+    map (\c -> (categoryAxis c, categoryName c)) survivors @?= [(Domain, "cli")]
+    attached <- RC.taskCategoriesFor conn tid
+    map categoryName attached @?= ["cli"]
+
+    -- The widened CHECK accepts the workflow axis.
+    kid <- RC.insertCategory conn Kind "bug"
+    RC.attachTaskCategory conn tid kid
+    both <- RC.taskCategoriesFor conn tid
+    length both @?= 2
+
+    -- Child FK still resolves to the rebuilt table: deleting the task
+    -- cascades its attachments away.
+    void $ RT.deleteTask conn tid
+    orphaned <- RC.taskCategoriesFor conn tid
+    null orphaned @?= True
 
 testListParkedDispatches :: IO ()
 testListParkedDispatches = withTestDb $ \c -> do

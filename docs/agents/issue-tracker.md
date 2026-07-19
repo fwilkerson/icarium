@@ -7,11 +7,15 @@ authoring durable tasks and ctx entries.
 
 ## When a skill says "publish to the issue tracker"
 
-    icarium task add "Title" --domain <d> --discipline <d> --body-stdin <<'EOF'
+    icarium task add "Title" --domain <d> --discipline <d> --kind <k> --body-stdin <<'EOF'
     ...markdown body...
     EOF
 
-`--domain`/`--discipline` must be registered (`icarium category list`). New tasks
+All three must be registered (`icarium category list`; register with
+`icarium category add --axis <axis> <name>`). `--domain`/`--discipline` are the
+retrieval axes — they decide which ctx entries a dispatch prompt pulls in, so
+fill them. `--kind` (`bug`, `enhancement`, `chore`, …) records the shape of the
+work; it is task-only and never affects the pull. New tasks
 start in state `idea`. Specs/PRDs are ctx entries (`icarium ctx add`), linked via
 `icarium link add <task> references <ctx>`.
 

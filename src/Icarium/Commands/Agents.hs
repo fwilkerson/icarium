@@ -22,7 +22,7 @@ guide =
     \  Read/Edit/Write tools.\n\
     \\n\
     \Create (one shot, fully linked)\n\
-    \  icarium task add \"Title\" --domain <d> --discipline <d> \\\n\
+    \  icarium task add \"Title\" --domain <d> --discipline <d> --kind <k> \\\n\
     \    --references <ctx-id> --depends-on <task-id> --priority 7\n\
     \  # stdout: <new-id>\\n<body-path>\n\
     \\n\
@@ -74,8 +74,13 @@ guide =
     \  icarium link add <task> depends-on <task>\n\
     \  icarium link add <task> references <ctx>\n\
     \\n\
-    \Categories (two axes: domain, discipline)\n\
-    \  --domain/--discipline values must already be registered:\n\
+    \Categories (three axes: domain, discipline, kind)\n\
+    \  domain/discipline are retrieval axes: tasks and ctx both carry them,\n\
+    \  and a dispatched task auto-pulls ctx matching on both. Fill them in.\n\
+    \  kind is a workflow axis (bug, enhancement, chore, ...): it says what\n\
+    \  shape the work is. Tasks only — ctx takes no --kind — and it never\n\
+    \  affects which ctx gets pulled.\n\
+    \  All values must already be registered:\n\
     \  icarium category list\n\
     \  icarium category add --axis domain <name>  # idempotent; updates\n\
     \                                             # icarium.toml + DB\n\

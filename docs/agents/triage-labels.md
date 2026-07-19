@@ -14,3 +14,17 @@ states where a natural mapping exists.
 
 When a skill says "apply label X", make the corresponding state transition
 (`icarium task update <id> --state <s>`) or body edit.
+
+## Roles that are not lifecycle
+
+The five roles above all describe *where a task is* in its lifecycle, which is
+why states carry them. A role describing *what the work is* — `bug`,
+`enhancement`, `chore` — is not a lifecycle position and lands on the `kind`
+category axis instead:
+
+    icarium task update <id> --kind bug
+    icarium task list --kind enhancement
+
+`kind` is task-only and does not affect which ctx a dispatch prompt pulls in
+(see CONTEXT.md on retrieval vs workflow axes). Register the vocabulary per
+repo in `icarium.toml` under `[categories] kinds`.

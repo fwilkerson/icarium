@@ -3,11 +3,14 @@ module Icarium.Repo.Internal (
     prefixLookup,
     resolveByPrefix,
     taskCols,
+    axisFilters,
 ) where
 
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, FromRow, Only (..), Query (..), query)
+import Database.SQLite.Simple (Connection, FromRow, Only (..), Query (..), SQLData (..), query)
+
+import Icarium.Types (CategoryAxis, categoryAxisText)
 
 {- | Column list matching @FromRow Task@, each name prefixed with @alias@
 (@"t."@ for a join, @""@ unqualified). Every SELECT that builds a @Task@
@@ -31,6 +34,25 @@ taskCols alias =
             , "claimed_by"
             , "claimed_at"
             ]
+
+{- | One @id IN (…)@ clause per @(axis, name)@ filter, ANDed by the caller.
+@joinTable@/@idCol@ name the link table (@task_categories@/@task_id@ or
+@context_categories@/@context_id@). Axis names are interpolated (a closed
+enum, not user input); the category name is bound.
+-}
+axisFilters :: Text -> Text -> [(CategoryAxis, Text)] -> ([Text], [SQLData])
+axisFilters joinTable idCol filters =
+    (map (clause . fst) filters, map (SQLText . snd) filters)
+  where
+    clause axis =
+        "id IN (SELECT "
+            <> idCol
+            <> " FROM "
+            <> joinTable
+            <> " jt JOIN categories c ON c.id = jt.category_id"
+            <> " WHERE c.axis = '"
+            <> categoryAxisText axis
+            <> "' AND c.name = ?)"
 
 -- | Escape LIKE special characters so they match literally.
 escapeLike :: Text -> Text

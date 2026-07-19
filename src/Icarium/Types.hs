@@ -18,6 +18,8 @@ module Icarium.Types (
     CategoryAxis (..),
     categoryAxisText,
     parseCategoryAxis,
+    retrievalAxes,
+    isRetrievalAxis,
     DispatchOutcome (..),
     dispatchOutcomeText,
     parseDispatchOutcome,
@@ -155,17 +157,45 @@ parseNodeKind = \case
     "context" -> Just ContextNode
     _ -> Nothing
 
-data CategoryAxis = Domain | Discipline deriving (Show, Eq)
+{- | Category axes, split by job:
+
+* /Retrieval/ — 'Domain' (where it is relevant) and 'Discipline' (who it is
+  relevant for). Carried by both tasks and context, and they exist to match
+  the two.
+* /Workflow/ — 'Kind' (what shape the work is: bug, chore, refactor…).
+  Task-only. It describes the work, not when a learning is relevant, so it
+  has no retrieval job.
+
+See 'retrievalAxes' for why the split is load-bearing.
+-}
+data CategoryAxis = Domain | Discipline | Kind deriving (Show, Eq)
 
 categoryAxisText :: CategoryAxis -> Text
 categoryAxisText Domain = "domain"
 categoryAxisText Discipline = "discipline"
+categoryAxisText Kind = "kind"
 
 parseCategoryAxis :: Text -> Maybe CategoryAxis
 parseCategoryAxis = \case
     "domain" -> Just Domain
     "discipline" -> Just Discipline
+    "kind" -> Just Kind
     _ -> Nothing
+
+{- | The axes that participate in context auto-pull, in match order.
+
+Every axis listed here /narrows/ the pull: @categoryMatchedContexts@ builds
+one clause per axis present on the task and ANDs them. A workflow axis must
+therefore stay out — a task tagged @kind=bug@ would otherwise only match
+context also tagged @kind=bug@, and no context written before the axis
+existed has one, so auto-pull would silently go quiet.
+-}
+retrievalAxes :: [CategoryAxis]
+retrievalAxes = [Domain, Discipline]
+
+-- | Is this axis accepted on context entries? Workflow axes are task-only.
+isRetrievalAxis :: CategoryAxis -> Bool
+isRetrievalAxis = (`elem` retrievalAxes)
 
 -- =============================================================
 -- FromField / ToField for enums

@@ -19,7 +19,7 @@ module Icarium.Repo.Context (
 ) where
 
 import Control.Monad (when)
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (
@@ -34,8 +34,15 @@ import Database.SQLite.Simple (
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Types (Category (..), CategoryAxis (..), Context (..), NodeKind (..))
+import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix)
+import Icarium.Types (
+    Category (..),
+    CategoryAxis,
+    Context (..),
+    NodeKind (..),
+    categoryAxisText,
+    retrievalAxes,
+ )
 
 data NewContext = NewContext
     { ncTitle :: Text
@@ -86,37 +93,28 @@ resolveContextId conn = resolveByPrefix (getContextsByPrefix conn) contextId "co
 @retired_context@ view for the derived predicate).
 @includeSuperseded@: @False@ excludes entries that are the @dst@ of a
 @supersedes@ edge (i.e. older versions); @True@ keeps all entries.
+@cats@ is a list of @(axis, name)@ filters, ANDed; only retrieval axes
+ever reach here, since context carries no workflow axis.
 -}
-listContexts :: Connection -> Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> IO [Context]
-listContexts conn retiredFilter includeSuperseded mDomain mDisc =
+listContexts :: Connection -> Maybe Bool -> Bool -> [(CategoryAxis, Text)] -> IO [Context]
+listContexts conn retiredFilter includeSuperseded cats =
     query conn q params
   where
-    (whereClause, params) = ctxCatWhere retiredFilter includeSuperseded mDomain mDisc
+    (whereClause, params) = ctxCatWhere retiredFilter includeSuperseded cats
     q = Query $ "SELECT " <> contextCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
 
-ctxCatWhere :: Maybe Bool -> Bool -> Maybe Text -> Maybe Text -> (Text, [SQLData])
-ctxCatWhere retiredFilter includeSuperseded mDomain mDisc =
-    let catSubq axis =
-            "id IN (SELECT context_id FROM context_categories cc"
-                <> " JOIN categories c ON c.id = cc.category_id"
-                <> " WHERE c.axis = '"
-                <> axis
-                <> "' AND c.name = ?)"
-        retiredClauses = case retiredFilter of
+ctxCatWhere :: Maybe Bool -> Bool -> [(CategoryAxis, Text)] -> (Text, [SQLData])
+ctxCatWhere retiredFilter includeSuperseded cats =
+    let retiredClauses = case retiredFilter of
             Nothing -> []
             Just True -> ["id IN (SELECT context_id FROM retired_context)"]
             Just False -> ["id NOT IN (SELECT context_id FROM retired_context)"]
-        catFilters =
-            catMaybes
-                [ fmap (\n -> (catSubq "domain", SQLText n)) mDomain
-                , fmap (\n -> (catSubq "discipline", SQLText n)) mDisc
-                ]
+        (catClauses, catParams) = axisFilters "context_categories" "context_id" cats
         supersededClause =
             [ "id NOT IN (SELECT dst_id FROM edges WHERE kind = 'supersedes' AND dst_kind = 'context')"
             | not includeSuperseded
             ]
-        clauses = retiredClauses <> supersededClause <> map fst catFilters
-        catParams = map snd catFilters
+        clauses = retiredClauses <> supersededClause <> catClauses
      in case clauses of
             [] -> ("", [])
             cs -> (" WHERE " <> T.intercalate " AND " cs, catParams)
@@ -173,30 +171,33 @@ contextExists conn cid = do
     pure (not (null rows))
 
 {- | Context entries whose categories AND-intersect with the given
-category list (one condition per axis present in the input). Current
-entries only — retired entries never auto-pull. Returns [] immediately
-when the input list is empty. Cap limits results; order is
-most-recently-created first.
+category list (one condition per retrieval axis present in the input).
+Current entries only — retired entries never auto-pull. Returns []
+immediately when no retrieval axis is present. Cap limits results; order
+is most-recently-created first.
+
+Workflow axes ('Types.retrievalAxes' decides which) are dropped on the
+way in: every clause here narrows the pull, so honouring @kind@ would
+mean a task tagged @kind=bug@ matches only context also tagged
+@kind=bug@ — and context never carries one.
 -}
 categoryMatchedContexts :: Connection -> [Category] -> Int -> IO [Context]
 categoryMatchedContexts conn cats cap
     | null clauses = pure []
     | otherwise = query conn q params
   where
-    domains = [categoryName c | c <- cats, categoryAxis c == Domain]
-    discs = [categoryName c | c <- cats, categoryAxis c == Discipline]
+    namesOn axis = [categoryName c | c <- cats, categoryAxis c == axis]
+    matching = [(axis, ns) | axis <- retrievalAxes, let ns = namesOn axis, not (null ns)]
     axisClause axis names =
         let ph = T.intercalate "," (replicate (length names) "?")
          in "id IN (SELECT context_id FROM context_categories cc \
             \JOIN categories c ON c.id = cc.category_id \
             \WHERE c.axis = '"
-                <> axis
+                <> categoryAxisText axis
                 <> "' AND c.name IN ("
                 <> ph
                 <> "))"
-    clauses =
-        [axisClause "domain" domains | not (null domains)]
-            <> [axisClause "discipline" discs | not (null discs)]
+    clauses = map (uncurry axisClause) matching
     q =
         Query $
             "SELECT "
@@ -205,4 +206,5 @@ categoryMatchedContexts conn cats cap
                 <> " WHERE id NOT IN (SELECT context_id FROM retired_context) AND "
                 <> T.intercalate " AND " clauses
                 <> " ORDER BY created_at DESC LIMIT ?"
-    params = map SQLText domains <> map SQLText discs <> [SQLInteger (fromIntegral cap)]
+    params =
+        map SQLText (concatMap snd matching) <> [SQLInteger (fromIntegral cap)]

@@ -13,6 +13,7 @@ module Icarium.Commands.Util (
     -- * Category validation
     requireCategory,
     resolveAxisFlag,
+    resolveCatFilters,
 
     -- * Node resolution
     requireTask,
@@ -200,7 +201,15 @@ requireCategory c axis name = do
                     <> T.unpack name
                     <> "` (existing: `icarium category list`)"
 
-{- | Validate a @--domain@/@--discipline@ flag value for update commands.
+{- | Drop the axes whose filter flag was absent and validate the rest, so a
+typo'd category name fails before the query runs rather than silently
+returning nothing.
+-}
+resolveCatFilters :: Connection -> [(CategoryAxis, Maybe Text)] -> IO [(CategoryAxis, Text)]
+resolveCatFilters c flags =
+    mapM (\(ax, n) -> (ax, n) <$ requireCategory c ax n) [(ax, n) | (ax, Just n) <- flags]
+
+{- | Validate a @--domain@/@--discipline@/@--kind@ flag value for update commands.
 @Nothing@   = flag not given → no-op.
 @Just ""@   = flag given with empty string → clear the axis.
 @Just name@ = flag given with a name → validate and return the category.

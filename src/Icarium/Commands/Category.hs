@@ -70,7 +70,7 @@ addP =
             axisReader
             ( long "axis"
                 <> metavar "AXIS"
-                <> help "Axis to register under (domain | discipline)."
+                <> help "Axis to register under (domain | discipline | kind)."
             )
         <*> (T.pack <$> strArgument (metavar "NAME" <> help "Category name (letters, digits, . _ -)."))
 
@@ -85,6 +85,7 @@ runAdd db o = do
     let tomlNames = case axis of
             Domain -> catDomains (cfgCategories config)
             Discipline -> catDisciplines (cfgCategories config)
+            Kind -> catKinds (cfgCategories config)
         inToml = name `elem` tomlNames
     withDb db $ \c -> do
         mExisting <- RC.findCategory c axis name
@@ -116,7 +117,7 @@ listP =
                 axisReader
                 ( long "axis"
                     <> metavar "AXIS"
-                    <> help "Filter by axis (domain | discipline)."
+                    <> help "Filter by axis (domain | discipline | kind)."
                 )
             )
 
@@ -216,6 +217,7 @@ tomlCategoryList :: CategoriesConfig -> [(CategoryAxis, Text)]
 tomlCategoryList cfg =
     [(Domain, n) | n <- catDomains cfg]
         ++ [(Discipline, n) | n <- catDisciplines cfg]
+        ++ [(Kind, n) | n <- catKinds cfg]
 
 toInsertList :: [Category] -> [(CategoryAxis, Text)] -> [(CategoryAxis, Text)]
 toInsertList dbCats =

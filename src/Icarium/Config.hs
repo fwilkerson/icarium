@@ -20,7 +20,7 @@ module Icarium.Config (
     addCategoryToToml,
 ) where
 
-import Data.List (findIndex)
+import Data.List (dropWhileEnd, findIndex)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -71,9 +71,14 @@ data DispatchConfig = DispatchConfig
     }
     deriving (Show)
 
+{- | The @[categories]@ table. @catKinds@ is the workflow axis and decodes
+as optional, so configs written before the axis existed still load; empty
+means the repo does not classify by kind.
+-}
 data CategoriesConfig = CategoriesConfig
     { catDomains :: [Text]
     , catDisciplines :: [Text]
+    , catKinds :: [Text]
     }
     deriving (Show)
 
@@ -128,6 +133,7 @@ categoriesCodec =
     CategoriesConfig
         <$> Toml.arrayOf Toml._Text "domains" .= catDomains
         <*> Toml.arrayOf Toml._Text "disciplines" .= catDisciplines
+        <*> (fromMaybe [] <$> Toml.dioptional (Toml.arrayOf Toml._Text "kinds")) .= (Just . catKinds)
 
 reviewCodec :: TomlCodec ReviewConfig
 reviewCodec =
@@ -170,15 +176,18 @@ loadConfig fp = do
         Right c -> validateConfig c
 
 {- | Append a category name to the axis's array in icarium.toml source text,
-preserving all other lines (comments included). Fails without modifying
-anything when the array line can't be located or the result no longer
-decodes — the caller falls back to telling the user to edit by hand.
+preserving all other lines (comments included). When the axis has no array
+line at all — @kinds@ in configs written before the axis existed — the array
+is created at the end of the @[categories]@ table. Fails without modifying
+anything when there is nowhere to put it or the result no longer decodes —
+the caller falls back to telling the user to edit by hand.
 -}
 addCategoryToToml :: CategoryAxis -> Text -> Text -> Either String Text
 addCategoryToToml axis name src = do
     let key = case axis of
             Domain -> "domains"
             Discipline -> "disciplines"
+            Kind -> "kinds"
         ls = T.lines src
         manualHint =
             "add \""
@@ -186,12 +195,19 @@ addCategoryToToml axis name src = do
                 <> "\" to the "
                 <> T.unpack key
                 <> " array in icarium.toml manually and run `icarium category sync`"
-    idx <- case findIndex (isArrayLine key) ls of
-        Just i -> Right i
-        Nothing ->
-            Left ("no single-line `" <> T.unpack key <> " = [...]` found in icarium.toml; " <> manualHint)
-    newLine <- insertIntoArray name (ls !! idx)
-    let out = T.unlines (take idx ls <> [newLine] <> drop (idx + 1) ls)
+    out <- case findIndex (isArrayLine key) ls of
+        Just i -> do
+            newLine <- insertIntoArray name (ls !! i)
+            Right (T.unlines (take i ls <> [newLine] <> drop (i + 1) ls))
+        Nothing -> case appendArrayLine key name ls of
+            Just ls' -> Right (T.unlines ls')
+            Nothing ->
+                Left
+                    ( "no single-line `"
+                        <> T.unpack key
+                        <> " = [...]` and no [categories] table in icarium.toml; "
+                        <> manualHint
+                    )
     case Toml.decode configCodec out of
         Left _ -> Left ("editing icarium.toml would corrupt it; " <> manualHint)
         Right c
@@ -201,6 +217,7 @@ addCategoryToToml axis name src = do
     axisNames = case axis of
         Domain -> catDomains
         Discipline -> catDisciplines
+        Kind -> catKinds
 
 -- | Matches @key = [ ... ]@ on one line, ignoring surrounding whitespace.
 isArrayLine :: Text -> Text -> Bool
@@ -212,6 +229,20 @@ isArrayLine key l =
                 let v = T.strip arr
                  in "[" `T.isPrefixOf` v && "]" `T.isSuffixOf` v
             _ -> False
+
+{- | Create @key = ["name"]@ as the last entry of the @[categories]@ table,
+after any trailing comments but before the blank run separating the next
+table. @Nothing@ when there is no @[categories]@ table to extend.
+-}
+appendArrayLine :: Text -> Text -> [Text] -> Maybe [Text]
+appendArrayLine key name ls = do
+    hdr <- findIndex ((== "[categories]") . T.strip) ls
+    let body = takeWhile (not . isTableHeader) (drop (hdr + 1) ls)
+        at = hdr + 1 + length (dropWhileEnd (T.null . T.strip) body)
+    pure (take at ls <> [key <> " = [\"" <> name <> "\"]"] <> drop at ls)
+
+isTableHeader :: Text -> Bool
+isTableHeader = T.isPrefixOf "[" . T.stripStart
 
 -- | Insert @"name"@ before the closing bracket of a single-line array.
 insertIntoArray :: Text -> Text -> Either String Text
@@ -270,8 +301,13 @@ defaultConfigText =
     \# `icarium category add --axis domain <name>` (updates this file + DB),\n\
     \# or edit here and run `icarium category sync` (--prune deletes removed\n\
     \# names from the DB).\n\
+    \#\n\
+    \# domains/disciplines are retrieval axes: tasks and context both carry\n\
+    \# them, and a task auto-pulls context matching on both. `kinds` is a\n\
+    \# workflow axis — task-only, and deliberately ignored by auto-pull.\n\
     \domains     = [\"core\"]\n\
     \disciplines = [\"development\"]\n\
+    \kinds       = [\"bug\", \"enhancement\", \"chore\"]\n\
     \\n\
     \# [review]\n\
     \# enabled      = true\n\

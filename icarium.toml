@@ -26,6 +26,7 @@ worktree_setup = "scripts/worktree-init.sh"
 [categories]
 domains     = ["cli", "dispatch", "storage", "workflow"]
 disciplines = ["haskell", "ops", "refinement"]
+kinds       = ["bug", "enhancement", "chore", "refactor", "doc"]
 
 [review]
 enabled      = true

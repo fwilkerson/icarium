@@ -215,6 +215,8 @@ tests =
         , -- issue #15: category registration + state shorthands
           testCase "category add: registers in toml+DB, idempotent, unlocks --domain" testCategoryAdd
         , testCase "category add: invalid name exits 2" testCategoryAddBadName
+        , testCase "kind axis: register, tag, filter, replace; task-only" testKindAxis
+        , testCase "kind does not narrow ctx auto-pull" testKindDoesNotNarrowAutoPull
         , testCase "task start/done shorthands transition state" testTaskStartDone
         , testCase "task update --state accepts underscore spelling in_progress" testTaskStateUnderscoreAccepted
         , -- --json on the read surface
@@ -2418,6 +2420,91 @@ testCategoryAdd = withSystemTempDirectory "icarium-test" $ \dir -> do
     assertBool "no orphan after add" (not ("orphan" `isInfixOf` sErr))
     (tCode, _, _) <- runIcariumIn dir db ["task", "add", "tagged task", "--domain", "infra"]
     tCode @?= ExitSuccess
+
+{- | The kind axis end to end: register it into a config that predates the
+axis (no `kinds` line), tag a task, filter on it, replace it, and confirm
+ctx refuses it.
+-}
+testKindAxis :: IO ()
+testKindAxis = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+        icarium = runIcariumIn dir db
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    (bCode, _, bErr) <- icarium ["task", "add", "untagged", "--kind", "bug"]
+    bCode @?= ExitFailure 2
+    assertBool "unknown kind points at category add" ("--axis kind bug" `isInfixOf` bErr)
+    -- `kinds` is absent from this config; add must create the array.
+    (rCode, rOut, _) <- icarium ["category", "add", "--axis", "kind", "bug"]
+    rCode @?= ExitSuccess
+    assertBool "reports registered" ("registered kind:bug" `isInfixOf` rOut)
+    toml <- readFile (dir <> "/icarium.toml")
+    assertBool "kinds array created in toml" ("kinds = [\"bug\"]" `isInfixOf` toml)
+    (sCode, _, sErr) <- icarium ["category", "sync"]
+    sCode @?= ExitSuccess
+    assertBool "toml and DB agree" (not ("orphan" `isInfixOf` sErr))
+    _ <- icarium ["category", "add", "--axis", "kind", "chore"]
+
+    (aCode, aOut, _) <- icarium ["task", "add", "a bug", "--kind", "bug"]
+    aCode @?= ExitSuccess
+    let tid = head (words aOut)
+    _ <- icarium ["task", "add", "a chore", "--kind", "chore"]
+    (_, showOut, _) <- icarium ["task", "show", tid]
+    assertBool "task show carries the kind" ("kind:" `isInfixOf` showOut)
+
+    (lCode, lOut, _) <- icarium ["task", "list", "--kind", "bug"]
+    lCode @?= ExitSuccess
+    assertBool "filter keeps the bug" ("a bug" `isInfixOf` lOut)
+    assertBool "filter drops the chore" (not ("a chore" `isInfixOf` lOut))
+
+    -- Replace, then clear.
+    _ <- icarium ["task", "update", tid, "--kind", "chore"]
+    (_, lOut2, _) <- icarium ["task", "list", "--kind", "bug"]
+    assertBool "old kind detached on replace" (not ("a bug" `isInfixOf` lOut2))
+    _ <- icarium ["task", "update", tid, "--kind", ""]
+    (_, showOut2, _) <- icarium ["task", "show", tid]
+    assertBool "empty string clears the axis" (not ("kind:" `isInfixOf` showOut2))
+
+    -- Workflow axis is task-only.
+    (cCode, _, cErr) <- icarium ["ctx", "add", "note", "--body", "b", "--kind", "bug"]
+    cCode @?= ExitFailure 1
+    assertBool "ctx rejects --kind" ("--kind" `isInfixOf` cErr)
+
+{- | Auto-pull is defined on the retrieval axes only. A task tagged with a
+kind must pull the same context it would have pulled without one — the
+regression that would otherwise go unnoticed until prompts quietly lost
+their related-context block.
+-}
+testKindDoesNotNarrowAutoPull :: IO ()
+testKindDoesNotNarrowAutoPull = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+        icarium = runIcariumIn dir db
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    _ <- icarium ["category", "sync"]
+    _ <- icarium ["category", "add", "--axis", "kind", "bug"]
+    -- Context carries retrieval axes only, as every entry written before
+    -- the kind axis existed does.
+    _ <-
+        icarium
+            ["ctx", "add", "pullme", "--body", "xpullbody", "--domain", "core", "--discipline", "development"]
+    (aCode, aOut, _) <-
+        icarium
+            [ "task"
+            , "add"
+            , "kinded task"
+            , "--body"
+            , "b"
+            , "--domain"
+            , "core"
+            , "--discipline"
+            , "development"
+            , "--kind"
+            , "bug"
+            ]
+    aCode @?= ExitSuccess
+    let tid = head (words aOut)
+    (pCode, pOut, _) <- icarium ["task", "show", tid, "--prompt"]
+    pCode @?= ExitSuccess
+    assertBool "related context still auto-pulled" ("xpullbody" `isInfixOf` pOut)
 
 testCategoryAddBadName :: IO ()
 testCategoryAddBadName = withTempDb $ \db -> do

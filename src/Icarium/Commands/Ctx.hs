@@ -138,13 +138,13 @@ runAdd db o = withDb db $ \c -> do
   where
     loadInherited conn tid = do
         allCats <- RC.taskCategoriesFor conn (T.pack tid)
-        pure $
-            filter
-                ( \cat ->
-                    (isNothing (aDomain o) && categoryAxis cat == Domain)
-                        || (isNothing (aDiscipline o) && categoryAxis cat == Discipline)
-                )
-                allCats
+        pure (filter (inheritable . categoryAxis) allCats)
+    -- Only retrieval axes cross from task to context; a workflow axis
+    -- describes the work, not when the learning is relevant.
+    inheritable = \case
+        Domain -> isNothing (aDomain o)
+        Discipline -> isNothing (aDiscipline o)
+        Kind -> False
 
 {- | If no explicit --derived-from was supplied and ICARIUM_TASK_ID is set,
 returns a singleton edge pointing at the dispatched task.
@@ -207,14 +207,14 @@ listP =
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
-    forM_ (lDomain o) $ \n -> void $ requireCategory c Domain n
-    forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
+    catFilters <-
+        resolveCatFilters c [(Domain, lDomain o), (Discipline, lDiscipline o)]
     let retiredFilter
             | lRetired o = Just True -- retired only
             | lAll o = Nothing -- show all
             | otherwise = Just False -- hide retired (default)
     let includeSuperseded = lAll o
-    cxs0 <- RCx.listContexts c retiredFilter includeSuperseded (lDomain o) (lDiscipline o)
+    cxs0 <- RCx.listContexts c retiredFilter includeSuperseded catFilters
     let cxs = maybe cxs0 (`take` cxs0) (lLimit o)
     rows <- buildContextRows c cxs
     if lJson o

@@ -56,12 +56,19 @@ CREATE TABLE context_curation (
 CREATE INDEX context_curation_context_idx ON context_curation(context_id);
 
 -- =============================================================
--- Categories (two independent axes, user-defined vocabulary)
+-- Categories (three independent axes, user-defined vocabulary)
+--   domain, discipline : retrieval axes. Carried by tasks and context;
+--                        they exist to match the two, so both narrow the
+--                        auto-pull in categoryMatchedContexts.
+--   kind               : workflow axis. Task-only, never on context; it
+--                        describes the shape of the work, not when a
+--                        learning is relevant, so it must not narrow the
+--                        pull. Enforced in code (Types.retrievalAxes).
 -- =============================================================
 
 CREATE TABLE categories (
     id    TEXT PRIMARY KEY,
-    axis  TEXT NOT NULL CHECK (axis IN ('domain','discipline')),
+    axis  TEXT NOT NULL CHECK (axis IN ('domain','discipline','kind')),
     name  TEXT NOT NULL,
     UNIQUE (axis, name)
 );

@@ -1,10 +1,10 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
 import Control.Exception (SomeException, catch)
-import Control.Monad (forM_, unless, void, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -83,6 +83,7 @@ data AddOpts = AddOpts
     , aPriority :: Maybe Int
     , aDomain :: Maybe Text
     , aDiscipline :: Maybe Text
+    , aKind :: Maybe Text
     , aDependsOn :: [Text]
     , aReferences :: [Text]
     , aNoCommit :: Bool
@@ -110,6 +111,7 @@ addP =
             )
         <*> optional (textOption "domain" "NAME" "Tag with this domain category")
         <*> optional (textOption "discipline" "NAME" "Tag with this discipline category")
+        <*> optional (textOption "kind" "NAME" "Tag with this kind category (shape of the work, e.g. bug | enhancement). Task-only; not used to pull related context.")
         <*> many (textOption "depends-on" "TASK_ID" "Add a depends_on edge to TASK_ID")
         <*> many (textOption "references" "CONTEXT_ID" "Add a references edge to CONTEXT_ID")
         <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
@@ -123,6 +125,7 @@ runAdd db o = withDb db $ \c -> do
     -- Pre-validate referenced categories and nodes so we fail before insert.
     mDomain <- mapM (requireCategory c Domain) (aDomain o)
     mDisc <- mapM (requireCategory c Discipline) (aDiscipline o)
+    mKind <- mapM (requireCategory c Kind) (aKind o)
     depIds <- mapM (requireTask c) (aDependsOn o)
     refIds <- mapM (requireContext c) (aReferences o)
 
@@ -137,8 +140,8 @@ runAdd db o = withDb db $ \c -> do
                 , RT.ntPriority = aPriority o
                 , RT.ntNoCommit = aNoCommit o
                 }
-    forM_ mDomain $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
-    forM_ mDisc $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
+    forM_ (catMaybes [mDomain, mDisc, mKind]) $ \cat ->
+        RC.attachTaskCategory c tid (categoryId cat)
     forM_ depIds $ \depId ->
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
@@ -158,6 +161,7 @@ data ListOpts = ListOpts
     , lReady :: Bool
     , lDomain :: Maybe Text
     , lDiscipline :: Maybe Text
+    , lKind :: Maybe Text
     , lAll :: Bool
     , lLimit :: Maybe Int
     , lJson :: Bool
@@ -178,6 +182,7 @@ listP =
         <*> switch (long "ready" <> help "Only state=ready tasks with all depends-on satisfied (matches what `dispatch run` and `task next` pick)")
         <*> optional (textOption "domain" "NAME" "Filter by domain category")
         <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
+        <*> optional (textOption "kind" "NAME" "Filter by kind category (e.g. bug | enhancement)")
         <*> switch (long "all" <> help "Include done and abandoned tasks")
         <*> optional
             ( option
@@ -194,13 +199,15 @@ defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
-    forM_ (lDomain o) $ \n -> void $ requireCategory c Domain n
-    forM_ (lDiscipline o) $ \n -> void $ requireCategory c Discipline n
+    catFilters <-
+        resolveCatFilters
+            c
+            [(Domain, lDomain o), (Discipline, lDiscipline o), (Kind, lKind o)]
     let effectiveStates
             | not (null (lStates o)) = lStates o
             | lAll o = []
             | otherwise = defaultActiveStates
-    ts0 <- RT.listTasks c effectiveStates (lReady o) (lDomain o) (lDiscipline o)
+    ts0 <- RT.listTasks c effectiveStates (lReady o) catFilters
     let ts = maybe ts0 (`take` ts0) (lLimit o)
     taskRows <- buildTaskRows c ts
     if lJson o
@@ -290,6 +297,7 @@ data UpdateOpts = UpdateOpts
     , uBlockReason :: Maybe Text
     , uDomain :: Maybe Text
     , uDiscipline :: Maybe Text
+    , uKind :: Maybe Text
     , uNoCommit :: Maybe Bool
     }
 
@@ -318,6 +326,7 @@ updateP =
         <*> optional (textOption "block-reason" "TEXT" "Reason for blocked state (required with --state blocked)")
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
+        <*> optional (textOption "kind" "NAME" "Replace kind category; empty string clears")
         <*> optional
             ( flag' True (long "no-commit" <> help "Mark as side-effect-only (no code commits required)")
                 <|> flag' False (long "commit-required" <> help "Clear no-commit flag (commit required)")
@@ -336,6 +345,7 @@ stateShorthandP st = mk . T.pack <$> strArgument (metavar "TASK_ID")
             , uBlockReason = Nothing
             , uDomain = Nothing
             , uDiscipline = Nothing
+            , uKind = Nothing
             , uNoCommit = Nothing
             }
 
@@ -344,15 +354,13 @@ runUpdate db o = withDb db $ \c -> do
     when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
     tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
-    -- Validate categories before any mutation.
-    mDomCat <- resolveAxisFlag c Domain (uDomain o)
-    mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
+    -- Validate every axis before any mutation.
+    changes <-
+        forM [(Domain, uDomain o), (Discipline, uDiscipline o), (Kind, uKind o)] $
+            \(ax, flg) -> (ax,) <$> resolveAxisFlag c ax flg
     -- Apply replacements: detach all of that axis, then attach new one if given.
-    forM_ mDomCat $ \mCat -> do
-        RC.detachTaskCategoriesByAxis c tid Domain
-        forM_ mCat $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
-    forM_ mDiscCat $ \mCat -> do
-        RC.detachTaskCategoriesByAxis c tid Discipline
+    forM_ changes $ \(ax, mChange) -> forM_ mChange $ \mCat -> do
+        RC.detachTaskCategoriesByAxis c tid ax
         forM_ mCat $ \cat -> RC.attachTaskCategory c tid (categoryId cat)
     let upd =
             RT.emptyUpdate
@@ -399,7 +407,7 @@ nextP = pure NextOpts
 
 runNext :: FilePath -> NextOpts -> IO ()
 runNext db _ = withDb db $ \c -> do
-    ts <- RT.listTasks c [] True Nothing Nothing
+    ts <- RT.listTasks c [] True []
     case ts of
         [] -> exitWith (ExitFailure 1)
         (t : _) -> TIO.putStrLn (taskId t)

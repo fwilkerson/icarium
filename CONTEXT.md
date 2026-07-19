@@ -11,6 +11,14 @@ so durable rationale captured as tagged ctx entries reaches future agents in
 that space automatically. Storage split: bodies are files, the DB keeps the
 relational layer (ADR 0002).
 
+Categories split by job. `domain`/`discipline` are *retrieval* axes: carried
+by tasks and ctx alike, and every one of them narrows the auto-pull above.
+`kind` is a *workflow* axis — task-only, describing the shape of the work
+(bug wants a repro, enhancement wants acceptance criteria) — and is excluded
+from auto-pull, since the kind of work that produced a learning does not
+predict when that learning is relevant. `Types.retrievalAxes` is where that
+split is decided; adding an axis means choosing a side there.
+
 ## Language
 
 ### Context lifecycle

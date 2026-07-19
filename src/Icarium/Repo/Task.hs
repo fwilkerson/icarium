@@ -19,7 +19,7 @@ module Icarium.Repo.Task (
 ) where
 
 import Control.Monad (when)
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (
@@ -35,8 +35,8 @@ import Database.SQLite.Simple (
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (prefixLookup, resolveByPrefix, taskCols)
-import Icarium.Types (NodeKind (..), Task (..), TaskState (..))
+import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix, taskCols)
+import Icarium.Types (CategoryAxis, NodeKind (..), Task (..), TaskState (..))
 
 data NewTask = NewTask
     { ntTitle :: Text
@@ -108,11 +108,12 @@ resolveTaskId conn = resolveByPrefix (getTasksByPrefix conn) taskId "task"
 
 {- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
 (state='ready' with all depends_on satisfied). Otherwise pulls from
-@tasks@ and optionally filters by state client-side. Both @mDomain@
-and @mDiscipline@ are category-name filters applied at the SQL level.
+@tasks@ and optionally filters by state client-side. @cats@ is a list of
+@(axis, name)@ category filters, ANDed at the SQL level; any axis may
+appear, including workflow axes.
 -}
-listTasks :: Connection -> [TaskState] -> Bool -> Maybe Text -> Maybe Text -> IO [Task]
-listTasks conn filterStates readyOnly mDomain mDisc = do
+listTasks :: Connection -> [TaskState] -> Bool -> [(CategoryAxis, Text)] -> IO [Task]
+listTasks conn filterStates readyOnly cats = do
     rows <- query conn (buildQ tbl ord) params
     pure $
         if readyOnly
@@ -123,25 +124,11 @@ listTasks conn filterStates readyOnly mDomain mDisc = do
   where
     tbl = if readyOnly then "ready_tasks" else "tasks"
     ord = if readyOnly then readyOrder else "created_at ASC"
-    (whereClause, params) = taskCatWhere mDomain mDisc
+    (clauses, params) = axisFilters "task_categories" "task_id" cats
+    whereClause = case clauses of
+        [] -> ""
+        cs -> " WHERE " <> T.intercalate " AND " cs
     buildQ t o = Query $ "SELECT " <> taskCols "" <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
-
-taskCatWhere :: Maybe Text -> Maybe Text -> (Text, [SQLData])
-taskCatWhere mDomain mDisc =
-    let catSubq axis =
-            "id IN (SELECT task_id FROM task_categories tc"
-                <> " JOIN categories c ON c.id = tc.category_id"
-                <> " WHERE c.axis = '"
-                <> axis
-                <> "' AND c.name = ?)"
-        filters =
-            catMaybes
-                [ fmap (\n -> (catSubq "domain", SQLText n)) mDomain
-                , fmap (\n -> (catSubq "discipline", SQLText n)) mDisc
-                ]
-     in case filters of
-            [] -> ("", [])
-            fs -> (" WHERE " <> T.intercalate " AND " (map fst fs), map snd fs)
 
 {- | Take the head of the ready queue, mark it in-progress and stamp
 @owner@ on it. Returns the claimed id, or Nothing when nothing is ready.

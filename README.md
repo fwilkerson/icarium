@@ -37,9 +37,12 @@ current heads by default.
 **Links** (`link`). Typed edges between nodes: `depends-on` (task→task), `references` (task→ctx),
 `derived-from` / `supersedes` (ctx→ctx).
 
-**Categories.** A controlled `domain` / `discipline` vocabulary for tagging and filtering. Edit the
-`[categories]` lists in `icarium.toml`, then `icarium category sync` to reconcile the DB
-(`--prune` to drop removed ones).
+**Categories.** A controlled vocabulary on three axes, for tagging and filtering. `domain` (where
+the work is) and `discipline` (who it is for) are *retrieval* axes: tasks and ctx both carry them,
+and a dispatch prompt auto-pulls ctx matching the task on both. `kind` (bug, enhancement, chore, …)
+is a *workflow* axis: it describes the shape of the work, so it is task-only and deliberately
+ignored by auto-pull. Edit the `[categories]` lists in `icarium.toml`, then `icarium category sync`
+to reconcile the DB (`--prune` to drop removed ones).
 
 ## Configuration
 
@@ -93,8 +96,11 @@ retry_storm_threshold    = 3
 [categories]
 # Controlled vocabulary for tagging tasks and context entries. After editing,
 # run `icarium category sync` (add `--prune` to remove deleted ones).
+# domains/disciplines are retrieval axes (tasks + ctx, drive auto-pull);
+# kinds is a workflow axis (tasks only, never affects auto-pull).
 domains     = ["core"]
 disciplines = ["development"]
+kinds       = ["bug", "enhancement", "chore"]
 
 # Optional reviewer gate (see "Reviewers" below). Omit the section to disable.
 # [review]
@@ -216,7 +222,7 @@ Every command has `--help`; agents should start with `icarium agents`.
 | `task` | Manage tasks: `add`, `list`, `show`, `update`, `rm`, `next`, `path`, `cat`, `exists`. |
 | `ctx` | Manage context entries: `add`, `list`, `show`, `update`, `rm`, `path`, `cat`, `children`, `tree`, `exists`. |
 | `link` | Typed edges between nodes: `add`, `list`, `rm`. |
-| `category` | Manage the domain/discipline vocabulary: `list`, `sync`. |
+| `category` | Manage the domain/discipline/kind vocabulary: `add`, `list`, `sync`. |
 | `dispatch` | Run and inspect dispatches: `run`, `list` (`--parked`), `show`, `logs`, `merge`, `recover`. |
 | `search` | FTS5 search over titles and bodies (`--kind`, `--domain`, phrase/`OR` queries). |
 | `reindex` | Rebuild the FTS5 body index. |

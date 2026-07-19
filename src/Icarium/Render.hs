@@ -415,7 +415,7 @@ categoriesBlock :: [Category] -> [Text]
 categoriesBlock [] = []
 categoriesBlock cats =
     "Categories:"
-        : concatMap axisLine [Domain, Discipline]
+        : concatMap axisLine [Domain, Discipline, Kind]
   where
     axisLine axis =
         let names = [categoryName c | c <- cats, categoryAxis c == axis]

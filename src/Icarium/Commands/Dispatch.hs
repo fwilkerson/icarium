@@ -194,7 +194,7 @@ drainLoop ctx !i
             opts = dctxOpts ctx
             cfg = dctxCfg ctx
             db = dctxDb ctx
-        ts <- RT.listTasks conn [] True Nothing Nothing
+        ts <- RT.listTasks conn [] True []
         case ts of
             [] -> hPutStrLn stderr "icarium: ready queue empty; stopping"
             (t : _) -> do

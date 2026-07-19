@@ -98,7 +98,7 @@ minCfg =
                 , dcMcpConfig = Nothing
                 , dcAgreementPath = Nothing
                 }
-        , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = []}
+        , cfgCategories = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
         , cfgReview = Nothing
         }
 
