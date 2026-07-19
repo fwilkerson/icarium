@@ -15,7 +15,14 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Commands.Category (SyncReport (..), syncCategories)
 import Icarium.Commands.Ctx (autoDeriveDeps)
-import Icarium.Config (CategoriesConfig (..), defaultConfigText, loadConfig)
+import Icarium.Config (
+    CategoriesConfig (..),
+    Config (..),
+    DispatchConfig (..),
+    ReviewConfig (..),
+    defaultConfigText,
+    loadConfig,
+ )
 import Icarium.Db (dbSchemaVersion, migrateDb)
 import Icarium.Id (newId)
 import Icarium.Migrations (Migration (..), migrations, mkSqlMigration)
@@ -234,7 +241,13 @@ loadConfigTest =
         result <- loadConfig fp
         case result of
             Left err -> fail ("loadConfig failed: " <> err)
-            Right _ -> pure ()
+            Right c -> do
+                -- Shipped defaults are a contract (ADR 0005).
+                dcModel (cfgDispatch c) @?= "claude-opus-4-8"
+                dcEffort (cfgDispatch c) @?= Medium
+                fmap rcEnabled (cfgReview c) @?= Just True
+                fmap rcModel (cfgReview c) @?= Just (Just "claude-sonnet-5")
+                fmap rcMaxAttempts (cfgReview c) @?= Just 2
 
 -- =============================================================
 -- categoryMatchedContexts tests

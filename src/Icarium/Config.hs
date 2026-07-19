@@ -267,8 +267,8 @@ defaultConfigText =
     \test  = \"cabal test all\"\n\
     \\n\
     \[dispatch]\n\
-    \model  = \"claude-sonnet-5\"\n\
-    \effort = \"high\"\n\
+    \model  = \"claude-opus-4-8\"\n\
+    \effort = \"medium\"\n\
     \# The tools list is the gate: a tool absent here does not exist for the\n\
     \# worker. Adding \"Skill\" also enables slash commands and skills (no\n\
     \# allowed_tools entry needed -- skill invocation is permission-exempt).\n\
@@ -312,8 +312,10 @@ defaultConfigText =
     \disciplines = [\"development\"]\n\
     \kinds       = [\"bug\", \"enhancement\", \"chore\"]\n\
     \\n\
-    \# [review]\n\
-    \# enabled      = true\n\
-    \# model        = \"claude-sonnet-5\"     # defaults to dispatch.model\n\
-    \# max_attempts = 2\n\
+    \[review]\n\
+    \enabled      = true\n\
+    \# A cross-model reviewer avoids the dispatch model grading itself.\n\
+    \# Omit this key to inherit dispatch.model instead.\n\
+    \model        = \"claude-sonnet-5\"\n\
+    \max_attempts = 2\n\
     \# prompt_path  = \".icarium/reviewer.md\" # defaults to built-in prompt\n"
