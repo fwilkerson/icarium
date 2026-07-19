@@ -195,6 +195,7 @@ tests =
         , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
         , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
         , testCase "dispatch --dry-run previews --mcp-config when set" testDispatchDryRunMcpConfig
+        , testCase "dispatch --dry-run: Skill in tools drops --disable-slash-commands" testDispatchDryRunSkillTool
         , testCase "dispatch --dry-run prompt carries built-in agreement with no-user rules" testDryRunBuiltInAgreement
         , testCase "dispatch: agreement_path file replaces built-in body, escalation appended" testDispatchAgreementFile
         , testCase "dispatch: unreadable agreement_path fails closed before worker starts" testAgreementPathUnreadableFailsClosed
@@ -2010,6 +2011,38 @@ testDispatchDryRun = withDispatchRepo $ \dir db -> do
     assertBool "worktree path under .icarium/wt" (".icarium/wt/" `isInfixOf` out)
     assertBool "preview shows --strict-mcp-config" ("--strict-mcp-config" `isInfixOf` out)
     assertBool "no --mcp-config when key absent" (not ("--mcp-config" `isInfixOf` out))
+    assertBool "slash commands disabled when Skill not in tools" ("--disable-slash-commands" `isInfixOf` out)
+
+-- Scenario 8c: listing Skill in [dispatch] tools drops --disable-slash-commands
+-- (ADR 0003 -- the tools list is the only gate on skill loading).
+testDispatchDryRunSkillTool :: IO ()
+testDispatchDryRunSkillTool = withDispatchRepo $ \dir db -> do
+    let toml =
+            unlines
+                [ "[project]"
+                , "integration_branch = \"main\""
+                , "[commands]"
+                , "build = \"true\""
+                , "test  = \"true\""
+                , "[dispatch]"
+                , "model  = \"stub\""
+                , "effort = \"low\""
+                , "tools = [\"Bash\", \"Skill\"]"
+                , "allowed_tools = [\"Bash\"]"
+                , "scratch_dir = \".icarium/scratch\""
+                , "max_minutes_per_dispatch = 2"
+                , "heartbeat_stale_seconds  = 300"
+                , "log_retention_runs       = 5"
+                , "[categories]"
+                , "domains     = [\"core\"]"
+                , "disciplines = [\"development\"]"
+                ]
+    writeFile (dir </> "icarium.toml") toml
+    tid <- addReadyTask dir db "dry-run skill task"
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "preview lists the Skill tool" ("Bash,Skill" `isInfixOf` out)
+    assertBool "no --disable-slash-commands when Skill in tools" (not ("--disable-slash-commands" `isInfixOf` out))
 
 -- Scenario 8b: --dry-run previews --mcp-config <path> when dispatch.mcp_config is set.
 testDispatchDryRunMcpConfig :: IO ()

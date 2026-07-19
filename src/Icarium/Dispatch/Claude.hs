@@ -98,6 +98,9 @@ so the two can't drift out of sync with each other.
 
 @--strict-mcp-config@ with no @--mcp-config@ means zero MCP servers; when
 'Just' a path is given, @--mcp-config@ grants exactly that file.
+
+@--disable-slash-commands@ is derived from @tools@: listing @Skill@ opts the
+worker into slash commands and skills (ADR 0003).
 -}
 claudeArgs :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> [Text]
 claudeArgs model effort tools allowed mcpConfig =
@@ -111,13 +114,14 @@ claudeArgs model effort tools allowed mcpConfig =
     , "--verbose"
     , "--tools"
     , T.intercalate "," tools
-    , "--disable-slash-commands"
-    , "--allowedTools"
-    , T.intercalate "," allowed
-    , "--permission-mode"
-    , "dontAsk"
-    , "--strict-mcp-config"
     ]
+        ++ ["--disable-slash-commands" | "Skill" `notElem` tools]
+        ++ [ "--allowedTools"
+           , T.intercalate "," allowed
+           , "--permission-mode"
+           , "dontAsk"
+           , "--strict-mcp-config"
+           ]
         ++ maybe [] (\p -> ["--mcp-config", p]) mcpConfig
 
 runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode

@@ -269,6 +269,9 @@ defaultConfigText =
     \[dispatch]\n\
     \model  = \"claude-sonnet-5\"\n\
     \effort = \"high\"\n\
+    \# The tools list is the gate: a tool absent here does not exist for the\n\
+    \# worker. Adding \"Skill\" also enables slash commands and skills (no\n\
+    \# allowed_tools entry needed -- skill invocation is permission-exempt).\n\
     \tools = [\"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\", \"Bash\"]\n\
     \allowed_tools = [\n\
     \  \"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\",\n\
