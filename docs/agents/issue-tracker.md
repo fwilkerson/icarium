@@ -26,6 +26,21 @@ start in state `idea`. Specs/PRDs are ctx entries (`icarium ctx add`), linked vi
 
 Any unique ULID prefix works as an id. Find things with `icarium search "query"`.
 
+## When a skill says "post a comment"
+
+There are no comments — append an H2 section to the body instead
+(ADR 0006). A "comment" is a *newly appended* section; never edit prior
+sections (dispatch diffs on this — `Icarium.Dispatch.BodyDiff`). Repeat
+entries share one section with dated bullets:
+
+    ## Triage notes
+    - 2026-07-19: needs repro on macOS; asked reporter.
+
+Blessed names: `## Question`/`## Answer` (wayfinder), `## Proof`/`## Notes`
+(dispatch workers), `## Triage notes` (triage). Timestamps come from dated
+bullets and the tracker's stamps — `.icarium/` is gitignored, so bodies
+have no git history.
+
 ## Wayfinding operations
 
 Used by `/wayfinder`. Maps onto icarium primitives:
