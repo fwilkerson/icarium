@@ -9,7 +9,7 @@ test  = "cabal test all"
 
 [dispatch]
 model  = "claude-opus-4-8"
-effort = "high"
+effort = "medium"
 tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
@@ -31,5 +31,6 @@ kinds       = ["bug", "enhancement", "chore", "refactor", "doc"]
 [review]
 enabled      = true
 model        = "claude-sonnet-5"
+effort       = "medium"
 max_attempts = 2
 prompt_path  = ".icarium/reviewer.md"
