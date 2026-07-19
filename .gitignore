@@ -7,7 +7,11 @@ cabal.project.local
 
 # Local runtime state: DB file + dispatch logs. Snapshot/export is
 # what we commit (once that lands). Until then, seed locally.
-.icarium/
+# Contents-not-directory so committed config below can be re-included
+# (git cannot re-include under an ignored directory).
+.icarium/*
+!.icarium/agreement.md
+!.icarium/reviewer.md
 
 *.db
 *.db-wal

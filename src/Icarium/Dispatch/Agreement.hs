@@ -19,7 +19,10 @@ import Data.Text.IO qualified as TIO
 
 import Icarium.Types (Task, taskId)
 
--- | Agreement body used when no @agreement_path@ is configured.
+{- | Agreement body used when no @agreement_path@ is configured.
+Mirrored in this repo's @.icarium/agreement.md@ (built-in body plus
+dogfood additions); keep the two in sync.
+-}
 builtInAgreement :: Text
 builtInAgreement =
     T.intercalate

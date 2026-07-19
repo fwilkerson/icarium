@@ -10,7 +10,8 @@ test  = "cabal test all"
 [dispatch]
 model  = "claude-opus-4-8"
 effort = "medium"
-tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash"]
+tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "Skill"]
+agreement_path = ".icarium/agreement.md"
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
   "Bash(icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",

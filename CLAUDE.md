@@ -25,6 +25,10 @@ For multi-step `IO` where any step can fail: use `ExceptT Text IO` rather than n
 
 Lint hints are design feedback, not mechanical fixes. When `hlint` flags something, the first response is to consider whether the code shape itself is wrong — refactor to make the smell go away naturally. Mechanical auto-fix and adding `ignore:` entries both bypass that step. An ignore is correct only when the rule fundamentally conflicts with a deliberate house style.
 
+## Dispatch agreement mirror
+
+`.icarium/agreement.md` = the `builtInAgreement` body (`src/Icarium/Dispatch/Agreement.hs`) + dogfood additions. When editing either, sync the other. The file cannot carry comments — its content lands verbatim in dispatch prompts.
+
 ## Fresh clone setup
 
 Install [direnv](https://direnv.net/) and run `direnv allow` at the repo root. The committed `.envrc` adds `bin/` to `PATH`, so bare `icarium` resolves to the local build artifact after `make install`.
