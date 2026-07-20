@@ -15,6 +15,10 @@ agreement_path = ".icarium/agreement.md"
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
   "Bash(icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
+  # Loops and $(...) never decompose for prefix matching, so a repeat-the-suite
+  # command can only be reached as a named script. Both spellings: the matcher
+  # is literal, and `./scripts/...` is the reflex.
+  "Bash(scripts/flake-check.sh:*)", "Bash(./scripts/flake-check.sh:*)",
 ]
 scratch_dir = ".icarium/scratch"
 max_minutes_per_dispatch = 30
