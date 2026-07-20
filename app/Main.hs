@@ -134,7 +134,7 @@ cmdP =
                 "task"
                 ( info
                     (CmdTask <$> Task.parser <**> helper)
-                    (progDesc "Manage tasks. Example: icarium task list --state ready")
+                    (progDesc "Manage tasks. Example: icarium task queue")
                 )
             <> command
                 "ctx"

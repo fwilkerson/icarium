@@ -8,6 +8,7 @@ module Icarium.Repo.Task (
     getTasksByPrefix,
     resolveTaskId,
     listTasks,
+    queueTasks,
     claimNextTask,
     claimReadyTask,
     claimTask,
@@ -60,8 +61,8 @@ data TaskUpdate = TaskUpdate
 emptyUpdate :: TaskUpdate
 emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
 
-{- | Ready-queue ordering, shared by @listTasks@ and @claimNextTask@ so
-`task next` and `task claim` cannot drift apart.
+{- | Queue ordering, shared by @queueTasks@ and @claimNextTask@ so
+`task queue` and `task claim` cannot drift apart.
 -}
 readyOrder :: Text
 readyOrder = "COALESCE(priority, 0) DESC, created_at ASC"
@@ -109,22 +110,29 @@ getTasksByPrefix conn = prefixLookup conn "tasks" (taskCols "")
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
 resolveTaskId conn = resolveByPrefix (getTasksByPrefix conn) taskId "task"
 
-{- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view, which
-carries every ready-ish state whose depends_on are all satisfied; otherwise
-pulls from @tasks@. Either way @filterStates@ narrows client-side, so a
-caller picks its queue — headless or interactive — by state. @cats@ is a
-list of @(axis, name)@ category filters, ANDed at the SQL level; any axis
-may appear, including workflow axes.
+{- | List tasks: a pure filter over @tasks@ in creation order. No dependency
+gate — that belongs to 'queueTasks'. @filterStates@ narrows by state (empty
+= all); @cats@ is a list of @(axis, name)@ category filters, ANDed at the
+SQL level; any axis may appear, including workflow axes.
 -}
-listTasks :: Connection -> [TaskState] -> Bool -> [(CategoryAxis, Text)] -> IO [Task]
-listTasks conn filterStates readyOnly cats = do
+listTasks :: Connection -> [TaskState] -> [(CategoryAxis, Text)] -> IO [Task]
+listTasks conn = selectTasks conn "tasks" "created_at ASC"
+
+{- | The ordered worklist: tasks in @states@ drawn from the @ready_tasks@
+view, which carries every ready state whose depends_on are all satisfied.
+The dependency gate lives in that view and nowhere else; callers narrow to
+their own queue — headless or interactive — by state.
+-}
+queueTasks :: Connection -> [TaskState] -> IO [Task]
+queueTasks conn states = selectTasks conn "ready_tasks" readyOrder states []
+
+selectTasks :: Connection -> Text -> Text -> [TaskState] -> [(CategoryAxis, Text)] -> IO [Task]
+selectTasks conn tbl ord filterStates cats = do
     rows <- query conn (buildQ tbl ord) params
     pure $ case filterStates of
         [] -> rows
         ss -> filter ((`elem` ss) . taskState) rows
   where
-    tbl = if readyOnly then "ready_tasks" else "tasks"
-    ord = if readyOnly then readyOrder else "created_at ASC"
     (clauses, params) = axisFilters "task_categories" "task_id" cats
     whereClause = case clauses of
         [] -> ""
@@ -133,7 +141,7 @@ listTasks conn filterStates readyOnly cats = do
 
 {- | Take the head of the queue formed by @states@, mark it in-progress and
 stamp @owner@ on it. Returns the claimed task as it now stands, or Nothing
-when that queue is empty. Dispatch passes 'Ready'; the interactive CLI
+when that queue is empty. Dispatch passes 'ReadyHeadless'; the interactive CLI
 passes 'ReadyInteractive'.
 
 @BEGIN IMMEDIATE@ acquires the write lock before the read, so concurrent
@@ -185,7 +193,7 @@ statePlaceholders ss = "(" <> T.intercalate "," (replicate (length ss) "?") <> "
 
 {- | Claim a named task regardless of queue position or state. @dispatch
 run TASK_ID@ re-runs tasks that are blocked or already in progress, so a
-compare-and-swap on 'Ready' would refuse the cases it exists to serve;
+compare-and-swap on 'ReadyHeadless' would refuse the cases it exists to serve;
 naming the task is itself the selection.
 -}
 claimTask :: Connection -> Text -> Text -> IO (Maybe Task)
@@ -203,14 +211,14 @@ stampClaim conn tid owner =
         )
         (owner, tid)
 
-{- | Hand a claimed task back to the queue: state 'Ready' also clears the
+{- | Hand a claimed task back to the queue: state 'ReadyHeadless' also clears the
 claim stamp (see 'updateTask'). For a claim whose work never started —
 worktree setup failed, capacity ran out — leaving it in_progress would
 strand it outside both the ready queue and @dispatch recover@.
 -}
 releaseTask :: Connection -> Text -> IO ()
 releaseTask conn tid =
-    void $ updateTask conn tid emptyUpdate{tuState = Just Ready}
+    void $ updateTask conn tid emptyUpdate{tuState = Just ReadyHeadless}
 
 {- | Apply a sparse update. Returns True iff a row was affected.
 When the title changes, updates the FTS5 entry to keep search current.

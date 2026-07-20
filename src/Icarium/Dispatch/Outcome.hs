@@ -107,7 +107,7 @@ applyOutcomeToTask conn t res
             mFresh <- RT.getTask conn (taskId t)
             case mFresh of
                 Just t'
-                    | taskState t' `elem` [InProgress, Ready] ->
+                    | taskState t' `elem` [InProgress, ReadyHeadless] ->
                         void $
                             RT.updateTask
                                 conn

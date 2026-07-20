@@ -102,7 +102,7 @@ mkRow tid title st pri cats deps refs blockReason =
 testFlatStateBadges :: IO ()
 testFlatStateBadges = do
     let rows =
-            [ mkRow "01ABCDEFGH01" "ready task" Ready (Just 5) [] 0 0 Nothing
+            [ mkRow "01ABCDEFGH01" "ready task" ReadyHeadless (Just 5) [] 0 0 Nothing
             , mkRow "01ABCDEFGH02" "planned task" Planned (Just 3) [] 0 0 Nothing
             , mkRow "01ABCDEFGH03" "idea task" Idea Nothing [] 0 0 Nothing
             ]
@@ -110,7 +110,7 @@ testFlatStateBadges = do
     assertBool "ready task present" ("ready task" `T.isInfixOf` out)
     assertBool "planned task present" ("planned task" `T.isInfixOf` out)
     assertBool "idea task present" ("idea task" `T.isInfixOf` out)
-    assertBool "[ready] badge" ("[ready]" `T.isInfixOf` out)
+    assertBool "[ready-headless] badge" ("[ready-headless]" `T.isInfixOf` out)
     assertBool "[planned] badge" ("[planned]" `T.isInfixOf` out)
     assertBool "[idea] badge" ("[idea]" `T.isInfixOf` out)
     -- Priority sorted: higher priority first
@@ -121,7 +121,7 @@ testFlatStateBadges = do
 
 testNoGroupHeaders :: IO ()
 testNoGroupHeaders = do
-    let rows = [mkRow "01ABCDEFGH01" "only ready" Ready (Just 5) [] 0 0 Nothing]
+    let rows = [mkRow "01ABCDEFGH01" "only ready" ReadyHeadless (Just 5) [] 0 0 Nothing]
         out = renderTaskList True rows
     assertBool "no READY header" (not ("READY" `T.isInfixOf` out))
     assertBool "no PLANNED header" (not ("PLANNED" `T.isInfixOf` out))
@@ -145,10 +145,10 @@ testBlockedReason = do
 testEdgeCountFormat :: IO ()
 testEdgeCountFormat = do
     let rows =
-            [ mkRow "01ABCDEFGH01" "no edges" Ready (Just 5) [] 0 0 Nothing
-            , mkRow "01ABCDEFGH02" "deps only" Ready (Just 5) [] 2 0 Nothing
-            , mkRow "01ABCDEFGH03" "refs only" Ready (Just 5) [] 0 3 Nothing
-            , mkRow "01ABCDEFGH04" "both" Ready (Just 5) [] 1 4 Nothing
+            [ mkRow "01ABCDEFGH01" "no edges" ReadyHeadless (Just 5) [] 0 0 Nothing
+            , mkRow "01ABCDEFGH02" "deps only" ReadyHeadless (Just 5) [] 2 0 Nothing
+            , mkRow "01ABCDEFGH03" "refs only" ReadyHeadless (Just 5) [] 0 3 Nothing
+            , mkRow "01ABCDEFGH04" "both" ReadyHeadless (Just 5) [] 1 4 Nothing
             ]
         out = renderTaskList True rows
         line title = head $ filter (T.isInfixOf title) (T.lines out)
@@ -174,7 +174,7 @@ testNullPrioritySort = do
 testTitleTruncatedUtf8 :: IO ()
 testTitleTruncatedUtf8 = do
     let longTitle = T.replicate 90 "x"
-        rows = [mkRow "01ABCDEFGH01" longTitle Ready (Just 5) [] 0 0 Nothing]
+        rows = [mkRow "01ABCDEFGH01" longTitle ReadyHeadless (Just 5) [] 0 0 Nothing]
         out = renderTaskList True rows
         ls = T.lines out
     assertBool "has a data row" (not (null ls))
@@ -304,7 +304,7 @@ testLinksOnlyRefs = do
 
 testLinksBothKinds :: IO ()
 testLinksBothKinds = do
-    let dep = depTask Ready
+    let dep = depTask ReadyHeadless
         ref = refCtx
         out = renderTaskHuman True minTask "/tmp/body" [ref] [dep] [] []
     assertBool "depends-on edge" ("depends-on" `T.isInfixOf` out)

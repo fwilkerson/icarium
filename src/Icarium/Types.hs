@@ -2,7 +2,9 @@ module Icarium.Types (
     -- * Enums
     TaskState (..),
     readyStates,
+    allTaskStates,
     taskStateText,
+    taskStateCli,
     parseTaskState,
     parseTaskStateDb,
     Effort (..),
@@ -59,15 +61,16 @@ import Database.SQLite.Simple.ToField (ToField (..))
 -- Enums
 -- =============================================================
 
-{- | 'Ready' is the headless queue: fully specified work a dispatched agent
-may take unattended. 'ReadyInteractive' is the same specification bar for
-work that must be done by a human at a keyboard. Semantics of every state:
-@docs/adr/0007-task-state-semantics.md@.
+{- | 'ReadyHeadless' is work a dispatched agent may take unattended;
+'ReadyInteractive' is the same specification bar for work a human at a
+keyboard must do. Neither name is bare: an unqualified @ready@ once meant
+the headless queue on this axis and the interactive one on the selector
+axis. Semantics of every state: @docs/adr/0007-task-state-semantics.md@.
 -}
 data TaskState
     = Idea
     | Planned
-    | Ready
+    | ReadyHeadless
     | ReadyInteractive
     | InProgress
     | Done
@@ -79,27 +82,43 @@ data TaskState
 The deps gate is separate — see the @ready_tasks@ view.
 -}
 readyStates :: [TaskState]
-readyStates = [Ready, ReadyInteractive]
+readyStates = [ReadyHeadless, ReadyInteractive]
+
+-- | Every state, in lifecycle order. Drives the CLI's invalid-value message.
+allTaskStates :: [TaskState]
+allTaskStates =
+    [Idea, Planned, ReadyHeadless, ReadyInteractive, InProgress, Done, Blocked, Abandoned]
 
 taskStateText :: TaskState -> Text
 taskStateText = \case
     Idea -> "idea"
     Planned -> "planned"
-    Ready -> "ready"
+    ReadyHeadless -> "ready_headless"
     ReadyInteractive -> "ready_interactive"
     InProgress -> "in_progress"
     Done -> "done"
     Blocked -> "blocked"
     Abandoned -> "abandoned"
 
+{- | How the CLI spells a state, in flags, badges and errors: the stored
+name with underscores hyphenated. Storage and CLI share one vocabulary, so
+this is a transliteration and never a separate name.
+-}
+taskStateCli :: TaskState -> Text
+taskStateCli = T.replace "_" "-" . taskStateText
+
 {- | CLI-facing parser. Canonical spelling is hyphenated (@in-progress@,
-@ready-interactive@), but the underscore form is accepted too: @task show@
+@ready-headless@), but the underscore form is accepted too: @task show@
 prints the stored @in_progress@, and pasting that back into @--state@ must
 not error.
+
+Bare @ready@ is deliberately absent rather than aliased: an alias would
+reinstate the ambiguity one layer down, silently resolved.
 -}
 parseTaskState :: Text -> Maybe TaskState
 parseTaskState = \case
     "in-progress" -> Just InProgress
+    "ready-headless" -> Just ReadyHeadless
     "ready-interactive" -> Just ReadyInteractive
     other -> parseTaskStateDb other
 
@@ -108,7 +127,7 @@ parseTaskStateDb :: Text -> Maybe TaskState
 parseTaskStateDb = \case
     "idea" -> Just Idea
     "planned" -> Just Planned
-    "ready" -> Just Ready
+    "ready_headless" -> Just ReadyHeadless
     "ready_interactive" -> Just ReadyInteractive
     "in_progress" -> Just InProgress
     "done" -> Just Done

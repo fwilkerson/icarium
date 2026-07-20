@@ -9,7 +9,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace, toLower)
 import Data.Foldable (toList)
-import Data.List (dropWhileEnd, isInfixOf, isPrefixOf, sort)
+import Data.List (dropWhileEnd, isInfixOf, isPrefixOf, sort, tails)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
@@ -101,7 +101,13 @@ tests =
         , testCase "task claim --owner empty exits 2, claims nothing" testTaskClaimEmptyOwner
         , testCase "task done clears the claim" testTaskClaimClearedOnDone
         , testCase "task next/claim serve the interactive queue only" testInteractiveQueueSurfaces
-        , testCase "task list --ready is the interactive queue" testListReadyIsInteractive
+        , testCase "task queue excludes tasks with unsatisfied dependencies" testQueueGatesOnDependencies
+        , testCase "task queue interleaves both ready states in priority order" testQueueBothStates
+        , testCase "task queue --headless / --interactive narrow; both is refused" testQueueNarrowingFlags
+        , testCase "task queue on an empty queue says so" testQueueEmpty
+        , testCase "task queue --limit and --json" testQueueLimitAndJson
+        , testCase "task queue --interactive head equals task next" testQueueHeadMatchesNext
+        , testCase "--ready and bare --state ready are gone" testRemovedReadySurfaces
         , testCase "task claim TASK_ID takes a named task in either ready state" testTaskClaimNamed
         , testCase "task claim TASK_ID refuses a task that is not ready" testTaskClaimNamedNotReady
         , testCase "task add --depends-on bad id exits 2" testTaskAddBadDependsOn
@@ -255,7 +261,7 @@ testVersionShort = do
 
 testTaskRoundtrip :: IO ()
 testTaskRoundtrip = withTempDb $ \db -> do
-    (addCode, addOut, _) <- runIcarium db ["task", "add", "My roundtrip task", "--state", "ready"]
+    (addCode, addOut, _) <- runIcarium db ["task", "add", "My roundtrip task", "--state", "ready-headless"]
     addCode @?= ExitSuccess
     let tid = head (words addOut)
     assertBool "task id non-empty" (not (null tid))
@@ -275,10 +281,10 @@ testTaskUpdateState = withTempDb $ \db -> do
     (_, addOut, _) <- runIcarium db ["task", "add", "State change task", "--state", "planned"]
     let tid = head (words addOut)
 
-    (uCode, _, _) <- runIcarium db ["task", "update", tid, "--state", "ready"]
+    (uCode, _, _) <- runIcarium db ["task", "update", tid, "--state", "ready-headless"]
     uCode @?= ExitSuccess
 
-    (lCode, lOut, _) <- runIcarium db ["task", "list", "--state", "ready"]
+    (lCode, lOut, _) <- runIcarium db ["task", "list", "--state", "ready-headless"]
     lCode @?= ExitSuccess
     assertBool "updated task appears in ready list" ("State change task" `isInfixOf` lOut)
 
@@ -288,7 +294,7 @@ testTaskUpdateState = withTempDb $ \db -> do
 
 testTaskListLimit :: IO ()
 testTaskListLimit = withTempDb $ \db -> do
-    mapM_ (\i -> runIcarium db ["task", "add", "Task " ++ show (i :: Int), "--state", "ready"]) [1 .. 5 :: Int]
+    mapM_ (\i -> runIcarium db ["task", "add", "Task " ++ show (i :: Int), "--state", "ready-headless"]) [1 .. 5 :: Int]
     (code, out, _) <- runIcarium db ["task", "list", "--limit", "3"]
     code @?= ExitSuccess
     let rows = filter (not . null) (lines out)
@@ -312,7 +318,7 @@ testDispatchListLimit :: IO ()
 testDispatchListLimit = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
     -- init DB by adding a task first
-    (_, addOut, _) <- runIcarium db ["task", "add", "Limit test task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Limit test task", "--state", "ready-headless"]
     let tid = head (words addOut)
     conn <- open db
     -- Insert 5 dispatches directly so we don't need a full claude run.
@@ -462,7 +468,7 @@ dispatch's to take, and must never be handed to `task next`/`task claim`.
 -}
 testInteractiveQueueSurfaces :: IO ()
 testInteractiveQueueSurfaces = withTempDb $ \db -> do
-    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
+    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready-headless"]
     let hId = head (words hOut)
 
     (nCode, _, _) <- runIcarium db ["task", "next"]
@@ -485,30 +491,114 @@ testInteractiveQueueSurfaces = withTempDb $ \db -> do
     assertBool "headless task still ready" ("ready" `isInfixOf` showOut)
     assertBool "headless task not claimed" (not ("claimed:" `isInfixOf` showOut))
 
-testListReadyIsInteractive :: IO ()
-testListReadyIsInteractive = withTempDb $ \db -> do
-    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
-    (_, iOut, _) <- runIcarium db ["task", "add", "Interactive", "--state", "ready-interactive"]
-    let hId = head (words hOut)
-        iId = head (words iOut)
+{- | The gate's user-visible contract: `queue` hides a task whose
+dependency is unmet, `list` — a pure filter — still shows it.
+-}
+testQueueGatesOnDependencies :: IO ()
+testQueueGatesOnDependencies = withTempDb $ \db -> do
+    (_, depOut, _) <- runIcarium db ["task", "add", "Blocker", "--state", "planned"]
+    let depId = head (words depOut)
+    (_, bOut, _) <- runIcarium db ["task", "add", "Blocked dependent", "--state", "ready-headless", "--depends-on", depId]
+    let bId = head (words bOut)
 
-    (code, out, _) <- runIcarium db ["task", "list", "--ready"]
+    (qCode, qOut, _) <- runIcarium db ["task", "queue"]
+    qCode @?= ExitSuccess
+    assertBool "unsatisfied dependency is out of the queue" (not (take 10 bId `isInfixOf` qOut))
+
+    (lCode, lOut, _) <- runIcarium db ["task", "list", "--state", "ready-headless"]
+    lCode @?= ExitSuccess
+    assertBool "state filter applies no gate" (take 10 bId `isInfixOf` lOut)
+
+-- | Bare `queue` interleaves both queues in priority order, badged by state.
+testQueueBothStates :: IO ()
+testQueueBothStates = withTempDb $ \db -> do
+    (_, lowOut, _) <- runIcarium db ["task", "add", "Low headless", "--state", "ready-headless", "--priority", "1"]
+    (_, hiOut, _) <- runIcarium db ["task", "add", "High interactive", "--state", "ready-interactive", "--priority", "9"]
+    let lowId = head (words lowOut)
+        hiId = head (words hiOut)
+
+    (code, out, _) <- runIcarium db ["task", "queue"]
     code @?= ExitSuccess
-    assertBool "interactive task listed" (take 10 iId `isInfixOf` out)
-    assertBool "headless task not listed" (not (take 10 hId `isInfixOf` out))
+    assertBool "headless row present" (take 10 lowId `isInfixOf` out)
+    assertBool "interactive row present" (take 10 hiId `isInfixOf` out)
+    assertBool "state badges distinguish rows" ("[ready-headless]" `isInfixOf` out)
+    assertBool "state badges distinguish rows" ("[ready-interactive]" `isInfixOf` out)
+    let idx sub = length (takeWhile (not . isPrefixOf sub) (tails out))
+    assertBool "higher priority first" (idx (take 10 hiId) < idx (take 10 lowId))
 
-    -- `--state ready` is a state filter, not a queue: it still finds headless work.
-    (_, sOut, _) <- runIcarium db ["task", "list", "--state", "ready"]
-    assertBool "state filter finds headless work" (take 10 hId `isInfixOf` sOut)
+testQueueNarrowingFlags :: IO ()
+testQueueNarrowingFlags = withTempDb $ \db -> do
+    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready-headless"]
+    (_, iOut, _) <- runIcarium db ["task", "add", "Interactive", "--state", "ready-interactive"]
+    let hId = take 10 (head (words hOut))
+        iId = take 10 (head (words iOut))
 
-    -- Combining them selects opposite queues, so it is refused, not resolved.
-    (xCode, _, xErr) <- runIcarium db ["task", "list", "--ready", "--state", "ready"]
+    (hCode, hQ, _) <- runIcarium db ["task", "queue", "--headless"]
+    hCode @?= ExitSuccess
+    assertBool "--headless keeps headless" (hId `isInfixOf` hQ)
+    assertBool "--headless drops interactive" (not (iId `isInfixOf` hQ))
+
+    (iCode, iQ, _) <- runIcarium db ["task", "queue", "--interactive"]
+    iCode @?= ExitSuccess
+    assertBool "--interactive keeps interactive" (iId `isInfixOf` iQ)
+    assertBool "--interactive drops headless" (not (hId `isInfixOf` iQ))
+
+    -- A contradictory request has no honest answer: refuse rather than pick one.
+    (xCode, _, xErr) <- runIcarium db ["task", "queue", "--headless", "--interactive"]
     xCode @?= ExitFailure 2
-    assertBool "conflict names the alternative" ("--state ready" `isInfixOf` xErr)
+    assertBool "error names both flags" ("--headless" `isInfixOf` xErr && "--interactive" `isInfixOf` xErr)
+
+testQueueEmpty :: IO ()
+testQueueEmpty = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["task", "queue"]
+    code @?= ExitSuccess
+    assertBool "empty queue says so rather than printing nothing" ("no tasks" `isInfixOf` out)
+
+testQueueLimitAndJson :: IO ()
+testQueueLimitAndJson = withTempDb $ \db -> do
+    mapM_
+        (\i -> runIcarium db ["task", "add", "Q" ++ show (i :: Int), "--state", "ready-headless", "--priority", show (10 - i)])
+        [1 .. 3 :: Int]
+
+    (lCode, lOut, _) <- runIcarium db ["task", "queue", "--limit", "1"]
+    lCode @?= ExitSuccess
+    length (filter (isInfixOf "[ready-headless]") (lines lOut)) @?= 1
+
+    (jCode, jOut, _) <- runIcarium db ["task", "queue", "--json"]
+    jCode @?= ExitSuccess
+    assertBool "json carries the stored state spelling" ("ready_headless" `isInfixOf` jOut)
+
+{- | Pins `task next` to the queue it prints from, so the two commands
+cannot drift apart on ordering.
+-}
+testQueueHeadMatchesNext :: IO ()
+testQueueHeadMatchesNext = withTempDb $ \db -> do
+    -- Two tasks tie on priority, so the tiebreak is exercised, and one outranks
+    -- both — the head is only unambiguous if queue and next order identically.
+    _ <- runIcarium db ["task", "add", "First", "--state", "ready-interactive", "--priority", "5"]
+    _ <- runIcarium db ["task", "add", "Second", "--state", "ready-interactive", "--priority", "5"]
+    _ <- runIcarium db ["task", "add", "Top", "--state", "ready-interactive", "--priority", "8"]
+
+    (qCode, qOut, _) <- runIcarium db ["task", "queue", "--interactive", "--limit", "1"]
+    qCode @?= ExitSuccess
+    (nCode, nOut, _) <- runIcarium db ["task", "next"]
+    nCode @?= ExitSuccess
+    let nextId = head (words nOut)
+    assertBool "queue head is what next prints" (take 10 nextId `isInfixOf` qOut)
+
+-- | The removed surfaces must fail visibly, not drift.
+testRemovedReadySurfaces :: IO ()
+testRemovedReadySurfaces = withTempDb $ \db -> do
+    (fCode, _, _) <- runIcarium db ["task", "list", "--ready"]
+    fCode @?= ExitFailure 1
+
+    (sCode, _, sErr) <- runIcarium db ["task", "list", "--state", "ready"]
+    sCode @?= ExitFailure 1
+    assertBool "error lists the valid states" ("ready-headless" `isInfixOf` sErr && "ready-interactive" `isInfixOf` sErr)
 
 testTaskClaimNamed :: IO ()
 testTaskClaimNamed = withTempDb $ \db -> do
-    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
+    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready-headless"]
     (_, iOut, _) <- runIcarium db ["task", "add", "Interactive", "--state", "ready-interactive"]
     let hId = head (words hOut)
         iId = head (words iOut)
@@ -587,7 +677,7 @@ testContextListLayout = withTempDb $ \db -> do
     (_, k2Out, _) <- runIcarium db ["ctx", "add", "Entry with one inbound link"]
     let k2Id = head (words k2Out)
 
-    (_, t1Out, _) <- runIcarium db ["task", "add", "Some task", "--state", "ready"]
+    (_, t1Out, _) <- runIcarium db ["task", "add", "Some task", "--state", "ready-headless"]
     let t1Id = head (words t1Out)
     (linkCode, _, _) <- runIcarium db ["link", "add", t1Id, "references", k2Id]
     linkCode @?= ExitSuccess
@@ -609,7 +699,7 @@ testLinkHelpExample = withTempDb $ \db -> do
 
 testLinkListHeader :: IO ()
 testLinkListHeader = withTempDb $ \db -> do
-    (_, tOut, _) <- runIcarium db ["task", "add", "Src task", "--state", "ready"]
+    (_, tOut, _) <- runIcarium db ["task", "add", "Src task", "--state", "ready-headless"]
     let tid = head (words tOut)
     (_, kOut, _) <- runIcarium db ["ctx", "add", "Dst context"]
     let kid = head (words kOut)
@@ -640,7 +730,7 @@ testTaskShowBody = withTempDb $ \db -> do
 
 testTaskShowPrompt :: IO ()
 testTaskShowPrompt = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "Prompt test task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Prompt test task", "--state", "ready-headless"]
     let tid = head (words addOut)
 
     (code, out, _) <- runIcarium db ["task", "show", tid, "--prompt"]
@@ -723,7 +813,7 @@ testBareCategoryHelp = withTempDb $ \db -> do
 
 testTaskLsAlias :: IO ()
 testTaskLsAlias = withTempDb $ \db -> do
-    (_, _, _) <- runIcarium db ["task", "add", "Ls alias task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["task", "add", "Ls alias task", "--state", "ready-headless"]
     (_, listOut, _) <- runIcarium db ["task", "list"]
     (lsCode, lsOut, _) <- runIcarium db ["task", "ls"]
     lsCode @?= ExitSuccess
@@ -731,16 +821,16 @@ testTaskLsAlias = withTempDb $ \db -> do
 
 testTaskLsStateFlag :: IO ()
 testTaskLsStateFlag = withTempDb $ \db -> do
-    (_, _, _) <- runIcarium db ["task", "add", "Ready task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["task", "add", "Ready task", "--state", "ready-headless"]
     (_, _, _) <- runIcarium db ["task", "add", "Planned task", "--state", "planned"]
-    (code, out, _) <- runIcarium db ["task", "ls", "--state", "ready"]
+    (code, out, _) <- runIcarium db ["task", "ls", "--state", "ready-headless"]
     code @?= ExitSuccess
     assertBool "ls --state ready shows ready task" ("Ready task" `isInfixOf` out)
     assertBool "ls --state ready hides planned task" (not ("Planned task" `isInfixOf` out))
 
 testBareTaskWithFlag :: IO ()
 testBareTaskWithFlag = withTempDb $ \db -> do
-    (code, _, err) <- runIcarium db ["task", "--state", "ready"]
+    (code, _, err) <- runIcarium db ["task", "--state", "ready-headless"]
     assertBool "bare task --state exits non-zero" (code /= ExitSuccess)
     assertBool "error output non-empty" (not (null err))
 
@@ -808,7 +898,7 @@ staleIcariumToml =
 
 testSearchBothKinds :: IO ()
 testSearchBothKinds = withTempDb $ \db -> do
-    (_, _, _) <- runIcarium db ["task", "add", "mytoken in title task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["task", "add", "mytoken in title task", "--state", "ready-headless"]
     (_, _, _) <- runIcarium db ["ctx", "add", "unrelated context", "--body", "body contains mytoken here"]
     (code, out, _) <- runIcarium db ["search", "mytoken"]
     code @?= ExitSuccess
@@ -817,7 +907,7 @@ testSearchBothKinds = withTempDb $ \db -> do
 
 testSearchCrossKindRank :: IO ()
 testSearchCrossKindRank = withTempDb $ \db -> do
-    (_, _, _) <- runIcarium db ["task", "add", "no match here", "--body", "body has xyzzy123", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["task", "add", "no match here", "--body", "body has xyzzy123", "--state", "ready-headless"]
     (_, kOut, _) <- runIcarium db ["ctx", "add", "xyzzy123 in title context"]
     let kid = take 10 (head (words kOut))
     (code, out, _) <- runIcarium db ["search", "xyzzy123"]
@@ -827,7 +917,7 @@ testSearchCrossKindRank = withTempDb $ \db -> do
 
 testSearchKindTask :: IO ()
 testSearchKindTask = withTempDb $ \db -> do
-    (_, _, _) <- runIcarium db ["task", "add", "needle task", "--state", "ready"]
+    (_, _, _) <- runIcarium db ["task", "add", "needle task", "--state", "ready-headless"]
     (_, _, _) <- runIcarium db ["ctx", "add", "needle context"]
     (code, out, _) <- runIcarium db ["search", "needle", "--kind", "task"]
     code @?= ExitSuccess
@@ -1014,7 +1104,7 @@ seedCategory db axis name = do
 testDispatchShowTokensPresent :: IO ()
 testDispatchShowTokensPresent = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
-    (_, addOut, _) <- runIcarium db ["task", "add", "Token task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Token task", "--state", "ready-headless"]
     let tid = head (words addOut)
         did = "01TOKN0000000000000000001T"
     conn <- open db
@@ -1048,7 +1138,7 @@ testDispatchShowTokensPresent = withSystemTempDirectory "icarium-test" $ \dir ->
 testDispatchShowTokensAbsent :: IO ()
 testDispatchShowTokensAbsent = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
-    (_, addOut, _) <- runIcarium db ["task", "add", "No token task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "No token task", "--state", "ready-headless"]
     let tid = head (words addOut)
         did = "01TOKN0000000000000000002T"
     conn <- open db
@@ -1075,7 +1165,7 @@ testDispatchShowTokensAbsent = withSystemTempDirectory "icarium-test" $ \dir -> 
 testDispatchStats :: IO ()
 testDispatchStats = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
-    (_, addOut, _) <- runIcarium db ["task", "add", "Stats task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Stats task", "--state", "ready-headless"]
     let tid = head (words addOut)
     conn <- open db
     let insertRow did startedAt mOutcome mIn mOut mCache = do
@@ -1336,7 +1426,7 @@ testDryRunPromptReadsBodyFile :: IO ()
 testDryRunPromptReadsBodyFile = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir </> "icarium.db"
     writeFile (dir </> "icarium.toml") minimalIcariumToml
-    (_, addOut, _) <- runIcarium db ["task", "add", "stale-body task", "--state", "ready", "--body", "original xstale1"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "stale-body task", "--state", "ready-headless", "--body", "original xstale1"]
     let tid = head (words addOut)
         bodyPath = lines addOut !! 1
     writeFile bodyPath "edited xstale2"
@@ -1352,7 +1442,7 @@ testDryRunPromptReadsBodyFile = withSystemTempDirectory "icarium-test" $ \dir ->
 testDispatchQuarantine :: IO ()
 testDispatchQuarantine = withTempDb $ \db -> do
     -- A: will be blocked (simulating a failed dispatch)
-    (_, aOut, _) <- runIcarium db ["task", "add", "Upstream task A", "--state", "ready"]
+    (_, aOut, _) <- runIcarium db ["task", "add", "Upstream task A", "--state", "ready-headless"]
     let aId = head (words aOut)
 
     -- B: depends on A; must be quarantined when A is blocked
@@ -1367,8 +1457,8 @@ testDispatchQuarantine = withTempDb $ \db -> do
     (uCode, _, _) <- runIcarium db ["task", "update", aId, "--state", "blocked", "--block-reason", "simulated dispatch failure"]
     uCode @?= ExitSuccess
 
-    -- ready queue (task list --ready / task next) must exclude B but include C
-    (lCode, lOut, _) <- runIcarium db ["task", "list", "--ready"]
+    -- the queue (task queue / task next) must exclude B but include C
+    (lCode, lOut, _) <- runIcarium db ["task", "queue"]
     lCode @?= ExitSuccess
     assertBool "dependent B absent from ready queue" (not ("Dependent task B" `isInfixOf` lOut))
     assertBool "independent C present in ready queue" ("Independent task C" `isInfixOf` lOut)
@@ -1588,7 +1678,7 @@ testDoctorNoCommandsSection = withSystemTempDirectory "icarium-test" $ \dir -> d
 
 testDbEnvFallback :: IO ()
 testDbEnvFallback = withTempDb $ \db -> do
-    (addCode, addOut, _) <- runIcariumEnvDb db ["task", "add", "Env db task", "--state", "ready"]
+    (addCode, addOut, _) <- runIcariumEnvDb db ["task", "add", "Env db task", "--state", "ready-headless"]
     addCode @?= ExitSuccess
     let tid = head (words addOut)
     dbExists <- doesFileExist db
@@ -1606,7 +1696,7 @@ testDbFlagOverridesEnv = withSystemTempDirectory "icarium-test" $ \dir -> do
     parentEnv <- getEnvironment
     let env = ("ICARIUM_DB", envDb) : filter ((/= "ICARIUM_DB") . fst) parentEnv
     (code, addOut, _) <-
-        readProcess (setEnv env (proc absBin ["--db", flagDb, "task", "add", "Flag wins task", "--state", "ready"]))
+        readProcess (setEnv env (proc absBin ["--db", flagDb, "task", "add", "Flag wins task", "--state", "ready-headless"]))
     code @?= ExitSuccess
     let tid = head (words (BLC.unpack addOut))
     flagDbExists <- doesFileExist flagDb
@@ -1730,7 +1820,7 @@ dispatchBranches dir =
 -- | Add a ready task, returning its full id.
 addReadyTask :: FilePath -> FilePath -> String -> IO String
 addReadyTask dir db title = do
-    (_, out, _) <- runDispatch dir db Nothing ["task", "add", title, "--state", "ready"]
+    (_, out, _) <- runDispatch dir db Nothing ["task", "add", title, "--state", "ready-headless"]
     pure (head (words out))
 
 -- | First token of the first non-empty line (a 10-char id prefix from a list).
@@ -1850,7 +1940,7 @@ testDrainAutoMergesChain :: IO ()
 testDrainAutoMergesChain = withDispatchRepo $ \dir db -> do
     depTid <- addReadyTask dir db "chain dependency"
     (_, addOut, _) <-
-        runDispatch dir db Nothing ["task", "add", "chain dependent", "--state", "ready", "--depends-on", depTid]
+        runDispatch dir db Nothing ["task", "add", "chain dependent", "--state", "ready-headless", "--depends-on", depTid]
     let dependentTid = head (words addOut)
     (code, out, _) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
     code @?= ExitSuccess
@@ -2344,7 +2434,7 @@ testDispatchRecoverWorktree = withDispatchRepo $ \dir db -> do
 -- never surfaces as parked, and its empty branch is deleted.
 testDispatchNoCommitSuccess :: IO ()
 testDispatchNoCommitSuccess = withDispatchRepo $ \dir db -> do
-    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "no-commit task", "--state", "ready", "--no-commit"]
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "no-commit task", "--state", "ready-headless", "--no-commit"]
     let tid = head (words addOut)
     (code, out, _) <- runDispatch dir db (Just "nocommit") ["dispatch", "run", tid]
     code @?= ExitSuccess
@@ -2366,7 +2456,7 @@ reviewer branch records the prompt it received next to the repo.
 testReviewerSeesBodyFileEdits :: IO ()
 testReviewerSeesBodyFileEdits = withDispatchRepo $ \dir db -> do
     writeFile (dir </> "icarium.toml") (stubToml <> unlines ["[review]", "enabled = true"])
-    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "proof task", "--state", "ready", "--body", "criteria: prove it"]
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "proof task", "--state", "ready-headless", "--body", "criteria: prove it"]
     let tid = head (words addOut)
     (code, _, _) <- runDispatch dir db (Just "proof") ["dispatch", "run", tid]
     code @?= ExitSuccess
@@ -2389,7 +2479,7 @@ persists on the dispatch row for post-rotation audit.
 testReviewerBodyTamperReport :: IO ()
 testReviewerBodyTamperReport = withDispatchRepo $ \dir db -> do
     writeFile (dir </> "icarium.toml") (stubToml <> unlines ["[review]", "enabled = true"])
-    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "tamper task", "--state", "ready", "--body", "criteria: prove it"]
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "tamper task", "--state", "ready-headless", "--body", "criteria: prove it"]
     let tid = head (words addOut)
     (code, _, _) <- runDispatch dir db (Just "tamper") ["dispatch", "run", tid]
     code @?= ExitSuccess
@@ -2413,7 +2503,7 @@ testReviewerRetryKeepsTamperBaseline = withDispatchRepo $ \dir db -> do
     writeFile
         (dir </> "icarium.toml")
         (stubToml <> unlines ["[review]", "enabled = true", "max_attempts = 2"])
-    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "launder task", "--state", "ready", "--body", "criteria: prove it"]
+    (_, addOut, _) <- runDispatch dir db Nothing ["task", "add", "launder task", "--state", "ready-headless", "--body", "criteria: prove it"]
     let tid = head (words addOut)
     (code, _, _) <- runDispatch dir db (Just "launder") ["dispatch", "run", tid]
     code @?= ExitSuccess
@@ -2457,7 +2547,7 @@ testDispatchDepGateOnMerged :: IO ()
 testDispatchDepGateOnMerged = withDispatchRepo $ \dir db -> do
     depTid <- addReadyTask dir db "dep gate dependency"
     (_, addOut, _) <-
-        runDispatch dir db Nothing ["task", "add", "dep gate dependent", "--state", "ready", "--depends-on", depTid]
+        runDispatch dir db Nothing ["task", "add", "dep gate dependent", "--state", "ready-headless", "--depends-on", depTid]
     let dependentTid = head (words addOut)
     -- drain with the auto-merge blocked: the dependency parks, so the
     -- dependent must not become eligible; the drain reports parked leftovers
@@ -2559,7 +2649,7 @@ testCtxCurateValidation = withTempDb $ \db -> do
     (c2, _, e2) <- runIcarium db ["ctx", "curate", cid, "refactor", "--artifact", "nosuchtask"]
     c2 @?= ExitFailure 2
     assertBool "refactor rejects unknown task" ("task" `isInfixOf` e2)
-    (_, tOut, _) <- runIcarium db ["task", "add", "extracted refactor", "--state", "ready"]
+    (_, tOut, _) <- runIcarium db ["task", "add", "extracted refactor", "--state", "ready-headless"]
     let tid = take 10 (head (words tOut))
     (c3, _, _) <- runIcarium db ["ctx", "curate", cid, "refactor", "--artifact", tid]
     c3 @?= ExitSuccess
@@ -2611,7 +2701,7 @@ testCtxCurateQueue = withTempDb $ \db -> do
 
 testPromptRetiredRefs :: IO ()
 testPromptRetiredRefs = withTempDb $ \db -> do
-    (_, tOut, _) <- runIcarium db ["task", "add", "prompt task", "--state", "ready"]
+    (_, tOut, _) <- runIcarium db ["task", "add", "prompt task", "--state", "ready-headless"]
     let tid = take 10 (head (words tOut))
     (_, rOut, _) <- runIcarium db ["ctx", "add", "refactored ref", "--body", "xrefactorbody"]
     let rId = take 10 (head (words rOut))
@@ -2619,7 +2709,7 @@ testPromptRetiredRefs = withTempDb $ \db -> do
     let sId = take 10 (head (words sOut))
     (_, _, _) <- runIcarium db ["link", "add", tid, "references", rId]
     (_, _, _) <- runIcarium db ["link", "add", tid, "references", sId]
-    (_, tOut2, _) <- runIcarium db ["task", "add", "refactor target", "--state", "ready"]
+    (_, tOut2, _) <- runIcarium db ["task", "add", "refactor target", "--state", "ready-headless"]
     let tid2 = take 10 (head (words tOut2))
     (_, _, _) <- runIcarium db ["ctx", "curate", rId, "refactor", "--artifact", tid2]
     (_, _, _) <- runIcarium db ["ctx", "curate", sId, "stale"]
@@ -2635,7 +2725,7 @@ testPromptUntaggedWarns :: IO ()
 testPromptUntaggedWarns = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
     writeFile (dir <> "/icarium.toml") minimalIcariumToml
-    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "untagged task", "--state", "ready"]
+    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "untagged task", "--state", "ready-headless"]
     let tid = head (words aOut)
 
     (code, out, err) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
@@ -2655,7 +2745,7 @@ testPromptKindOnlyWarns = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
     writeFile (dir <> "/icarium.toml") minimalIcariumToml
     _ <- runIcariumIn dir db ["category", "add", "--axis", "kind", "bug"]
-    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "kind only", "--state", "ready", "--kind", "bug"]
+    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "kind only", "--state", "ready-headless", "--kind", "bug"]
     let tid = head (words aOut)
 
     (code, _, err) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
@@ -2668,7 +2758,7 @@ testPromptTaggedQuiet = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
     writeFile (dir <> "/icarium.toml") minimalIcariumToml
     _ <- runIcariumIn dir db ["category", "add", "--axis", "domain", "cli"]
-    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "tagged", "--state", "ready", "--domain", "cli"]
+    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "tagged", "--state", "ready-headless", "--domain", "cli"]
     let tid = head (words aOut)
 
     (code, _, err) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
@@ -2701,7 +2791,7 @@ testTaskAddUntaggedNudge :: IO ()
 testTaskAddUntaggedNudge = withSystemTempDirectory "icarium-test" $ \dir -> do
     let db = dir <> "/icarium.db"
     writeFile (dir <> "/icarium.toml") minimalIcariumToml
-    (code, out, err) <- runIcariumIn dir db ["task", "add", "quick capture", "--state", "ready"]
+    (code, out, err) <- runIcariumIn dir db ["task", "add", "quick capture", "--state", "ready-headless"]
     code @?= ExitSuccess
     let tid = head (words out)
     assertBool "nudge names the fixing command" ("task update" `isInfixOf` err)
@@ -2837,7 +2927,7 @@ testCategoryAddBadName = withTempDb $ \db -> do
 
 testTaskStartDone :: IO ()
 testTaskStartDone = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "shorthand task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "shorthand task", "--state", "ready-headless"]
     let tid = head (words addOut)
     (sCode, sOut, _) <- runIcarium db ["task", "start", tid]
     sCode @?= ExitSuccess
@@ -2885,7 +2975,7 @@ testTaskJson = withTempDb $ \db -> do
     jsonIds emptyOut @?= []
 
     (_, addOut, _) <-
-        runIcarium db ["task", "add", "Json task", "--state", "ready", "--body", "unmistakable body prose"]
+        runIcarium db ["task", "add", "Json task", "--state", "ready-headless", "--body", "unmistakable body prose"]
     let tid = head (words addOut)
 
     (lCode, lOut, _) <- runIcarium db ["task", "list", "--json"]
@@ -2896,7 +2986,7 @@ testTaskJson = withTempDb $ \db -> do
     sCode @?= ExitSuccess
     let o = expectObject (decodeOut sOut)
     expectField "id" o @?= tid
-    expectField "state" o @?= "ready"
+    expectField "state" o @?= "ready_headless"
     assertBool "show carries body_path" (KM.member "body_path" o)
     assertBool "show omits body content" (not ("unmistakable body prose" `isInfixOf` sOut))
 

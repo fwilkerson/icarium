@@ -147,7 +147,7 @@ checkBodies dbPath = do
         then pure []
         else do
             (tasks, ctxs) <- withDb dbPath $ \conn -> do
-                ts <- RT.listTasks conn [] False []
+                ts <- RT.listTasks conn [] []
                 cxs <- RCx.listContexts conn Nothing True []
                 pure (ts, cxs)
             let live = filter ((/= Abandoned) . taskState) tasks

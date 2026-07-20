@@ -2,6 +2,7 @@ module RepoSpec (tests) where
 
 import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, void)
+import Data.Either (isLeft)
 import Data.Int (Int64)
 import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
@@ -45,12 +46,15 @@ tests =
     testGroup
         "repo"
         [ testGroup "EdgeKind round-trips" edgeKindTests
-        , testCase "parseTaskState CLI form" $ parseTaskState "in-progress" @?= Just InProgress
-        , testCase "parseTaskStateDb DB form" $ parseTaskStateDb "in_progress" @?= Just InProgress
-        , testCase "parseTaskState accepts the hyphenated interactive form" $
-            parseTaskState "ready-interactive" @?= Just ReadyInteractive
-        , testCase "parseTaskStateDb accepts the stored interactive form" $
-            parseTaskStateDb "ready_interactive" @?= Just ReadyInteractive
+        , testCase "every state round-trips through the CLI spelling" $
+            mapM_ (\st -> parseTaskState (taskStateCli st) @?= Just st) allTaskStates
+        , testCase "every state round-trips through the stored spelling" $
+            mapM_ (\st -> parseTaskStateDb (taskStateText st) @?= Just st) allTaskStates
+        , testCase "the stored spelling is also accepted on the CLI" $
+            mapM_ (\st -> parseTaskState (taskStateText st) @?= Just st) allTaskStates
+        , testCase "bare ready parses as nothing, on either axis" $ do
+            parseTaskState "ready" @?= Nothing
+            parseTaskStateDb "ready" @?= Nothing
         , testCase "loadConfig succeeds on default template" loadConfigTest
         , testGroup
             "categoryMatchedContexts"
@@ -117,6 +121,7 @@ tests =
             , testCase "claimReadyTask claims a named task in either ready state" testClaimReadyTaskNamed
             , testCase "claimReadyTask refuses a task that is not ready-ish" testClaimReadyTaskRefusesNonReady
             , testCase "migration 15 widens the state CHECK and the view" testMigration15ReadyInteractive
+            , testCase "migration 16 renames ready rows and recreates the view" testMigration16ReadyHeadless
             ]
         , testGroup
             "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
@@ -181,7 +186,7 @@ tests =
         , testGroup
             "updateTask block_reason invariant"
             [ testCase "transition Blocked → Done clears block_reason" testUpdateClearsBlockReasonOnDone
-            , testCase "transition Blocked → Ready clears block_reason" testUpdateClearsBlockReasonOnReady
+            , testCase "transition Blocked → ReadyHeadless clears block_reason" testUpdateClearsBlockReasonOnReady
             , testCase "Blocked → Blocked preserves block_reason" testUpdateBlockedPreservesReason
             ]
         , testGroup
@@ -410,7 +415,7 @@ mkTaskWithRef c title = do
             RT.NewTask
                 { RT.ntTitle = title
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -558,7 +563,7 @@ testMigrateChainFromEmpty =
                 RT.NewTask
                     { RT.ntTitle = "Chain task"
                     , RT.ntBody = ""
-                    , RT.ntState = Ready
+                    , RT.ntState = ReadyHeadless
                     , RT.ntPriority = Nothing
                     , RT.ntNoCommit = False
                     }
@@ -596,7 +601,7 @@ testResolveDispatchFullId = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -613,7 +618,7 @@ testResolveDispatchPrefix = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -637,7 +642,7 @@ testResolveDispatchAmbiguous = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -667,7 +672,7 @@ testResolveTaskPrefix = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -689,7 +694,7 @@ testResolveTaskAmbiguous = withTestDb $ \c -> do
         execute
             c
             (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
-            (tid, "T" :: Text, "" :: Text, "ready" :: Text)
+            (tid, "T" :: Text, "" :: Text, "ready_headless" :: Text)
     r <- RT.resolveTaskId c "01CCCC0000"
     case r of
         Left msg -> assertBool "error mentions input" ("01CCCC0000" `T.isInfixOf` T.pack msg)
@@ -736,8 +741,8 @@ insertTestEdge c src =
 
 testResolveEdgePrefix :: IO ()
 testResolveEdgePrefix = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     eid <- insertTestEdge c t1 t2
     r <- RE.resolveEdgeId c (T.take 10 eid)
     r @?= Right eid
@@ -751,9 +756,9 @@ testResolveEdgeMissing = withTestDb $ \c -> do
 
 testResolveEdgeAmbiguous :: IO ()
 testResolveEdgeAmbiguous = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     let eid1 = "01EEEE000000000000000000AA" :: Text
         eid2 = "01EEEE000000000000000000BB" :: Text
     execute
@@ -775,9 +780,9 @@ testResolveEdgeAmbiguous = withTestDb $ \c -> do
 
 testListEdgesSrcKindFilter :: IO ()
 testListEdgesSrcKindFilter = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- RK.insertContext c RK.NewContext{RK.ncTitle = "K", RK.ncBody = ""}
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
     _ <- RE.insertEdge c References TaskNode t1 ContextNode kid
@@ -789,8 +794,8 @@ testListEdgesSrcKindFilter = withTestDb $ \c -> do
 
 testDependencyTasksReturnsAllColumns :: IO ()
 testDependencyTasksReturnsAllColumns = withTestDb $ \c -> do
-    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = True}
+    t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = True}
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
     deps <- RE.dependencyTasks c t1
     map taskNoCommit deps @?= [True]
@@ -801,7 +806,7 @@ testDependencyTasksReturnsAllColumns = withTestDb $ \c -> do
 
 testResolveNodeTask :: IO ()
 testResolveNodeTask = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "T", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "T", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     ts <- RT.getTasksByPrefix c (T.take 10 tid)
     ks <- RK.getContextsByPrefix c (T.take 10 tid)
     (length ts, length ks) @?= (1, 0)
@@ -823,7 +828,7 @@ testResolveNodeAmbiguous = withTestDb $ \c -> do
     execute
         c
         (Query "INSERT INTO tasks (id, title, body, state) VALUES (?,?,?,?)")
-        (tid, "T" :: Text, "" :: Text, "ready" :: Text)
+        (tid, "T" :: Text, "" :: Text, "ready_headless" :: Text)
     execute
         c
         (Query "INSERT INTO context (id, title, body) VALUES (?,?,?)")
@@ -880,7 +885,7 @@ testSyncBlocksInUse = withTestDb $ \conn -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -908,7 +913,7 @@ testAutoDeriveDepsEdgeInserted = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Dispatch task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -923,7 +928,7 @@ testAutoDeriveDepsExplicitWins = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Dispatch task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -933,7 +938,7 @@ testAutoDeriveDepsExplicitWins = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Other task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -962,7 +967,7 @@ testNoCommitInsert = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Side-effect task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = True
                 }
@@ -977,7 +982,7 @@ testNoCommitUpdate = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Commit task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1000,7 +1005,7 @@ insertBlockedTask c reason = do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1024,7 +1029,7 @@ testUpdateClearsBlockReasonOnDone = withTestDb $ \c -> do
 testUpdateClearsBlockReasonOnReady :: IO ()
 testUpdateClearsBlockReasonOnReady = withTestDb $ \c -> do
     tid <- insertBlockedTask c "old reason"
-    _ <- RT.updateTask c tid RT.emptyUpdate{RT.tuState = Just Ready}
+    _ <- RT.updateTask c tid RT.emptyUpdate{RT.tuState = Just ReadyHeadless}
     Just t <- RT.getTask c tid
     taskBlockReason t @?= Nothing
 
@@ -1049,7 +1054,7 @@ testTaskUpdateDomainReplaces = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1068,7 +1073,7 @@ testTaskUpdateDomainClears = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "T"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1103,7 +1108,7 @@ testSearchWhitespaceOnly = withTestDb $ \c -> do
 
 testSearchTitleBeforeBody :: IO ()
 testSearchTitleBeforeBody = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "fts needle title", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkContext c "unrelated title" "body contains needle here"
     (_, results) <- RS.searchEntries c "needle" RS.noFilters 10
     assertBool "two results returned" (length results == 2)
@@ -1114,7 +1119,7 @@ testSearchTitleBeforeBody = withTestDb $ \c -> do
 
 testSearchCrossKindRank :: IO ()
 testSearchCrossKindRank = withTestDb $ \c -> do
-    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "no match title", RT.ntBody = "body has xyzzy", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkContext c "title has xyzzy" "body"
     (_, results) <- RS.searchEntries c "xyzzy" RS.noFilters 10
     assertBool "context title hit before task body hit" (RS.hitId (head results) == kid)
@@ -1138,7 +1143,7 @@ testSearchEscapeUnderscore = withTestDb $ \c -> do
 
 testSearchKindTask :: IO ()
 testSearchKindTask = withTestDb $ \c -> do
-    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    tid <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     _ <- mkContext c "needle context" "body"
     (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfKind = Just TaskNode} 10
     length results @?= 1
@@ -1146,7 +1151,7 @@ testSearchKindTask = withTestDb $ \c -> do
 
 testSearchKindCtx :: IO ()
 testSearchKindCtx = withTestDb $ \c -> do
-    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = Ready, RT.ntPriority = Nothing, RT.ntNoCommit = False}
+    _ <- RT.insertTask c RT.NewTask{RT.ntTitle = "needle task", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     kid <- mkContext c "needle context" "body"
     (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfKind = Just ContextNode} 10
     length results @?= 1
@@ -1339,7 +1344,7 @@ testDispatchTokensPopulated = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Token task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1358,7 +1363,7 @@ testDispatchTokensNull = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "No token task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1425,7 +1430,7 @@ testDispatchStatsAggregates = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Stats task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1452,7 +1457,7 @@ testDispatchStatsSince = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Stats since task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1500,7 +1505,7 @@ testSetMergedRoundTrips = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Merge tracking task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1527,7 +1532,7 @@ mkDepPair c = do
             RT.NewTask
                 { RT.ntTitle = "Dependency task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1537,7 +1542,7 @@ mkDepPair c = do
             RT.NewTask
                 { RT.ntTitle = "Dependent task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1546,7 +1551,7 @@ mkDepPair c = do
     pure (dep, dependent)
 
 readyIds :: Connection -> IO [Text]
-readyIds c = map taskId <$> RT.listTasks c [] True []
+readyIds c = map taskId <$> RT.queueTasks c []
 
 testParkedDepBlocks :: IO ()
 testParkedDepBlocks = withTestDb $ \c -> do
@@ -1611,32 +1616,32 @@ admit both ready states so callers can pick their queue by state filter.
 -}
 testReadyTasksSpansBothStates :: IO ()
 testReadyTasksSpansBothStates = withTestDb $ \c -> do
-    headless <- mkTask c "Headless work" Ready
+    headless <- mkTask c "Headless work" ReadyHeadless
     interactive <- mkTask c "Interactive work" ReadyInteractive
     _ <- mkTask c "Not ready" Planned
 
-    both <- map taskId <$> RT.listTasks c [] True []
+    both <- map taskId <$> RT.queueTasks c []
     assertBool "view carries the headless task" (headless `elem` both)
     assertBool "view carries the interactive task" (interactive `elem` both)
     length both @?= 2
 
-    onlyHeadless <- map taskId <$> RT.listTasks c [Ready] True []
+    onlyHeadless <- map taskId <$> RT.queueTasks c [ReadyHeadless]
     onlyHeadless @?= [headless]
-    onlyInteractive <- map taskId <$> RT.listTasks c [ReadyInteractive] True []
+    onlyInteractive <- map taskId <$> RT.queueTasks c [ReadyInteractive]
     onlyInteractive @?= [interactive]
 
 -- | Generalizing the view must not lose the gate for the new state.
 testInteractiveDepsGated :: IO ()
 testInteractiveDepsGated = withTestDb $ \c -> do
-    dep <- mkTask c "Unfinished dependency" Ready
+    dep <- mkTask c "Unfinished dependency" ReadyHeadless
     dependent <- mkTask c "Interactive dependent" ReadyInteractive
     _ <- RE.insertEdge c DependsOn TaskNode dependent TaskNode dep
 
-    ready <- map taskId <$> RT.listTasks c [ReadyInteractive] True []
+    ready <- map taskId <$> RT.queueTasks c [ReadyInteractive]
     assertBool "interactive dependent held behind an open dependency" (dependent `notElem` ready)
 
     void $ RT.updateTask c dep RT.emptyUpdate{RT.tuState = Just Done}
-    ready' <- map taskId <$> RT.listTasks c [ReadyInteractive] True []
+    ready' <- map taskId <$> RT.queueTasks c [ReadyInteractive]
     ready' @?= [dependent]
 
 {- | Dispatch and the interactive CLI share one claim path and differ only
@@ -1646,7 +1651,7 @@ testClaimNextTaskStateFiltered :: IO ()
 testClaimNextTaskStateFiltered = withTestDb $ \c -> do
     interactive <- mkTask c "Interactive work" ReadyInteractive
 
-    headlessClaim <- RT.claimNextTask c [Ready] "dispatch"
+    headlessClaim <- RT.claimNextTask c [ReadyHeadless] "dispatch"
     assertBool "headless queue does not see interactive work" (isNothing headlessClaim)
 
     claimed <- RT.claimNextTask c [ReadyInteractive] "human"
@@ -1655,7 +1660,7 @@ testClaimNextTaskStateFiltered = withTestDb $ \c -> do
 
 testClaimReadyTaskNamed :: IO ()
 testClaimReadyTaskNamed = withTestDb $ \c -> do
-    headless <- mkTask c "Headless work" Ready
+    headless <- mkTask c "Headless work" ReadyHeadless
     interactive <- mkTask c "Interactive work" ReadyInteractive
 
     h <- RT.claimReadyTask c headless "human"
@@ -1730,6 +1735,79 @@ testMigration15ReadyInteractive = withBaseTestDb $ \conn -> do
     afterCascade <- query_ conn "SELECT id FROM edges" :: IO [Only Text]
     map fromOnly afterCascade @?= []
 
+{- | Migration 16 renames `ready` to `ready_headless`. The rename must not
+cost a task its identity: categories and edges hang off `tasks` through the
+rebuild, and the recreated view must gate on the new name.
+-}
+testMigration16ReadyHeadless :: IO ()
+testMigration16ReadyHeadless = withBaseTestDb $ \conn -> do
+    execute_ conn "PRAGMA foreign_keys = OFF"
+    -- Restore the v15 shape: bare 'ready' in the CHECK and in the view.
+    execSql
+        conn
+        "DROP VIEW ready_tasks;\n\
+        \DROP TABLE tasks;\n\
+        \CREATE TABLE tasks (\n\
+        \  id TEXT PRIMARY KEY,\n\
+        \  title TEXT NOT NULL,\n\
+        \  body TEXT NOT NULL DEFAULT '',\n\
+        \  state TEXT NOT NULL DEFAULT 'planned'\n\
+        \    CHECK (state IN ('idea','planned','ready','ready_interactive',\n\
+        \                     'in_progress','done','blocked','abandoned')),\n\
+        \  priority INTEGER,\n\
+        \  block_reason TEXT,\n\
+        \  no_commit INTEGER NOT NULL DEFAULT 0 CHECK (no_commit IN (0,1)),\n\
+        \  claimed_by TEXT,\n\
+        \  claimed_at TEXT,\n\
+        \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n\
+        \  updated_at TEXT NOT NULL DEFAULT (datetime('now')));\n\
+        \CREATE INDEX tasks_state_idx ON tasks(state);\n\
+        \CREATE VIEW ready_tasks AS SELECT * FROM tasks WHERE 0;\n\
+        \INSERT INTO tasks (id,title,state,priority) VALUES ('01AAA','Headless','ready',7);\n\
+        \INSERT INTO tasks (id,title,state) VALUES ('01BBB','Interactive','ready_interactive');\n\
+        \INSERT INTO tasks (id,title,state) VALUES ('01CCC','Planned','planned');\n\
+        \INSERT INTO categories (id,axis,name) VALUES ('01CAT','domain','cli');\n\
+        \INSERT INTO task_categories (task_id,category_id) VALUES ('01AAA','01CAT');\n\
+        \INSERT INTO edges (id,kind,src_kind,src_id,dst_kind,dst_id)\n\
+        \  VALUES ('01EDGE','depends_on','task','01BBB','task','01AAA');"
+
+    let m16 = case filter ((== 16) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 16 not registered"
+    migrationUp m16 conn
+
+    -- Every row survives, and only the ready ones are renamed.
+    states <- query_ conn "SELECT id, state FROM tasks ORDER BY id" :: IO [(Text, Text)]
+    states
+        @?= [ ("01AAA", "ready_headless")
+            , ("01BBB", "ready_interactive")
+            , ("01CCC", "planned")
+            ]
+    priorities <- query_ conn "SELECT priority FROM tasks WHERE id='01AAA'" :: IO [Only (Maybe Int)]
+    map fromOnly priorities @?= [Just 7]
+
+    -- Categories and edges hang off the rebuilt table, not the dropped one.
+    cats <- query_ conn "SELECT task_id FROM task_categories" :: IO [Only Text]
+    map fromOnly cats @?= ["01AAA"]
+    edges <- query_ conn "SELECT id FROM edges" :: IO [Only Text]
+    map fromOnly edges @?= ["01EDGE"]
+
+    -- The widened CHECK takes the new name; the old one is gone for good.
+    execute_ conn "INSERT INTO tasks (id,title,state) VALUES ('01DDD','New','ready_headless')"
+    rejected <-
+        try (execute_ conn "INSERT INTO tasks (id,title,state) VALUES ('01EEE','Old','ready')") ::
+            IO (Either SomeException ())
+    assertBool "bare ready is no longer a legal state" (isLeft rejected)
+
+    -- The recreated view gates on the new name and still applies the deps gate.
+    inView <- query_ conn "SELECT id FROM ready_tasks ORDER BY id" :: IO [Only Text]
+    map fromOnly inView @?= ["01AAA", "01DDD"]
+
+    -- The edge-cascade trigger went with the old table and must be back.
+    execute_ conn "DELETE FROM tasks WHERE id='01AAA'"
+    afterCascade <- query_ conn "SELECT id FROM edges" :: IO [Only Text]
+    map fromOnly afterCascade @?= []
+
 {- | Migration 14 rebuilds `categories` to widen its axis CHECK. The rebuild
 must keep existing rows, keep the child link tables pointing at the new
 table (FK cascade still fires), and accept the new axis.
@@ -1763,7 +1841,7 @@ testMigration14KindAxis = withBaseTestDb $ \conn -> do
             RT.NewTask
                 { RT.ntTitle = "Tagged"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }
@@ -1800,7 +1878,7 @@ testListParkedDispatches = withTestDb $ \c -> do
             RT.NewTask
                 { RT.ntTitle = "Parked task"
                 , RT.ntBody = ""
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }

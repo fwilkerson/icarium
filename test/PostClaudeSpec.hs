@@ -53,7 +53,7 @@ testWarnEntryLinksTask =
                     RT.NewTask
                         { RT.ntTitle = "Parser task"
                         , RT.ntBody = ""
-                        , RT.ntState = Ready
+                        , RT.ntState = ReadyHeadless
                         , RT.ntPriority = Nothing
                         , RT.ntNoCommit = False
                         }
@@ -143,7 +143,7 @@ testHandlePostClaudeFailureCheckpoints =
                         RT.NewTask
                             { RT.ntTitle = "Test task"
                             , RT.ntBody = ""
-                            , RT.ntState = Ready
+                            , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = False
                             }
@@ -204,7 +204,7 @@ testFinishWithWipCheckpoint =
                         RT.NewTask
                             { RT.ntTitle = "WIP checkpoint task"
                             , RT.ntBody = ""
-                            , RT.ntState = Ready
+                            , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = False
                             }
@@ -265,7 +265,7 @@ testNoCommitAgentCommittedAnyway =
                         RT.NewTask
                             { RT.ntTitle = "No-commit task"
                             , RT.ntBody = ""
-                            , RT.ntState = Ready
+                            , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = True
                             }

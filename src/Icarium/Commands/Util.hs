@@ -6,6 +6,7 @@ module Icarium.Commands.Util (
 
     -- * Shared option readers
     taskStateReader,
+    stateChoices,
     edgeKindReader,
     axisReader,
     effortReader,
@@ -86,11 +87,24 @@ requireConfig =
     loadConfig defaultConfigPath
         >>= either (fatal 2 . ("config parse error:\n" <>)) pure
 
+-- | The valid @--state@ values, in lifecycle order, spelled as the CLI takes them.
+stateChoices :: String
+stateChoices = T.unpack (T.intercalate " | " (map taskStateCli allTaskStates))
+
+{- | Rejects bare @ready@ along with any other unknown value: the message
+lists the states rather than special-casing the old name, which would make
+the removed vocabulary look merely misspelled.
+-}
 taskStateReader :: ReadM TaskState
 taskStateReader = eitherReader $ \s ->
     case parseTaskState (T.pack s) of
         Just st -> Right st
-        Nothing -> Left ("invalid state: " <> s)
+        Nothing ->
+            Left $
+                "invalid state: "
+                    <> s
+                    <> "; valid states are "
+                    <> stateChoices
 
 edgeKindReader :: ReadM EdgeKind
 edgeKindReader = eitherReader $ \s ->

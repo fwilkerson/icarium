@@ -17,7 +17,7 @@ icarium init                              # create DB, apply schema, write icari
 icarium task add "Wire up the parser" --priority 7
 # stdout: <new-id>\n<body-path>
 #   Write your markdown to <body-path> — the file isn't pre-created.
-icarium task update <id> --state ready    # mark it dispatchable
+icarium task update <id> --state ready-headless   # mark it dispatchable
 icarium dispatch run <id>                 # run one task now
 icarium dispatch run                      # …or drain the whole ready queue
 ```
@@ -26,9 +26,16 @@ Bodies are plain markdown files on disk at `.icarium/bodies/{tasks,contexts}/<ul
 
 ## Concepts
 
-**Task lifecycle.** `idea → planned → ready → in-progress → done`, plus `blocked` (needs a
-`--block-reason`) and `abandoned`. Dispatch only picks up `ready` tasks whose `depends-on`
-upstreams are all `done`.
+**Task lifecycle.** `idea → planned → ready-headless → in-progress → done`, plus
+`ready-interactive` (fully specified, but a human must do it), `blocked` (needs a
+`--block-reason`) and `abandoned`. Dispatch only picks up `ready-headless` tasks whose
+`depends-on` upstreams are all `done`. There is no bare `ready` state — it would name one
+queue on the state axis and the other everywhere else.
+
+**Queue vs. state.** A state is stored on the task; a queue is derived — the ready-state
+tasks whose dependencies are satisfied, in priority then age order. `icarium task queue` is
+that worklist (`--headless` / `--interactive` narrow it); `task list` is a pure filter with
+no dependency gate.
 
 **Context entries** (`ctx`). Reusable knowledge attached to tasks via links. Supersession chains
 (`--derived-from` / `--supersedes`) let a newer note replace an older one; `ctx list` shows only
@@ -203,9 +210,9 @@ the *just-finished* dispatch — previously parked ones need a human, so they ar
 explicit `dispatch merge`.
 
 `dispatch run` (no task ID) drains the headless ready queue in priority order, landing each success
-before picking the next task — so a dependency chain lands in a single drain. Only `state='ready'`
+before picking the next task — so a dependency chain lands in a single drain. Only `state='ready_headless'`
 is drained: `ready_interactive` is fully specified work a human must do, and dispatch never takes
-it. "Ready" is also stricter than the state alone — the `ready_tasks` view requires every
+it. Being in the queue is stricter than the state alone — the `ready_tasks` view requires every
 `depends_on` upstream to be `done`
 **and merged** — a parked (successful but unlanded) dependency still blocks its dependents.
 In-progress or blocked upstreams are not satisfied. If `worktree_setup` exits 75 (no capacity) the
@@ -215,7 +222,7 @@ drain stops cleanly, leaving the task untouched; any other setup failure stops w
 `blocked` is not `done`, any task depending on it drops out of the ready queue — quarantined with no
 explicit action. Independent tasks keep draining.
 
-To release a quarantined task, resolve the upstream failure and move it back to `ready` (or `done`
+To release a quarantined task, resolve the upstream failure and move it back to `ready-headless` (or `done`
 if completed out-of-band). `dispatch run <TASK_ID>` overrides the quarantine: naming a task skips
 the ready-queue check.
 

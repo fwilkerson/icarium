@@ -58,9 +58,10 @@ guide =
     \                                         # Use this, not next + start, when other\n\
     \                                         # agents share the queue - two claims can\n\
     \                                         # never return the same task.\n\
-    \  icarium task claim <id>                # claim a named ready/ready-interactive task\n\
-    \  icarium task list --ready              # the ready-interactive queue, deps satisfied\n\
-    \  icarium task list --state ready        # headless queue; dispatch selects from it\n\
+    \  icarium task claim <id>                # claim a named task in either ready state\n\
+    \  icarium task queue                     # ordered worklist: both queues, deps satisfied\n\
+    \  icarium task queue --headless          # only what dispatch will take\n\
+    \  icarium task queue --interactive       # only what a human can pick up\n\
     \  icarium task exists <id>               # exit 0 found / 1 missing / 2 ambiguous\n\
     \  icarium search \"query\"                 # FTS5; \"phrase\", UPPERCASE OR,\n\
     \                                         # --kind task|ctx, --limit N\n\
@@ -89,12 +90,14 @@ guide =
     \                                             # icarium.toml + DB\n\
     \\n\
     \Task lifecycle\n\
-    \  idea -> planned -> ready -> in-progress -> done\n\
-    \                    \\-> ready-interactive  -/\n\
+    \  idea -> planned -> ready-headless    -> in-progress -> done\n\
+    \                  \\-> ready-interactive -/\n\
     \                                         \\-> blocked  (requires --block-reason)\n\
     \  (abandoned is the dead-end state.) Both ready states mean fully specified;\n\
-    \  ready is headless work dispatch picks up once its dependencies are done,\n\
+    \  ready-headless is work dispatch picks up once its dependencies are done,\n\
     \  ready-interactive is work a human must do and dispatch never takes.\n\
+    \  There is no bare `ready` state: a state filter names one queue, and\n\
+    \  `task queue` is the deps-gated worklist over both.\n\
     \\n\
     \  icarium task start <id>                # -> in-progress\n\
     \  icarium task done <id>                 # -> done\n\

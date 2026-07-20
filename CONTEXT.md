@@ -21,6 +21,36 @@ split is decided; adding an axis means choosing a side there.
 
 ## Language
 
+### Task lifecycle
+
+**State**:
+A task's position in its lifecycle, stored on the task. One axis, one value
+at a time. A state says what a task *is*, never who may select it.
+
+**Queue**:
+An ordered selection of actionable work: tasks in a ready state whose
+dependencies are all satisfied, ordered by priority then age. Derived, never
+stored — a queue is a view over states, so the two are not interchangeable.
+_Avoid_: backlog (unordered, and not gated on dependencies)
+
+**Headless queue / Interactive queue**:
+The two queues, distinguished only by who does the work. Headless work a
+dispatched agent may take unattended; interactive work needs a human at a
+keyboard. They share one specification bar — both are fully specified, and
+neither is the default reading of "ready".
+_Avoid_: ready (unqualified — it named the headless queue on the state axis
+and the interactive queue on the selector axis; ADR 0007)
+
+**Actionable**:
+A ready-state task whose dependencies are all satisfied. The dependency gate
+is what separates a queue from a plain state filter.
+
+**Claim**:
+Atomically taking a task: marks it in-progress and stamps an owner, so
+concurrent agents cannot take the same work. Claiming from a queue takes the
+head; claiming a *named* task ignores the dependency gate, because naming it
+is the selection.
+
 ### Dispatch lifecycle
 
 **Landed / Merged**:

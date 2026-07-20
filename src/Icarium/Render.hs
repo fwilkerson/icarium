@@ -226,7 +226,7 @@ recommendedTitleMax = 72
 {- | Render a flat, priority-sorted task list with state badges.
 
 @useUnicode@: True → Unicode ellipsis; False → ASCII fallback.
-Rows are sorted priority DESC, ULID DESC; null priority sorts last.
+Rows are sorted priority DESC, ULID ASC; null priority sorts last.
 Done and abandoned are hidden by default — callers filter before passing.
 -}
 renderTaskList :: Bool -> [TaskRow] -> Text
@@ -239,12 +239,14 @@ renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
         let pa = taskPriority (trTask a)
             pb = taskPriority (trTask b)
          in case (pa, pb) of
-                (Nothing, Nothing) -> compareUlid b a
+                (Nothing, Nothing) -> compareUlid a b
                 (Just _, Nothing) -> LT
                 (Nothing, Just _) -> GT
                 (Just x, Just y) -> case compare y x of
-                    EQ -> compareUlid b a
+                    EQ -> compareUlid a b
                     o -> o
+    -- Oldest first within a priority, matching the queue's ordering — so a
+    -- rendered queue and `task next` cannot disagree about the head row.
     compareUlid r1 r2 = compare (taskId (trTask r1)) (taskId (trTask r2))
 
     titleWidth = min recommendedTitleMax (maxLen 5 (map (T.length . taskTitle . trTask) rows))
@@ -273,9 +275,7 @@ renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
 
 -- | Badges read as the CLI spells states, not as the DB stores them.
 stateBadgeText :: TaskState -> Text
-stateBadgeText InProgress = "in-progress"
-stateBadgeText ReadyInteractive = "ready-interactive"
-stateBadgeText s = taskStateText s
+stateBadgeText = taskStateCli
 
 {- | 5-cell Unicode priority bar. ■ filled, ◧ half-filled, □ empty,
 space-separated. Represents the 0–10 priority range in half-square steps.

@@ -1,6 +1,6 @@
 # Task state semantics, and two ready queues
 
-Status: accepted (2026-07-19)
+Status: accepted (2026-07-19), revised (2026-07-20)
 
 `TaskState` is the task lifecycle axis. Each value means one thing:
 
@@ -8,7 +8,7 @@ Status: accepted (2026-07-19)
 | ------------------ | -------------------------------------------------------------------------- |
 | `idea`             | Captured, not evaluated. A maintainer still has to decide if it's real.     |
 | `planned`          | Accepted, **under-specified**. Details may rot; not safe to hand to anyone. |
-| `ready`            | Fully specified, headless: a dispatched agent may take it unattended.       |
+| `ready_headless`   | Fully specified, headless: a dispatched agent may take it unattended.       |
 | `ready_interactive`| Fully specified, but a human at a keyboard must do it.                      |
 | `in_progress`      | Claimed. `claimed_by`/`claimed_at` say by whom, since when.                 |
 | `done`             | The work is **accepted**. It is not necessarily *merged* — see below.       |
@@ -25,9 +25,10 @@ such work sitting in `ready` was picked up by `dispatch run`. So in practice
 it hid in `planned`, which corrupted `planned`'s meaning (under-specified,
 details may rot) and made the ready surfaces under-report real work.
 
-`ready` itself was never ambiguous. `CONTEXT.md` defines the project as
-headless-agent development, so `ready` = the headless queue is the aligned
-reading; the exception is what needs the qualified name.
+The original split kept `ready` bare, reasoning that `CONTEXT.md` defines the
+project as headless-agent development, so `ready` = the headless queue is the
+aligned reading and only the exception needs a qualified name. That was wrong
+in practice — see the 2026-07-20 revision below.
 
 Separately, the states were only ever documented in scattered help text.
 Two of them carry non-obvious meaning worth writing down: `planned` is
@@ -36,20 +37,25 @@ Two of them carry non-obvious meaning worth writing down: `planned` is
 
 ## Decision
 
-- Add `ready_interactive`. It shares `ready`'s specification bar and differs
-  only in who does the work.
+- Two ready states, `ready_headless` and `ready_interactive`. They share one
+  specification bar and differ only in who does the work. Neither name is
+  bare: an unqualified `ready` is a parse error naming both.
 - `blocked` stays singular. Its two flavours (dispatch failed vs. waiting on
   information) are distinguishable from the `dispatches` row, and both agree
   on the only thing a state must encode: not proceeding, don't hand it out.
 - The `ready_tasks` view spans both ready states. The deps-satisfaction gate
   lives there and nowhere else; each caller narrows to its own queue by
-  state. `dispatch run` takes `ready`; `task next` and bare `task claim`
-  take `ready_interactive`.
-- **The headless queue has no CLI surface.** Dispatch selects in-process via
-  `claimNextTask`, and nothing mechanical reads the CLI, so `task list
-  --ready`, `task next` and bare `task claim` all serve the human. Exposing
-  a qualified headless form would be a surface with no caller. `task list
-  --state ready` still finds the work — that is a state filter, not a queue.
+  state. `dispatch run` takes `ready_headless`; `task next` and bare `task
+  claim` take `ready_interactive`.
+- **Queue and state are separate surfaces.** `task queue` is the ordered
+  worklist: both ready states, dependency-gated, one interleaved list in
+  priority order, narrowed by `--headless` / `--interactive`. `task list` is
+  how you *find* work — a pure filter, no gate, no queue semantics, so it
+  cannot re-acquire a default queue.
+- `task next` and bare `task claim` stay interactive with no qualifier.
+  Views have no natural default, but these are actions, and a human can only
+  perform interactive work; headless selection is in-process via
+  `claimNextTask` and never through the CLI.
 - `task claim <id>` claims a *named* task in either ready state, through the
   same `BEGIN IMMEDIATE` path. It ignores the deps gate: naming the task is
   the selection. It refuses any other state, and says so.
@@ -73,6 +79,39 @@ dependents build on a base missing their dependency.
   view. Existing `ready` rows keep their meaning — the split adds a state,
   it does not reinterpret one.
 - Triage's `ready-for-human` becomes a real state transition, so the body
-  line goes away and `--ready` stops under-reporting.
-- Pre-1.0: `--ready` and bare `task claim` changed meaning rather than
-  gaining a qualifier. No compatibility shim.
+  line goes away and the ready surfaces stop under-reporting.
+- Pre-1.0: bare `task claim` changed meaning rather than gaining a
+  qualifier. No compatibility shim.
+
+## Revision, 2026-07-20
+
+The bare `ready` name did not survive contact. It meant the *headless* queue
+on the state axis (`--state ready`) and the *interactive* queue on the
+selector axis (`--ready`) — two opposite answers to "which queue" from one
+word, in adjacent flags of the same command. Help text documented it; that
+did not make it usable.
+
+The root cause was asymmetry, not the flag: one queue held the unqualified
+name, so every unqualified surface inherited an arbitrary default, and
+`--ready` was merely where it was noticed first.
+
+Revised accordingly:
+
+- `ready` → `ready_headless`, in both the CLI and storage. Bare `ready` is
+  now an unknown-value error listing the valid states. No alias — an alias
+  is the same trap, silently resolved.
+- `--ready` is removed. Its two jobs split: queue selection is what `--state`
+  already does, and the dependency gate — previously implicit in the flag —
+  becomes explicit as `task queue`.
+- `task claim <id>` stays permissive across both ready states. The dangerous
+  direction is dispatch taking human work, enforced in `claimNextTask`; a
+  human taking headless work is harmless and serves a real workflow
+  (dispatch keeps failing, do it by hand). Forcing a state edit first would
+  make the state lie.
+- Migration 0016 renames existing rows. All were agent-safe, so the rename
+  is unconditional.
+
+Amended in place rather than superseded: these ADRs are read mid-task to
+learn current semantics, and the surviving content (why `ready_interactive`
+exists, why `blocked` stays singular, why `done` ≠ landed) is most of the
+file, so a successor could not stand alone.

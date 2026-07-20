@@ -72,7 +72,7 @@ testTimeoutOutcome = withTestRepo $ \dir -> withTestDb $ \conn -> withCwdLock $ 
             RT.NewTask
                 { RT.ntTitle = "timeout test task"
                 , RT.ntBody = "body"
-                , RT.ntState = Ready
+                , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
                 }

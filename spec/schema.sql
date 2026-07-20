@@ -13,11 +13,13 @@ CREATE TABLE tasks (
     title       TEXT NOT NULL,
     body        TEXT NOT NULL DEFAULT '',           -- markdown
     state       TEXT NOT NULL DEFAULT 'planned'
-                CHECK (state IN ('idea','planned','ready','ready_interactive',
+                CHECK (state IN ('idea','planned','ready_headless','ready_interactive',
                                  'in_progress','done','blocked','abandoned')),
-    -- Two ready queues, same specification bar: 'ready' is headless work the
+    -- Two ready queues, same specification bar: 'ready_headless' is work the
     -- dispatch program may take unattended, 'ready_interactive' is work a
-    -- human must do. See docs/adr/0007-task-state-semantics.md.
+    -- human must do. Neither is named bare 'ready' — an unqualified name let
+    -- every surface inherit a default queue. See
+    -- docs/adr/0007-task-state-semantics.md.
     -- 'in_progress' is stored; the dispatch program sets it before invoking
     -- the agent, then transitions to 'done' or 'blocked' after gates pass.
     priority    INTEGER,                             -- NULL = default
@@ -259,11 +261,11 @@ FROM tasks t;
 --
 -- The view spans both ready states so the deps gate lives in exactly one
 -- place; each caller narrows to its own queue by state (dispatch takes
--- 'ready', the interactive CLI takes 'ready_interactive').
+-- 'ready_headless', the interactive CLI takes 'ready_interactive').
 CREATE VIEW ready_tasks AS
 SELECT t.*
 FROM tasks t
-WHERE t.state IN ('ready','ready_interactive')
+WHERE t.state IN ('ready_headless','ready_interactive')
   AND NOT EXISTS (
       SELECT 1
       FROM edges e
