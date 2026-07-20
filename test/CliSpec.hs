@@ -222,6 +222,11 @@ tests =
         , testCase "ctx curate validation: artifact rules per disposition" testCtxCurateValidation
         , testCase "ctx curate queue: never-curated, --older-than, --json" testCtxCurateQueue
         , testCase "task show --prompt: retired ref delivered, stale ref never" testPromptRetiredRefs
+        , testCase "task show --prompt: untagged task warns on stderr" testPromptUntaggedWarns
+        , testCase "task show --prompt: kind-only task warns too" testPromptKindOnlyWarns
+        , testCase "task show --prompt: one retrieval axis is quiet" testPromptTaggedQuiet
+        , testCase "dispatch: untagged task warns on stderr, dry-run and live" testDispatchUntaggedWarns
+        , testCase "task add: untagged capture nudges without blocking" testTaskAddUntaggedNudge
         , -- issue #15: category registration + state shorthands
           testCase "category add: registers in toml+DB, idempotent, unlocks --domain" testCategoryAdd
         , testCase "category add: invalid name exits 2" testCategoryAddBadName
@@ -2622,6 +2627,91 @@ testPromptRetiredRefs = withTempDb $ \db -> do
     code @?= ExitSuccess
     assertBool "refactor-retired ref still injected" ("xrefactorbody" `isInfixOf` out)
     assertBool "stale ref never injected" (not ("xstalebody" `isInfixOf` out))
+
+{- | A task with no retrieval axis (domain/discipline) auto-pulls nothing, so
+the prompt must say so rather than render a context-free block in silence.
+-}
+testPromptUntaggedWarns :: IO ()
+testPromptUntaggedWarns = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "untagged task", "--state", "ready"]
+    let tid = head (words aOut)
+
+    (code, out, err) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
+    code @?= ExitSuccess
+    assertBool "prompt still renders on stdout" ("untagged task" `isInfixOf` out)
+    assertBool "warning is on stderr, not stdout" (not ("warn:" `isInfixOf` out))
+    assertBool "warns about missing tags" ("warn:" `isInfixOf` err)
+    assertBool "warning names the fixing command" ("task update" `isInfixOf` err)
+    assertBool "warning names --domain" ("--domain" `isInfixOf` err)
+    assertBool "warning names the task id" (tid `isInfixOf` err)
+
+{- | @kind@ is not a retrieval axis, so a kind-only task pulls nothing either --
+the guard is "no retrieval axis", not "no categories".
+-}
+testPromptKindOnlyWarns :: IO ()
+testPromptKindOnlyWarns = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    _ <- runIcariumIn dir db ["category", "add", "--axis", "kind", "bug"]
+    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "kind only", "--state", "ready", "--kind", "bug"]
+    let tid = head (words aOut)
+
+    (code, _, err) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
+    code @?= ExitSuccess
+    assertBool "kind alone still warns" ("warn:" `isInfixOf` err)
+
+-- | One retrieval axis is enough -- the pull just widens. No warning.
+testPromptTaggedQuiet :: IO ()
+testPromptTaggedQuiet = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    _ <- runIcariumIn dir db ["category", "add", "--axis", "domain", "cli"]
+    (_, aOut, _) <- runIcariumIn dir db ["task", "add", "tagged", "--state", "ready", "--domain", "cli"]
+    let tid = head (words aOut)
+
+    (code, _, err) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
+    code @?= ExitSuccess
+    assertBool "no warning when a retrieval axis is present" (not ("warn:" `isInfixOf` err))
+
+{- | Dispatch consumes the same prompt, so it must surface the same signal
+rather than silently running a context-free task.
+-}
+testDispatchUntaggedWarns :: IO ()
+testDispatchUntaggedWarns = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "untagged dispatch task"
+    (code, _, err) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "dry-run warns about missing tags" ("warn:" `isInfixOf` err)
+    assertBool "warning names the fixing command" ("task update" `isInfixOf` err)
+
+    -- The dry-run path is cheap to cover, but the criterion is about not
+    -- silently dispatching for real -- so pin the live path too.
+    tid2 <- addReadyTask dir db "untagged live task"
+    (code2, _, err2) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid2]
+    code2 @?= ExitSuccess
+    assertBool "live run warns about missing tags" ("warn:" `isInfixOf` err2)
+    assertBool "live warning names the fixing command" ("task update" `isInfixOf` err2)
+
+{- | Nudge at creation is where fill-rate actually gets fixed -- but it must not
+block quick capture, so this is advisory on stderr, not a failure.
+-}
+testTaskAddUntaggedNudge :: IO ()
+testTaskAddUntaggedNudge = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    (code, out, err) <- runIcariumIn dir db ["task", "add", "quick capture", "--state", "ready"]
+    code @?= ExitSuccess
+    let tid = head (words out)
+    assertBool "nudge names the fixing command" ("task update" `isInfixOf` err)
+    assertBool "nudge names --domain" ("--domain" `isInfixOf` err)
+    assertBool "nudge names the task id" (tid `isInfixOf` err)
+
+    _ <- runIcariumIn dir db ["category", "add", "--axis", "domain", "cli"]
+    (code2, _, err2) <- runIcariumIn dir db ["task", "add", "tagged capture", "--domain", "cli"]
+    code2 @?= ExitSuccess
+    assertBool "no nudge when tagged" (not ("--domain" `isInfixOf` err2))
 
 -- =============================================================
 -- category add (issue #15)

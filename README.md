@@ -44,6 +44,10 @@ is a *workflow* axis: it describes the shape of the work, so it is task-only and
 ignored by auto-pull. Edit the `[categories]` lists in `icarium.toml`, then `icarium category sync`
 to reconcile the DB (`--prune` to drop removed ones).
 
+A task carrying neither retrieval axis pulls no context at all, so `task add`, `task show --prompt`
+and `dispatch` each warn on stderr and name the `icarium task update` that fixes it. Only one axis
+is needed to silence it — a missing axis widens the pull rather than breaking it.
+
 ## Configuration
 
 `icarium init` writes an `icarium.toml` at the project root. The fields:

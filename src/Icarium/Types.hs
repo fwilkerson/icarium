@@ -21,6 +21,7 @@ module Icarium.Types (
     parseCategoryAxis,
     retrievalAxes,
     isRetrievalAxis,
+    hasRetrievalAxis,
     DispatchOutcome (..),
     dispatchOutcomeText,
     parseDispatchOutcome,
@@ -220,6 +221,13 @@ retrievalAxes = [Domain, Discipline]
 -- | Is this axis accepted on context entries? Workflow axes are task-only.
 isRetrievalAxis :: CategoryAxis -> Bool
 isRetrievalAxis = (`elem` retrievalAxes)
+
+{- | Will this category list pull any context at all? False means
+@categoryMatchedContexts@ short-circuits to @[]@ — note that a task tagged
+only on a workflow axis (@kind@) is just as context-free as an untagged one.
+-}
+hasRetrievalAxis :: [Category] -> Bool
+hasRetrievalAxis = any (isRetrievalAxis . categoryAxis)
 
 -- =============================================================
 -- FromField / ToField for enums

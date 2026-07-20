@@ -1,6 +1,8 @@
 module Icarium.Render (
     renderTaskHuman,
     renderTaskPrompt,
+    untaggedPromptWarning,
+    untaggedAddNudge,
     TaskRow (..),
     renderTaskList,
     mkBar,
@@ -151,6 +153,24 @@ renderTaskPrompt t refs catMatched deps =
             <> promptDeps deps
             <> promptRefs refs
             <> promptRelated catMatched
+
+{- | Stderr lines for a prompt rendered from a task with no retrieval axis:
+the block is about to go out with zero auto-pulled context. Emitted by both
+@task show --prompt@ and dispatch, so the signal reads the same either way.
+Either axis alone clears the guard, so the suggested command asks for one.
+-}
+untaggedPromptWarning :: Text -> [Text]
+untaggedPromptWarning tid =
+    [ "warn: " <> tid <> " has no domain or discipline — no context auto-pulled."
+    , "warn:   icarium task update " <> tid <> " --domain <name>"
+    ]
+
+-- | Advisory nudge at @task add@, same guard as 'untaggedPromptWarning'.
+untaggedAddNudge :: Text -> [Text]
+untaggedAddNudge tid =
+    [ "# next: Untagged — no context will auto-pull."
+    , "#       icarium task update " <> tid <> " --domain <name>"
+    ]
 
 promptDeps :: [Task] -> [Text]
 promptDeps [] = []

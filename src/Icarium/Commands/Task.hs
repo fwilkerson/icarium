@@ -147,6 +147,11 @@ runAdd db o = withDb db $ \c -> do
     when (T.null body) $ do
         hPutStrLn stderr ("# next: Write your markdown to " <> fp)
         hPutStrLn stderr ("# to edit later: Read $(icarium task path " <> T.unpack tid <> ") then Edit")
+    -- Read back rather than inspecting the flags: same predicate, same source
+    -- of truth as the prompt-render and dispatch guards, so the three can't drift.
+    attached <- RC.taskCategoriesFor c tid
+    unless (hasRetrievalAxis attached) $
+        mapM_ (TIO.hPutStrLn stderr) (Render.untaggedAddNudge tid)
 
 -- =============================================================
 -- list
@@ -272,6 +277,10 @@ runShow db o = do
                 catMatch <- RCx.categoryMatchedContexts c cats 5
                 let refIds = map contextId refs
                     dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
+                -- stdout stays pure prompt text; the warning goes to stderr so
+                -- callers piping the prompt still see it.
+                unless (hasRetrievalAxis cats) $
+                    mapM_ (TIO.hPutStrLn stderr) (Render.untaggedPromptWarning (taskId t'))
                 TIO.putStr (Render.renderTaskPrompt t' refs dedupedCat deps)
             else do
                 refs <- RE.referencedContexts c (taskId t)
