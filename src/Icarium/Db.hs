@@ -28,13 +28,18 @@ defaultDbPath = ".icarium" </> "icarium.db"
 {- | WAL + busy_timeout on every connection: dispatch, its heartbeat
 thread, and concurrent commands share one DB file. Both pragmas return a
 row, so @query_@ (not @execute_@) is required.
+
+busy_timeout goes first because setting journal_mode briefly needs an
+exclusive lock: against a concurrent writer it returns SQLITE_BUSY, and a
+connection with no busy_timeout yet fails outright instead of waiting.
+Racing @task claim@ processes hit exactly that.
 -}
 openDb :: FilePath -> IO Connection
 openDb path = do
     createDirectoryIfMissing True (takeDirectory path)
     conn <- open path
-    void (query_ conn "PRAGMA journal_mode=WAL" :: IO [Only Text])
     void (query_ conn "PRAGMA busy_timeout=5000" :: IO [Only Int64])
+    void (query_ conn "PRAGMA journal_mode=WAL" :: IO [Only Text])
     pure conn
 
 {- | Open the DB, run pending migrations, run the mtime sweep, then the action.

@@ -7,7 +7,7 @@ import Control.Monad (forM, forM_, replicateM, when)
 import Data.Aeson (Key, Object, Value (..), decode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
-import Data.Char (isSpace)
+import Data.Char (isSpace, toLower)
 import Data.Foldable (toList)
 import Data.List (dropWhileEnd, isInfixOf, isPrefixOf, sort)
 import Data.Maybe (fromMaybe)
@@ -24,7 +24,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (byteStringInput, proc, readProcess, setEnv, setStdin, setWorkingDir)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 import TestHelpers (withTestRepo)
 
 -- Resolved once at load time so concurrent cwd changes in PostClaudeSpec
@@ -100,6 +100,10 @@ tests =
         , testCase "task claim records owner, shown by task show" testTaskClaimOwner
         , testCase "task claim --owner empty exits 2, claims nothing" testTaskClaimEmptyOwner
         , testCase "task done clears the claim" testTaskClaimClearedOnDone
+        , testCase "task next/claim serve the interactive queue only" testInteractiveQueueSurfaces
+        , testCase "task list --ready is the interactive queue" testListReadyIsInteractive
+        , testCase "task claim TASK_ID takes a named task in either ready state" testTaskClaimNamed
+        , testCase "task claim TASK_ID refuses a task that is not ready" testTaskClaimNamedNotReady
         , testCase "task add --depends-on bad id exits 2" testTaskAddBadDependsOn
         , testCase "task add --state blocked exits 2" testTaskAddStateBlocked
         , testCase "dispatch run drains empty queue without --max" testDispatchRunEmptyQueue
@@ -346,7 +350,7 @@ testTaskNextEmpty = withTempDb $ \db -> do
 
 testTaskNextNonEmpty :: IO ()
 testTaskNextNonEmpty = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "Next task", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Next task", "--state", "ready-interactive"]
     let tid = head (words addOut)
 
     (code, nextOut, _) <- runIcarium db ["task", "next"]
@@ -364,8 +368,8 @@ repeat one, in `task next` priority order; a third finds the queue drained.
 -}
 testTaskClaimDistinct :: IO ()
 testTaskClaimDistinct = withTempDb $ \db -> do
-    (_, loOut, _) <- runIcarium db ["task", "add", "Low", "--state", "ready", "--priority", "1"]
-    (_, hiOut, _) <- runIcarium db ["task", "add", "High", "--state", "ready", "--priority", "9"]
+    (_, loOut, _) <- runIcarium db ["task", "add", "Low", "--state", "ready-interactive", "--priority", "1"]
+    (_, hiOut, _) <- runIcarium db ["task", "add", "High", "--state", "ready-interactive", "--priority", "9"]
     let loId = head (words loOut)
         hiId = head (words hiOut)
 
@@ -389,7 +393,7 @@ plus busy_timeout means every claimer succeeds; none may repeat an id.
 testTaskClaimConcurrent :: IO ()
 testTaskClaimConcurrent = withTempDb $ \db -> do
     ids <- forM [1 .. 4 :: Int] $ \i -> do
-        (_, out, _) <- runIcarium db ["task", "add", "Race " ++ show i, "--state", "ready"]
+        (_, out, _) <- runIcarium db ["task", "add", "Race " ++ show i, "--state", "ready-interactive"]
         pure (head (words out))
     boxes <- replicateM 4 newEmptyMVar
     forM_ boxes $ \box -> forkIO $ do
@@ -399,8 +403,8 @@ testTaskClaimConcurrent = withTempDb $ \db -> do
     claimed <- forM results $ \case
         Left e -> error ("claim process failed to run: " <> show e)
         Right (code, out, err) -> do
-            code @?= ExitSuccess
-            assertBool ("no busy error: " <> err) (not ("busy" `isInfixOf` err))
+            assertEqual ("claim exited " <> show code <> "; stderr: " <> err) ExitSuccess code
+            assertBool ("no busy error: " <> err) (not ("busy" `isInfixOf` map toLower err))
             pure (head (words out))
     sort claimed @?= sort ids
     (c5, _, _) <- runIcarium db ["task", "claim"]
@@ -408,7 +412,7 @@ testTaskClaimConcurrent = withTempDb $ \db -> do
 
 testTaskClaimOwner :: IO ()
 testTaskClaimOwner = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready-interactive"]
     let tid = head (words addOut)
 
     (code, claimOut, _) <- runIcarium db ["task", "claim", "--owner", "agent-7"]
@@ -423,7 +427,7 @@ testTaskClaimOwner = withTempDb $ \db -> do
 -- | Guard runs before any DB I/O, so an empty owner never reaches the queue.
 testTaskClaimEmptyOwner :: IO ()
 testTaskClaimEmptyOwner = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready-interactive"]
     let tid = head (words addOut)
 
     (code, _, err) <- runIcarium db ["task", "claim", "--owner", "  "]
@@ -438,7 +442,7 @@ testTaskClaimEmptyOwner = withTempDb $ \db -> do
 -- | A claim must not outlive the work: leaving in_progress drops the stamp.
 testTaskClaimClearedOnDone :: IO ()
 testTaskClaimClearedOnDone = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready"]
+    (_, addOut, _) <- runIcarium db ["task", "add", "Claimable", "--state", "ready-interactive"]
     let tid = head (words addOut)
     (_, _, _) <- runIcarium db ["task", "claim", "--owner", "agent-7"]
 
@@ -447,6 +451,81 @@ testTaskClaimClearedOnDone = withTempDb $ \db -> do
     (_, showOut, _) <- runIcarium db ["task", "show", tid]
     assertBool "owner cleared" (not ("agent-7" `isInfixOf` showOut))
     assertBool "claim time cleared" (not ("claimed:" `isInfixOf` showOut))
+
+{- | The CLI queue serves the human. Headless work sitting in `ready` is
+dispatch's to take, and must never be handed to `task next`/`task claim`.
+-}
+testInteractiveQueueSurfaces :: IO ()
+testInteractiveQueueSurfaces = withTempDb $ \db -> do
+    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
+    let hId = head (words hOut)
+
+    (nCode, _, _) <- runIcarium db ["task", "next"]
+    nCode @?= ExitFailure 1
+    (cCode, _, _) <- runIcarium db ["task", "claim"]
+    cCode @?= ExitFailure 1
+
+    (_, iOut, _) <- runIcarium db ["task", "add", "Interactive", "--state", "ready-interactive"]
+    let iId = head (words iOut)
+    (nCode2, nOut, _) <- runIcarium db ["task", "next"]
+    nCode2 @?= ExitSuccess
+    words nOut @?= [iId]
+
+    (cCode2, cOut, _) <- runIcarium db ["task", "claim"]
+    cCode2 @?= ExitSuccess
+    words cOut @?= [iId]
+
+    -- The headless task is untouched by either surface.
+    (_, showOut, _) <- runIcarium db ["task", "show", hId]
+    assertBool "headless task still ready" ("ready" `isInfixOf` showOut)
+    assertBool "headless task not claimed" (not ("claimed:" `isInfixOf` showOut))
+
+testListReadyIsInteractive :: IO ()
+testListReadyIsInteractive = withTempDb $ \db -> do
+    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
+    (_, iOut, _) <- runIcarium db ["task", "add", "Interactive", "--state", "ready-interactive"]
+    let hId = head (words hOut)
+        iId = head (words iOut)
+
+    (code, out, _) <- runIcarium db ["task", "list", "--ready"]
+    code @?= ExitSuccess
+    assertBool "interactive task listed" (take 10 iId `isInfixOf` out)
+    assertBool "headless task not listed" (not (take 10 hId `isInfixOf` out))
+
+    -- `--state ready` is a state filter, not a queue: it still finds headless work.
+    (_, sOut, _) <- runIcarium db ["task", "list", "--state", "ready"]
+    assertBool "state filter finds headless work" (take 10 hId `isInfixOf` sOut)
+
+testTaskClaimNamed :: IO ()
+testTaskClaimNamed = withTempDb $ \db -> do
+    (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
+    (_, iOut, _) <- runIcarium db ["task", "add", "Interactive", "--state", "ready-interactive"]
+    let hId = head (words hOut)
+        iId = head (words iOut)
+
+    (hCode, hClaim, _) <- runIcarium db ["task", "claim", hId, "--owner", "agent-7"]
+    hCode @?= ExitSuccess
+    words hClaim @?= [hId]
+    (_, hShow, _) <- runIcarium db ["task", "show", hId]
+    assertBool "named claim marks in_progress" ("in_progress" `isInfixOf` hShow)
+    assertBool "named claim stamps the owner" ("owner:     agent-7" `isInfixOf` hShow)
+
+    (iCode, iClaim, _) <- runIcarium db ["task", "claim", iId]
+    iCode @?= ExitSuccess
+    words iClaim @?= [iId]
+
+testTaskClaimNamedNotReady :: IO ()
+testTaskClaimNamedNotReady = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Under-specified", "--state", "planned"]
+    let tid = head (words addOut)
+
+    (code, _, err) <- runIcarium db ["task", "claim", tid]
+    code @?= ExitFailure 1
+    assertBool "error names the state" ("planned" `isInfixOf` err)
+    assertBool "error names the fixing command" ("task update" `isInfixOf` err)
+
+    (_, showOut, _) <- runIcarium db ["task", "show", tid]
+    assertBool "task left alone" (not ("in_progress" `isInfixOf` showOut))
 
 testTaskAddBadDependsOn :: IO ()
 testTaskAddBadDependsOn = withTempDb $ \db -> do
@@ -1267,11 +1346,11 @@ testDispatchQuarantine = withTempDb $ \db -> do
     let aId = head (words aOut)
 
     -- B: depends on A; must be quarantined when A is blocked
-    (_, bOut, _) <- runIcarium db ["task", "add", "Dependent task B", "--state", "ready", "--depends-on", aId]
+    (_, bOut, _) <- runIcarium db ["task", "add", "Dependent task B", "--state", "ready-interactive", "--depends-on", aId]
     let bId = head (words bOut)
 
     -- C: independent; must still be drainable after A is blocked
-    (_, cOut, _) <- runIcarium db ["task", "add", "Independent task C", "--state", "ready"]
+    (_, cOut, _) <- runIcarium db ["task", "add", "Independent task C", "--state", "ready-interactive"]
     let cId = head (words cOut)
 
     -- Simulate a dispatch failure: mark A blocked with a reason
@@ -2375,15 +2454,14 @@ testDispatchDepGateOnMerged = withDispatchRepo $ \dir db -> do
     (code, _, drainErr) <- runDispatchParked dir db []
     code @?= ExitFailure 3
     assertBool "drain stopped on empty queue after parking the dependency" ("ready queue empty" `isInfixOf` drainErr)
-    (nextCode, _, _) <- runDispatch dir db Nothing ["task", "next"]
-    nextCode @?= ExitFailure 1
     -- land the dependency; the dependent becomes eligible
     did <- parkedId dir db
     (mcode, _, _) <- runDispatch dir db Nothing ["dispatch", "merge", did]
     mcode @?= ExitSuccess
-    (nextCode2, nextOut, _) <- runDispatch dir db Nothing ["task", "next"]
-    nextCode2 @?= ExitSuccess
-    assertBool "dependent is next after merge" (dependentTid `isInfixOf` nextOut)
+    (dCode, _, _) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
+    dCode @?= ExitSuccess
+    (_, showOut, _) <- runDispatch dir db Nothing ["task", "show", dependentTid]
+    assertBool "dependent dispatched once its dependency landed" ("done" `isInfixOf` showOut)
 
 -- =============================================================
 -- empty-body rejection (issue #13)

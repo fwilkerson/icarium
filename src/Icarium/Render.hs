@@ -251,8 +251,10 @@ renderTaskList useUnicode rows = T.unlines $ concatMap renderRow sorted
         | T.length r <= 60 = r
         | otherwise = T.take 57 r <> "..."
 
+-- | Badges read as the CLI spells states, not as the DB stores them.
 stateBadgeText :: TaskState -> Text
 stateBadgeText InProgress = "in-progress"
+stateBadgeText ReadyInteractive = "ready-interactive"
 stateBadgeText s = taskStateText s
 
 {- | 5-cell Unicode priority bar. ■ filled, ◧ half-filled, □ empty,

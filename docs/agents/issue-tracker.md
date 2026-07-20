@@ -49,8 +49,9 @@ Used by `/wayfinder`. Maps onto icarium primitives:
 - **Child ticket**: one task per question, linked `references` the map ctx;
   a `Type:` line in the body records research/prototype/grilling/task.
 - **Blocking**: `icarium link add <child> depends-on <blocker>`.
-- **Frontier + claim**: `icarium task claim` — atomically takes the next ready,
-  unblocked task (safe with concurrent agents).
+- **Frontier + claim**: `icarium task claim` — atomically takes the next
+  unblocked `ready_interactive` task (safe with concurrent agents).
+  `icarium task claim <id>` takes a named task in either ready state.
 - **Resolve**: append the answer under `## Answer` in the body,
   `icarium task done <id>`, then add the gist + task id to the map's
   Decisions-so-far.

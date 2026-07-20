@@ -210,10 +210,11 @@ drainLoop ctx !i
         -- Claiming is the selection: taking the queue head and marking it
         -- in_progress is one atomic step, so racing drains cannot pick the
         -- same task. A dry run previews the head instead, moving nothing.
+        -- 'Ready' only: 'ready_interactive' is work a human must do.
         mt <-
             if rDryRun opts
-                then listToMaybe <$> RT.listTasks conn [] True []
-                else defaultOwner >>= RT.claimNextTask conn
+                then listToMaybe <$> RT.listTasks conn [Ready] True []
+                else defaultOwner >>= RT.claimNextTask conn [Ready]
         case mt of
             Nothing -> hPutStrLn stderr "icarium: ready queue empty; stopping"
             Just t -> do

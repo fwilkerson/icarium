@@ -1,6 +1,7 @@
 module Icarium.Types (
     -- * Enums
     TaskState (..),
+    readyStates,
     taskStateText,
     parseTaskState,
     parseTaskStateDb,
@@ -57,26 +58,48 @@ import Database.SQLite.Simple.ToField (ToField (..))
 -- Enums
 -- =============================================================
 
-data TaskState = Idea | Planned | Ready | InProgress | Done | Blocked | Abandoned
+{- | 'Ready' is the headless queue: fully specified work a dispatched agent
+may take unattended. 'ReadyInteractive' is the same specification bar for
+work that must be done by a human at a keyboard. Semantics of every state:
+@docs/adr/0007-task-state-semantics.md@.
+-}
+data TaskState
+    = Idea
+    | Planned
+    | Ready
+    | ReadyInteractive
+    | InProgress
+    | Done
+    | Blocked
+    | Abandoned
     deriving (Show, Eq)
+
+{- | The states from which a task may be claimed: specified, unstarted work.
+The deps gate is separate — see the @ready_tasks@ view.
+-}
+readyStates :: [TaskState]
+readyStates = [Ready, ReadyInteractive]
 
 taskStateText :: TaskState -> Text
 taskStateText = \case
     Idea -> "idea"
     Planned -> "planned"
     Ready -> "ready"
+    ReadyInteractive -> "ready_interactive"
     InProgress -> "in_progress"
     Done -> "done"
     Blocked -> "blocked"
     Abandoned -> "abandoned"
 
-{- | CLI-facing parser. Canonical spelling is @in-progress@, but the
-underscore form is accepted too: @task show@ prints the stored
-@in_progress@, and pasting that back into @--state@ must not error.
+{- | CLI-facing parser. Canonical spelling is hyphenated (@in-progress@,
+@ready-interactive@), but the underscore form is accepted too: @task show@
+prints the stored @in_progress@, and pasting that back into @--state@ must
+not error.
 -}
 parseTaskState :: Text -> Maybe TaskState
 parseTaskState = \case
     "in-progress" -> Just InProgress
+    "ready-interactive" -> Just ReadyInteractive
     other -> parseTaskStateDb other
 
 -- | Storage parser: accepts underscore form stored in the DB.
@@ -85,6 +108,7 @@ parseTaskStateDb = \case
     "idea" -> Just Idea
     "planned" -> Just Planned
     "ready" -> Just Ready
+    "ready_interactive" -> Just ReadyInteractive
     "in_progress" -> Just InProgress
     "done" -> Just Done
     "blocked" -> Just Blocked

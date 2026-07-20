@@ -51,13 +51,16 @@ guide =
     \  icarium task show <id>                 # metadata only; body NOT printed.\n\
     \                                         # To see the body, Read the path.\n\
     \  icarium task cat <id>                  # print body to stdout (read-only)\n\
-    \  icarium task next                      # print next ready task id (loop primitive)\n\
+    \  icarium task next                      # print next ready-interactive task id\n\
+    \                                         # (loop primitive)\n\
     \  icarium task claim                     # same pick, but atomically takes it:\n\
     \                                         # -> in-progress + owner stamp, prints id.\n\
     \                                         # Use this, not next + start, when other\n\
     \                                         # agents share the queue - two claims can\n\
     \                                         # never return the same task.\n\
-    \  icarium task list --state ready        # actionable queue\n\
+    \  icarium task claim <id>                # claim a named ready/ready-interactive task\n\
+    \  icarium task list --ready              # the ready-interactive queue, deps satisfied\n\
+    \  icarium task list --state ready        # headless queue; dispatch selects from it\n\
     \  icarium task exists <id>               # exit 0 found / 1 missing / 2 ambiguous\n\
     \  icarium search \"query\"                 # FTS5; \"phrase\", UPPERCASE OR,\n\
     \                                         # --kind task|ctx, --limit N\n\
@@ -87,9 +90,11 @@ guide =
     \\n\
     \Task lifecycle\n\
     \  idea -> planned -> ready -> in-progress -> done\n\
+    \                    \\-> ready-interactive  -/\n\
     \                                         \\-> blocked  (requires --block-reason)\n\
-    \  (abandoned is the dead-end state.) Dispatch picks up ready tasks whose\n\
-    \  dependencies are done.\n\
+    \  (abandoned is the dead-end state.) Both ready states mean fully specified;\n\
+    \  ready is headless work dispatch picks up once its dependencies are done,\n\
+    \  ready-interactive is work a human must do and dispatch never takes.\n\
     \\n\
     \  icarium task start <id>                # -> in-progress\n\
     \  icarium task done <id>                 # -> done\n\

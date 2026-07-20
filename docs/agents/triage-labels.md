@@ -9,8 +9,14 @@ states where a natural mapping exists.
 | `needs-triage`    | state `idea`                               | Maintainer needs to evaluate this       |
 | `needs-info`      | state `blocked` with `--block-reason`      | Waiting on more information             |
 | `ready-for-agent` | state `ready` (dispatch picks it up)       | Fully specified, ready for an AFK agent |
-| `ready-for-human` | `Triage: ready-for-human` line in the body | Requires human implementation           |
+| `ready-for-human` | state `ready_interactive`                  | Requires human implementation           |
 | `wontfix`         | state `abandoned`                          | Will not be actioned                    |
+
+The two ready states share a specification bar and differ only in who does
+the work: `dispatch run` takes `ready` and never `ready_interactive`, while
+`task next` and bare `task claim` serve the interactive queue and never
+`ready`. Naming a task — `task claim <id>` — takes it from either.
+See [ADR 0007](../adr/0007-task-state-semantics.md) for every state's meaning.
 
 When a skill says "apply label X", make the corresponding state transition
 (`icarium task update <id> --state <s>`) or body edit.

@@ -13,8 +13,11 @@ CREATE TABLE tasks (
     title       TEXT NOT NULL,
     body        TEXT NOT NULL DEFAULT '',           -- markdown
     state       TEXT NOT NULL DEFAULT 'planned'
-                CHECK (state IN ('idea','planned','ready','in_progress','done',
-                                 'blocked','abandoned')),
+                CHECK (state IN ('idea','planned','ready','ready_interactive',
+                                 'in_progress','done','blocked','abandoned')),
+    -- Two ready queues, same specification bar: 'ready' is headless work the
+    -- dispatch program may take unattended, 'ready_interactive' is work a
+    -- human must do. See docs/adr/0007-task-state-semantics.md.
     -- 'in_progress' is stored; the dispatch program sets it before invoking
     -- the agent, then transitions to 'done' or 'blocked' after gates pass.
     priority    INTEGER,                             -- NULL = default
@@ -248,15 +251,19 @@ SELECT
     t.updated_at
 FROM tasks t;
 
--- Tasks eligible for dispatch: state='ready' AND every depends_on target's
--- work is in base. A dependency is satisfied when it is 'done' AND has no
+-- Claimable tasks: a ready-ish state AND every depends_on target's work is
+-- in base. A dependency is satisfied when it is 'done' AND has no
 -- successful-but-unmerged (parked) dispatch — under park-by-default, done
 -- alone means parked, not landed. Manually-completed tasks (no dispatch
 -- rows) and no-commit successes (merge-stamped at finish) satisfy as before.
+--
+-- The view spans both ready states so the deps gate lives in exactly one
+-- place; each caller narrows to its own queue by state (dispatch takes
+-- 'ready', the interactive CLI takes 'ready_interactive').
 CREATE VIEW ready_tasks AS
 SELECT t.*
 FROM tasks t
-WHERE t.state = 'ready'
+WHERE t.state IN ('ready','ready_interactive')
   AND NOT EXISTS (
       SELECT 1
       FROM edges e

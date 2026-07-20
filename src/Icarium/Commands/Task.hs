@@ -48,8 +48,8 @@ parser =
             <> subcmd "start" "Set state to in-progress. Shorthand for `update <id> --state in-progress`." (Update <$> stateShorthandP InProgress)
             <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP Done)
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
-            <> subcmd "next" "Print next ready task id; exit 1 if empty" (Next <$> nextP)
-            <> subcmd "claim" "Atomically take the next ready task: marks it in-progress, stamps an owner, prints its id; exit 1 if empty. Use instead of `next` + `start` when several agents share the queue." (Claim <$> claimP)
+            <> subcmd "next" "Print the next ready-interactive task id; exit 1 if empty" (Next <$> nextP)
+            <> subcmd "claim" "Atomically claim a task: marks it in-progress, stamps an owner, prints its id. With TASK_ID, claims that task if it is ready or ready-interactive. Without, takes the head of the ready-interactive queue; exit 1 if empty." (Claim <$> claimP)
             <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
             <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
             <> subcmd "exists" "Check whether a task id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
@@ -95,7 +95,7 @@ addP =
             ( long "state"
                 <> metavar "STATE"
                 <> value Planned
-                <> help "idea | planned | ready (default: planned)"
+                <> help "idea | planned | ready | ready-interactive (default: planned)"
             )
         <*> optional
             ( option
@@ -115,8 +115,8 @@ addP =
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
     body <- resolveBody (aBody o)
-    unless (aState o `elem` [Idea, Planned, Ready]) $
-        fatal 2 "on add: state must be idea | planned | ready"
+    unless (aState o `elem` ([Idea, Planned] <> readyStates)) $
+        fatal 2 "on add: state must be idea | planned | ready | ready-interactive"
 
     -- Pre-validate referenced categories and nodes so we fail before insert.
     mDomain <- mapM (requireCategory c Domain) (aDomain o)
@@ -172,10 +172,10 @@ listP =
                 taskStateReader
                 ( long "state"
                     <> metavar "STATE"
-                    <> help "Filter by task state (idea | planned | ready | in-progress | blocked | done | abandoned). Repeatable."
+                    <> help "Filter by task state (idea | planned | ready | ready-interactive | in-progress | blocked | done | abandoned). Repeatable."
                 )
             )
-        <*> switch (long "ready" <> help "Only state=ready tasks with all depends-on satisfied (matches what `dispatch run` and `task next` pick)")
+        <*> switch (long "ready" <> help "Only state=ready-interactive tasks with all depends-on satisfied (the queue `task next` and `task claim` pick from)")
         <*> optional (textOption "domain" "NAME" "Filter by domain category")
         <*> optional (textOption "discipline" "NAME" "Filter by discipline category")
         <*> optional (textOption "kind" "NAME" "Filter by kind category (e.g. bug | enhancement)")
@@ -191,7 +191,7 @@ listP =
         <*> jsonFlag
 
 defaultActiveStates :: [TaskState]
-defaultActiveStates = [Idea, Planned, Ready, InProgress, Blocked]
+defaultActiveStates = [Idea, Planned, Ready, ReadyInteractive, InProgress, Blocked]
 
 runList :: FilePath -> ListOpts -> IO ()
 runList db o = withDb db $ \c -> do
@@ -200,6 +200,7 @@ runList db o = withDb db $ \c -> do
             c
             [(Domain, lDomain o), (Discipline, lDiscipline o), (Kind, lKind o)]
     let effectiveStates
+            | lReady o = [ReadyInteractive]
             | not (null (lStates o)) = lStates o
             | lAll o = []
             | otherwise = defaultActiveStates
@@ -307,7 +308,7 @@ updateP =
                 taskStateReader
                 ( long "state"
                     <> metavar "STATE"
-                    <> help "Set new task state (idea | planned | ready | in-progress | blocked | done | abandoned)."
+                    <> help "Set new task state (idea | planned | ready | ready-interactive | in-progress | blocked | done | abandoned)."
                 )
             )
         <*> optional
@@ -401,9 +402,10 @@ data NextOpts = NextOpts
 nextP :: Parser NextOpts
 nextP = pure NextOpts
 
+-- | The CLI queue serves the human; headless work is dispatch's to select.
 runNext :: FilePath -> NextOpts -> IO ()
 runNext db _ = withDb db $ \c -> do
-    ts <- RT.listTasks c [] True []
+    ts <- RT.listTasks c [ReadyInteractive] True []
     case ts of
         [] -> exitWith (ExitFailure 1)
         (t : _) -> TIO.putStrLn (taskId t)
@@ -412,12 +414,16 @@ runNext db _ = withDb db $ \c -> do
 -- claim
 -- =============================================================
 
-newtype ClaimOpts = ClaimOpts {clOwner :: Maybe Text}
+data ClaimOpts = ClaimOpts
+    { clId :: Maybe Text
+    , clOwner :: Maybe Text
+    }
 
 claimP :: Parser ClaimOpts
 claimP =
     ClaimOpts
-        <$> optional
+        <$> optional (T.pack <$> strArgument (metavar "TASK_ID"))
+        <*> optional
             ( textOption
                 "owner"
                 "NAME"
@@ -430,10 +436,31 @@ runClaim db o = do
         fatal 2 "--owner must not be empty"
     withDb db $ \c -> do
         owner <- maybe defaultOwner pure (clOwner o)
-        mt <- RT.claimNextTask c owner
+        mt <- case clId o of
+            Nothing -> RT.claimNextTask c [ReadyInteractive] owner
+            Just raw -> do
+                tid <- resolveOrFatal (RT.resolveTaskId c raw)
+                claimed <- RT.claimReadyTask c tid owner
+                when (isNothing claimed) (refuseClaim c tid)
+                pure claimed
         case mt of
             Nothing -> exitWith (ExitFailure 1)
             Just t -> TIO.putStrLn (taskId t)
+
+-- | Only reached when the claim was refused; report the state that refused it.
+refuseClaim :: Connection -> Text -> IO ()
+refuseClaim c tid = do
+    mt <- RT.getTask c tid
+    let st = maybe "missing" (taskStateText . taskState) mt
+    fatal 1 . T.unpack $
+        "not claimable: "
+            <> tid
+            <> " is "
+            <> st
+            <> "; claim takes ready | ready-interactive tasks. \
+               \Specify it first, then: icarium task update "
+            <> tid
+            <> " --state ready-interactive"
 
 -- =============================================================
 -- path

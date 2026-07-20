@@ -3,7 +3,7 @@ module RepoSpec (tests) where
 import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, void)
 import Data.Int (Int64)
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -47,6 +47,10 @@ tests =
         [ testGroup "EdgeKind round-trips" edgeKindTests
         , testCase "parseTaskState CLI form" $ parseTaskState "in-progress" @?= Just InProgress
         , testCase "parseTaskStateDb DB form" $ parseTaskStateDb "in_progress" @?= Just InProgress
+        , testCase "parseTaskState accepts the hyphenated interactive form" $
+            parseTaskState "ready-interactive" @?= Just ReadyInteractive
+        , testCase "parseTaskStateDb accepts the stored interactive form" $
+            parseTaskStateDb "ready_interactive" @?= Just ReadyInteractive
         , testCase "loadConfig succeeds on default template" loadConfigTest
         , testGroup
             "categoryMatchedContexts"
@@ -104,6 +108,15 @@ tests =
             , testCase "merged dependency unblocks dependent" testMergedDepUnblocks
             , testCase "manually-done dependency with no dispatches unblocks" testManualDoneDepUnblocks
             , testCase "migration 10 replaces the pre-existing ready_tasks view" testMigration10ReplacesView
+            ]
+        , testGroup
+            "ready queue split (headless vs interactive)"
+            [ testCase "ready_tasks spans both ready states; callers filter" testReadyTasksSpansBothStates
+            , testCase "the deps gate applies to ready_interactive too" testInteractiveDepsGated
+            , testCase "claimNextTask honours the state filter" testClaimNextTaskStateFiltered
+            , testCase "claimReadyTask claims a named task in either ready state" testClaimReadyTaskNamed
+            , testCase "claimReadyTask refuses a task that is not ready-ish" testClaimReadyTaskRefusesNonReady
+            , testCase "migration 15 widens the state CHECK and the view" testMigration15ReadyInteractive
             ]
         , testGroup
             "resolveDispatchId (PREFIX_RESOLUTION: dispatch show, dispatch logs, dispatch recover)"
@@ -1576,6 +1589,146 @@ testMigration10ReplacesView = withBaseTestDb $ \conn -> do
     assertBool
         "recreated view gates on unmerged dispatches"
         (any (\(Only s) -> "merge_sha IS NULL" `T.isInfixOf` s) sql)
+
+-- =============================================================
+-- ready queue split (headless vs interactive)
+-- =============================================================
+
+mkTask :: Connection -> Text -> TaskState -> IO Text
+mkTask c title st =
+    RT.insertTask
+        c
+        RT.NewTask
+            { RT.ntTitle = title
+            , RT.ntBody = ""
+            , RT.ntState = st
+            , RT.ntPriority = Nothing
+            , RT.ntNoCommit = False
+            }
+
+{- | The view is the one place the deps-satisfaction gate lives; it must
+admit both ready states so callers can pick their queue by state filter.
+-}
+testReadyTasksSpansBothStates :: IO ()
+testReadyTasksSpansBothStates = withTestDb $ \c -> do
+    headless <- mkTask c "Headless work" Ready
+    interactive <- mkTask c "Interactive work" ReadyInteractive
+    _ <- mkTask c "Not ready" Planned
+
+    both <- map taskId <$> RT.listTasks c [] True []
+    assertBool "view carries the headless task" (headless `elem` both)
+    assertBool "view carries the interactive task" (interactive `elem` both)
+    length both @?= 2
+
+    onlyHeadless <- map taskId <$> RT.listTasks c [Ready] True []
+    onlyHeadless @?= [headless]
+    onlyInteractive <- map taskId <$> RT.listTasks c [ReadyInteractive] True []
+    onlyInteractive @?= [interactive]
+
+-- | Generalizing the view must not lose the gate for the new state.
+testInteractiveDepsGated :: IO ()
+testInteractiveDepsGated = withTestDb $ \c -> do
+    dep <- mkTask c "Unfinished dependency" Ready
+    dependent <- mkTask c "Interactive dependent" ReadyInteractive
+    _ <- RE.insertEdge c DependsOn TaskNode dependent TaskNode dep
+
+    ready <- map taskId <$> RT.listTasks c [ReadyInteractive] True []
+    assertBool "interactive dependent held behind an open dependency" (dependent `notElem` ready)
+
+    void $ RT.updateTask c dep RT.emptyUpdate{RT.tuState = Just Done}
+    ready' <- map taskId <$> RT.listTasks c [ReadyInteractive] True []
+    ready' @?= [dependent]
+
+{- | Dispatch and the interactive CLI share one claim path and differ only
+in which states they will take.
+-}
+testClaimNextTaskStateFiltered :: IO ()
+testClaimNextTaskStateFiltered = withTestDb $ \c -> do
+    interactive <- mkTask c "Interactive work" ReadyInteractive
+
+    headlessClaim <- RT.claimNextTask c [Ready] "dispatch"
+    assertBool "headless queue does not see interactive work" (isNothing headlessClaim)
+
+    claimed <- RT.claimNextTask c [ReadyInteractive] "human"
+    fmap taskId claimed @?= Just interactive
+    fmap taskState claimed @?= Just InProgress
+
+testClaimReadyTaskNamed :: IO ()
+testClaimReadyTaskNamed = withTestDb $ \c -> do
+    headless <- mkTask c "Headless work" Ready
+    interactive <- mkTask c "Interactive work" ReadyInteractive
+
+    h <- RT.claimReadyTask c headless "human"
+    fmap taskState h @?= Just InProgress
+    fmap taskClaimedBy h @?= Just (Just "human")
+
+    i <- RT.claimReadyTask c interactive "human"
+    fmap taskState i @?= Just InProgress
+
+-- | Naming a task selects it; it does not license claiming unready work.
+testClaimReadyTaskRefusesNonReady :: IO ()
+testClaimReadyTaskRefusesNonReady = withTestDb $ \c -> do
+    planned <- mkTask c "Under-specified" Planned
+    r <- RT.claimReadyTask c planned "human"
+    assertBool "planned task refused" (isNothing r)
+    still <- RT.getTask c planned
+    fmap taskState still @?= Just Planned
+
+{- | Migration 15 rebuilds `tasks` to widen its state CHECK. Existing rows
+and the child FKs must survive the rebuild, and the recreated view must
+span both ready states.
+-}
+testMigration15ReadyInteractive :: IO ()
+testMigration15ReadyInteractive = withBaseTestDb $ \conn -> do
+    -- Upgrading connections do not enable FK enforcement (spec/schema.sql);
+    -- applySchema turned it on for this one, so match production before the
+    -- rebuild drops `tasks`.
+    execute_ conn "PRAGMA foreign_keys = OFF"
+    -- Restore the v14 shape: state CHECK without 'ready_interactive'.
+    execSql
+        conn
+        "DROP VIEW ready_tasks;\n\
+        \DROP TABLE tasks;\n\
+        \CREATE TABLE tasks (\n\
+        \  id TEXT PRIMARY KEY,\n\
+        \  title TEXT NOT NULL,\n\
+        \  body TEXT NOT NULL DEFAULT '',\n\
+        \  state TEXT NOT NULL DEFAULT 'planned'\n\
+        \    CHECK (state IN ('idea','planned','ready','in_progress','done',\n\
+        \                     'blocked','abandoned')),\n\
+        \  priority INTEGER,\n\
+        \  block_reason TEXT,\n\
+        \  no_commit INTEGER NOT NULL DEFAULT 0 CHECK (no_commit IN (0,1)),\n\
+        \  claimed_by TEXT,\n\
+        \  claimed_at TEXT,\n\
+        \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n\
+        \  updated_at TEXT NOT NULL DEFAULT (datetime('now')));\n\
+        \CREATE INDEX tasks_state_idx ON tasks(state);\n\
+        \CREATE VIEW ready_tasks AS SELECT * FROM tasks WHERE 0;\n\
+        \INSERT INTO tasks (id,title,state) VALUES ('01AAA','Dependency','ready');\n\
+        \INSERT INTO tasks (id,title,state) VALUES ('01BBB','Dependent','ready');\n\
+        \INSERT INTO edges (id,kind,src_kind,src_id,dst_kind,dst_id)\n\
+        \  VALUES ('01EDGE','depends_on','task','01BBB','task','01AAA');"
+
+    let m15 = case filter ((== 15) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 15 not registered"
+    migrationUp m15 conn
+
+    carried <- query_ conn "SELECT id FROM tasks ORDER BY id" :: IO [Only Text]
+    map fromOnly carried @?= ["01AAA", "01BBB"]
+    edges <- query_ conn "SELECT id FROM edges" :: IO [Only Text]
+    map fromOnly edges @?= ["01EDGE"]
+
+    -- The new state is accepted, and the recreated view keeps the deps gate.
+    execute_ conn "INSERT INTO tasks (id,title,state) VALUES ('01CCC','Interactive','ready_interactive')"
+    inView <- query_ conn "SELECT id FROM ready_tasks ORDER BY id" :: IO [Only Text]
+    map fromOnly inView @?= ["01AAA", "01CCC"]
+
+    -- The edge-cascade trigger went with the old table and must be back.
+    execute_ conn "DELETE FROM tasks WHERE id='01AAA'"
+    afterCascade <- query_ conn "SELECT id FROM edges" :: IO [Only Text]
+    map fromOnly afterCascade @?= []
 
 {- | Migration 14 rebuilds `categories` to widen its axis CHECK. The rebuild
 must keep existing rows, keep the child link tables pointing at the new

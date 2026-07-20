@@ -198,9 +198,11 @@ rest continue; the exit code is non-zero if anything failed to land. Auto-merge 
 the *just-finished* dispatch — previously parked ones need a human, so they are retried only by an
 explicit `dispatch merge`.
 
-`dispatch run` (no task ID) drains the ready queue in priority order, landing each success before
-picking the next task — so a dependency chain lands in a single drain. "Ready" is stricter than
-`state='ready'`: the `ready_tasks` view also requires every `depends_on` upstream to be `done`
+`dispatch run` (no task ID) drains the headless ready queue in priority order, landing each success
+before picking the next task — so a dependency chain lands in a single drain. Only `state='ready'`
+is drained: `ready_interactive` is fully specified work a human must do, and dispatch never takes
+it. "Ready" is also stricter than the state alone — the `ready_tasks` view requires every
+`depends_on` upstream to be `done`
 **and merged** — a parked (successful but unlanded) dependency still blocks its dependents.
 In-progress or blocked upstreams are not satisfied. If `worktree_setup` exits 75 (no capacity) the
 drain stops cleanly, leaving the task untouched; any other setup failure stops with an error.

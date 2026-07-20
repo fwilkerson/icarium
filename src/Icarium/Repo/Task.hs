@@ -9,6 +9,7 @@ module Icarium.Repo.Task (
     resolveTaskId,
     listTasks,
     claimNextTask,
+    claimReadyTask,
     claimTask,
     releaseTask,
     updateTask,
@@ -38,7 +39,7 @@ import Database.SQLite.Simple (
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix, taskCols)
-import Icarium.Types (CategoryAxis, NodeKind (..), Task (..), TaskState (..))
+import Icarium.Types (CategoryAxis, NodeKind (..), Task (..), TaskState (..), readyStates, taskStateText)
 
 data NewTask = NewTask
     { ntTitle :: Text
@@ -108,21 +109,19 @@ getTasksByPrefix conn = prefixLookup conn "tasks" (taskCols "")
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
 resolveTaskId conn = resolveByPrefix (getTasksByPrefix conn) taskId "task"
 
-{- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view
-(state='ready' with all depends_on satisfied). Otherwise pulls from
-@tasks@ and optionally filters by state client-side. @cats@ is a list of
-@(axis, name)@ category filters, ANDed at the SQL level; any axis may
-appear, including workflow axes.
+{- | List tasks. @readyOnly=True@ pulls from the @ready_tasks@ view, which
+carries every ready-ish state whose depends_on are all satisfied; otherwise
+pulls from @tasks@. Either way @filterStates@ narrows client-side, so a
+caller picks its queue — headless or interactive — by state. @cats@ is a
+list of @(axis, name)@ category filters, ANDed at the SQL level; any axis
+may appear, including workflow axes.
 -}
 listTasks :: Connection -> [TaskState] -> Bool -> [(CategoryAxis, Text)] -> IO [Task]
 listTasks conn filterStates readyOnly cats = do
     rows <- query conn (buildQ tbl ord) params
-    pure $
-        if readyOnly
-            then rows
-            else case filterStates of
-                [] -> rows
-                ss -> filter ((`elem` ss) . taskState) rows
+    pure $ case filterStates of
+        [] -> rows
+        ss -> filter ((`elem` ss) . taskState) rows
   where
     tbl = if readyOnly then "ready_tasks" else "tasks"
     ord = if readyOnly then readyOrder else "created_at ASC"
@@ -132,9 +131,10 @@ listTasks conn filterStates readyOnly cats = do
         cs -> " WHERE " <> T.intercalate " AND " cs
     buildQ t o = Query $ "SELECT " <> taskCols "" <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
 
-{- | Take the head of the ready queue, mark it in-progress and stamp
-@owner@ on it. Returns the claimed task as it now stands, or Nothing when
-nothing is ready.
+{- | Take the head of the queue formed by @states@, mark it in-progress and
+stamp @owner@ on it. Returns the claimed task as it now stands, or Nothing
+when that queue is empty. Dispatch passes 'Ready'; the interactive CLI
+passes 'ReadyInteractive'.
 
 @BEGIN IMMEDIATE@ acquires the write lock before the read, so concurrent
 claims serialise and the loser re-reads a queue the winner has already
@@ -142,14 +142,46 @@ shortened. A deferred transaction (sqlite-simple's @withTransaction@)
 would not do: both callers would read the same head row, then one would
 fail to upgrade its read lock — which @busy_timeout@ cannot resolve.
 -}
-claimNextTask :: Connection -> Text -> IO (Maybe Task)
-claimNextTask conn owner = withImmediateTransaction conn $ do
-    rows <- query_ conn (Query $ "SELECT id FROM ready_tasks ORDER BY " <> readyOrder <> " LIMIT 1")
+claimNextTask :: Connection -> [TaskState] -> Text -> IO (Maybe Task)
+claimNextTask conn states owner = withImmediateTransaction conn $ do
+    rows <-
+        query
+            conn
+            ( Query $
+                "SELECT id FROM ready_tasks WHERE state IN "
+                    <> statePlaceholders states
+                    <> " ORDER BY "
+                    <> readyOrder
+                    <> " LIMIT 1"
+            )
+            (map (SQLText . taskStateText) states)
     case rows of
         [] -> pure Nothing
         (Only tid : _) -> do
             stampClaim conn tid owner
             getTask conn tid
+
+{- | Claim a *named* task, provided it is still in a ready-ish state.
+Returns Nothing when it is not — the caller reports why. Unlike
+'claimNextTask' this ignores the deps gate: naming the task is the
+selection, and the same lock discipline keeps the state test and the stamp
+atomic against a racing queue claim.
+-}
+claimReadyTask :: Connection -> Text -> Text -> IO (Maybe Task)
+claimReadyTask conn tid owner = withImmediateTransaction conn $ do
+    rows <-
+        query
+            conn
+            (Query $ "SELECT id FROM tasks WHERE id = ? AND state IN " <> statePlaceholders readyStates)
+            (SQLText tid : map (SQLText . taskStateText) readyStates)
+    case rows :: [Only Text] of
+        [] -> pure Nothing
+        _ -> do
+            stampClaim conn tid owner
+            getTask conn tid
+
+statePlaceholders :: [TaskState] -> Text
+statePlaceholders ss = "(" <> T.intercalate "," (replicate (length ss) "?") <> ")"
 
 {- | Claim a named task regardless of queue position or state. @dispatch
 run TASK_ID@ re-runs tasks that are blocked or already in progress, so a
