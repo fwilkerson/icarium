@@ -199,6 +199,11 @@ runList db o = withDb db $ \c -> do
         resolveCatFilters
             c
             [(Domain, lDomain o), (Discipline, lDiscipline o), (Kind, lKind o)]
+    -- Both select on state, and --ready pins its own, so a combination has no
+    -- honest answer: refuse rather than let one silently win. `--state ready`
+    -- is the likely intent and means the opposite queue.
+    when (lReady o && not (null (lStates o))) $
+        fatal 2 "--ready is the ready-interactive queue; drop --state, or use --state ready for the headless queue"
     let effectiveStates
             | lReady o = [ReadyInteractive]
             | not (null (lStates o)) = lStates o

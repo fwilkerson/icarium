@@ -496,6 +496,11 @@ testListReadyIsInteractive = withTempDb $ \db -> do
     (_, sOut, _) <- runIcarium db ["task", "list", "--state", "ready"]
     assertBool "state filter finds headless work" (take 10 hId `isInfixOf` sOut)
 
+    -- Combining them selects opposite queues, so it is refused, not resolved.
+    (xCode, _, xErr) <- runIcarium db ["task", "list", "--ready", "--state", "ready"]
+    xCode @?= ExitFailure 2
+    assertBool "conflict names the alternative" ("--state ready" `isInfixOf` xErr)
+
 testTaskClaimNamed :: IO ()
 testTaskClaimNamed = withTempDb $ \db -> do
     (_, hOut, _) <- runIcarium db ["task", "add", "Headless", "--state", "ready"]
