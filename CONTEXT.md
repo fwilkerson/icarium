@@ -58,6 +58,33 @@ A dispatch branch that is in the integration branch. Distinct from task
 state: `done` means the work was accepted (gates and reviewer passed);
 only *merged* satisfies dependents.
 
+**Submission**:
+What a worker hands back when it has done the work: the diff plus its
+structured report. Naming the *act*, not a judgement — a submission claims
+nothing about whether the work is acceptable, because gates and the reviewer
+have not run yet.
+_Avoid_: success (that word is the outcome's, and only icarium may say it)
+
+**Outcome**:
+icarium's conclusion about a finished dispatch. Final, and the only authority
+on whether the work succeeded. A worker may report a submission; it may not
+report an outcome (ADR 0008).
+
+**Escalation**:
+A worker's report that it cannot proceed within policy, carrying the reason.
+Unilateral — nothing downstream overrules it — which is why it, alone among a
+worker's claims, names the task state it will produce.
+
+**Finding**:
+One issue the reviewer reports about a diff, tagged with the axis it came from
+(spec or standards) and a severity. Findings are the reviewer's whole output;
+it reports observations, not decisions.
+
+**Verdict**:
+Whether a reviewed diff may land. Derived from the worst severity among the
+findings — no findings means pass — never asserted by the reviewer itself
+(ADR 0008).
+
 **Parked**:
 A successful dispatch whose branch could not land automatically — the
 merge was blocked (conflict, dirty checkout, gate failure after rebase).
@@ -71,7 +98,9 @@ normal post-success state)
 **Context entry (ctx)**:
 A durable knowledge record (markdown body + categories + edges) injected into
 dispatch prompts by category match or explicit reference.
-_Avoid_: knowledge entry (renamed in migration 0005)
+_Avoid_: knowledge entry (renamed in migration 0005), learning (a worker
+proposes entries *for future agents*; the retro framing invites notes about
+the run rather than knowledge that outlives it)
 
 **Curation event**:
 An append-only record of one disposition decision for a context entry. History
