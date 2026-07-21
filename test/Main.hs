@@ -8,6 +8,7 @@ import CliSpec qualified
 import GitSpec qualified
 import GuardSpec qualified
 import HeartbeatSpec qualified
+import IdSpec qualified
 import LogResultSpec qualified
 import NodeSpec qualified
 import PayloadSpec qualified
@@ -30,6 +31,7 @@ main =
             , TickSpec.tests
             , GuardSpec.tests
             , HeartbeatSpec.tests
+            , IdSpec.tests
             , LogResultSpec.tests
             , NodeSpec.tests
             , PayloadSpec.tests
