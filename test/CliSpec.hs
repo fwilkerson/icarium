@@ -211,7 +211,7 @@ tests =
         , testCase "dispatch --dry-run previews --mcp-config when set" testDispatchDryRunMcpConfig
         , testCase "dispatch --dry-run: Skill in tools drops --disable-slash-commands" testDispatchDryRunSkillTool
         , testCase "dispatch --dry-run prompt carries built-in agreement with no-user rules" testDryRunBuiltInAgreement
-        , testCase "dispatch: agreement_path file replaces built-in body, escalation appended" testDispatchAgreementFile
+        , testCase "dispatch: agreement_path file wholly replaces built-in body" testDispatchAgreementFile
         , testCase "dispatch: unreadable agreement_path fails closed before worker starts" testAgreementPathUnreadableFailsClosed
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
@@ -2326,9 +2326,9 @@ testDispatchDryRunMcpConfig = withDispatchRepo $ \dir db -> do
     assertBool "preview shows --mcp-config .mcp.json" ("--mcp-config .mcp.json" `isInfixOf` out)
 
 -- Scenario: with no agreement_path the dispatch prompt carries the built-in
--- agreement, including the no-user counterweight and the task-specific
--- escalation command. (Its absence from `task show --prompt` is asserted
--- in testTaskShowPrompt.)
+-- agreement and its no-user counterweight, and drives no tracker CLI — every
+-- mutation rides the worker payload through the gate. (The agreement's
+-- absence from `task show --prompt` is asserted in testTaskShowPrompt.)
 testDryRunBuiltInAgreement :: IO ()
 testDryRunBuiltInAgreement = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "agreement task"
@@ -2336,9 +2336,8 @@ testDryRunBuiltInAgreement = withDispatchRepo $ \dir db -> do
     code @?= ExitSuccess
     assertBool "prompt carries the agreement" ("## Working agreement" `isInfixOf` out)
     assertBool "no-user counterweight present" ("Permission denials are policy" `isInfixOf` out)
-    assertBool
-        "escalation command carries the task id"
-        (("icarium task update " <> tid <> " --state blocked") `isInfixOf` out)
+    assertBool "no CLI escalation command" (not ("icarium task update" `isInfixOf` out))
+    assertBool "no CLI learnings recipe" (not ("icarium ctx add" `isInfixOf` out))
 
 {- | stubToml with a [dispatch] agreement_path entry (tomland has no
 append-into-table story, so the whole file is spelled out; same
@@ -2367,9 +2366,8 @@ agreementToml path =
         , "disciplines = [\"development\"]"
         ]
 
--- Scenario: agreement_path file content replaces the built-in agreement
--- body; the task-specific escalation lines are appended regardless, so a
--- project file that omits the protocol cannot drop it.
+-- Scenario: agreement_path file content wholly replaces the built-in
+-- agreement body — icarium appends nothing of its own to it.
 testDispatchAgreementFile :: IO ()
 testDispatchAgreementFile = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "custom agreement task"
@@ -2377,11 +2375,16 @@ testDispatchAgreementFile = withDispatchRepo $ \dir db -> do
     writeFile (dir </> "icarium.toml") (agreementToml "agreement.md")
     (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
     code @?= ExitSuccess
-    assertBool "file content in prompt" ("Custom lane contract xagree1" `isInfixOf` out)
     assertBool "built-in body replaced" (not ("headless dispatch working on this task" `isInfixOf` out))
-    assertBool
-        "task-specific escalation still appended"
-        (("icarium task update " <> tid <> " --state blocked") `isInfixOf` out)
+    -- The whole section, not just "the file is in there": icarium appending
+    -- anything of its own after the override is the regression to catch.
+    let section =
+            filter (not . null)
+                . takeWhile (not . ("dispatch:" `isPrefixOf`))
+                . drop 1
+                . dropWhile (/= "## Working agreement")
+                $ lines out
+    section @?= ["Custom lane contract xagree1."]
 
 -- Scenario: an unreadable agreement_path must fail closed before the worker
 -- starts (same posture as reviewer prompt_path) — and in dry-run too, which

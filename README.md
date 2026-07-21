@@ -100,7 +100,7 @@ retry_storm_threshold    = 3
 # worktree_teardown = "scripts/worktree-free.sh"
 
 # Replace the built-in working agreement in dispatch prompts with this file's
-# content (icarium still appends the task-specific escalation lines).
+# content — the whole of it; icarium appends nothing.
 # Unreadable file = fatal before the worker starts.
 # agreement_path = ".icarium/agreement.md"
 
@@ -181,9 +181,10 @@ the session, and nothing inherits the user's `~/.claude` default mode.
 dependencies, referenced and category-matched context; exactly what `task show --prompt` prints —
 plus a **working agreement** appended only in the dispatch lane. `task show --prompt` carries no
 agreement, so interactive builders consume it without inheriting headless lane rules. The agreement
-body is the built-in default or a project-owned file named by `[dispatch] agreement_path`; either
-way icarium appends the task-specific escalation lines (the `--state blocked` command with the task
-id), so a project file can't drop the escalation protocol. An unreadable `agreement_path` is fatal
+body is the built-in default or a project-owned file named by `[dispatch] agreement_path`, which
+replaces the whole of it — icarium appends nothing, because nothing it needs travels here: the
+worker hands back a schema-constrained payload and the gate performs every tracker mutation from
+it. An unreadable `agreement_path` is fatal
 before the worker starts, same as the reviewer's `prompt_path`. Preview the full prompt with
 `dispatch run <id> --dry-run`.
 

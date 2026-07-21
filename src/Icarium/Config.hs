@@ -275,7 +275,7 @@ defaultConfigText =
     \tools = [\"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\", \"Bash\"]\n\
     \allowed_tools = [\n\
     \  \"Read\", \"Edit\", \"Write\", \"Grep\", \"Glob\",\n\
-    \  \"Bash(icarium:*)\", \"Bash(git:*)\", \"Bash(cabal:*)\",\n\
+    \  \"Bash(git:*)\", \"Bash(cabal:*)\",\n\
     \]\n\
     \scratch_dir = \".icarium/scratch\"\n\
     \# Wall-clock timeout per dispatch (minutes, must be a positive integer).\n\
@@ -295,8 +295,8 @@ defaultConfigText =
     \# is set. Reviewers never get MCP servers regardless of this key.\n\
     \# mcp_config = \".mcp.json\"\n\
     \# Replace the built-in working agreement in dispatch prompts with this\n\
-    \# file's content (icarium still appends the task-specific escalation\n\
-    \# lines). Unreadable file = fatal before the worker starts.\n\
+    \# file's content -- the whole of it; icarium appends nothing.\n\
+    \# Unreadable file = fatal before the worker starts.\n\
     \# agreement_path = \".icarium/agreement.md\"\n\
     \\n\
     \[categories]\n\

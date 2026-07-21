@@ -14,7 +14,7 @@ tools = ["Read", "Edit", "Write", "Grep", "Glob", "Bash", "Skill"]
 agreement_path = ".icarium/agreement.md"
 allowed_tools = [
   "Read", "Edit", "Write", "Grep", "Glob",
-  "Bash(icarium:*)", "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
+  "Bash(git:*)", "Bash(cabal:*)", "Bash(make:*)",
   # Loops and $(...) never decompose for prefix matching, so a repeat-the-suite
   # command can only be reached as a named script. Both spellings: the matcher
   # is literal, and `./scripts/...` is the reflex.

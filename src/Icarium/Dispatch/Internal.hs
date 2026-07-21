@@ -310,7 +310,7 @@ buildPrompt conn t mAgreement mFindings = do
         mapM_ (TIO.hPutStrLn stderr) (untaggedPromptWarning (taskId t))
     let refIds = map contextId refs
         dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-        base = renderTaskPrompt t refs dedupedCat deps <> agreementSection mAgreement t
+        base = renderTaskPrompt t refs dedupedCat deps <> agreementSection mAgreement
     pure $ case mFindings of
         Nothing -> base
         Just f -> base <> "\n## Reviewer findings from previous attempt\n\n" <> f <> "\n"
