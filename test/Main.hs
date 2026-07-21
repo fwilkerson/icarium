@@ -10,6 +10,7 @@ import GuardSpec qualified
 import HeartbeatSpec qualified
 import LogResultSpec qualified
 import NodeSpec qualified
+import PayloadSpec qualified
 import PostClaudeSpec qualified
 import RenderSpec qualified
 import RepoSpec qualified
@@ -31,6 +32,7 @@ main =
             , HeartbeatSpec.tests
             , LogResultSpec.tests
             , NodeSpec.tests
+            , PayloadSpec.tests
             , PostClaudeSpec.tests
             , RenderSpec.tests
             , RepoSpec.tests

@@ -37,6 +37,7 @@ library
                       Icarium.Dispatch.Merge
                       Icarium.Dispatch.PostClaude
                       Icarium.Dispatch.Outcome
+                      Icarium.Dispatch.Payload
                       Icarium.Dispatch.Reviewer
                       Icarium.Dispatch.Tick
                       Icarium.Dispatch.Worktree
@@ -106,6 +107,7 @@ test-suite icarium-test
                       HeartbeatSpec
                       LogResultSpec
                       NodeSpec
+                      PayloadSpec
                       PostClaudeSpec
                       RenderSpec
                       RepoSpec
