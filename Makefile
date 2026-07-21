@@ -1,7 +1,13 @@
 .PHONY: build install init test lint format watch clean
 
+# -Werror lives here, not in the .cabal ghc-options: a release tarball or a
+# future GHC that adds a new warning must still build. Local work must not.
+# --enable-tests so test/ is compiled by a plain `make build` — without it
+# cabal skips the test-suite entirely and its warnings never surface.
+GHCFLAGS := --enable-tests --ghc-options=-Werror
+
 build:
-	cabal build all
+	cabal build all $(GHCFLAGS)
 
 # One-time bootstrap on a fresh clone. Idempotent.
 # Add future bootstrap steps here.
@@ -17,7 +23,7 @@ install:
 	cabal install --installdir=./bin --install-method=copy --overwrite-policy=always exe:icarium
 
 test:
-	cabal test all
+	cabal test all $(GHCFLAGS)
 
 lint:
 	hlint src/ app/ test/

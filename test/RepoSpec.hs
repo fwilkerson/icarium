@@ -3,7 +3,6 @@ module RepoSpec (tests) where
 import Control.Exception (SomeException, try)
 import Control.Monad (forM, forM_, void)
 import Data.Either (isLeft)
-import Data.Int (Int64)
 import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T

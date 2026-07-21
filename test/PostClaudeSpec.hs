@@ -295,7 +295,8 @@ testCheckpointDirtyTree :: IO ()
 testCheckpointDirtyTree =
     withTestRepo $ \dir -> do
         writeFile (dir <> "/dirty.txt") "uncommitted work"
-        checkpointDirtyTree dir "TESTDID" "claude exited 1"
+        checkpointed <- checkpointDirtyTree dir "TESTDID" "claude exited 1"
+        assertBool "reports a checkpoint was made" checkpointed
         logOut <- gitIn dir ["log", "--oneline", "-1"]
         assertBool "wip commit message present" ("wip: dispatch TESTDID" `isInfixOf` logOut)
         assertBool "failed: note in commit" ("failed:" `isInfixOf` logOut)
@@ -304,7 +305,8 @@ testCheckpointCleanTree :: IO ()
 testCheckpointCleanTree =
     withTestRepo $ \dir -> do
         before <- gitIn dir ["rev-parse", "HEAD"]
-        checkpointDirtyTree dir "TESTDID" "some error"
+        checkpointed <- checkpointDirtyTree dir "TESTDID" "some error"
+        assertBool "reports no checkpoint on a clean tree" (not checkpointed)
         after <- gitIn dir ["rev-parse", "HEAD"]
         before @?= after
 
