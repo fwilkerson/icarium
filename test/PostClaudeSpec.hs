@@ -24,7 +24,14 @@ import Icarium.Dispatch.Outcome (
     applyOutcomeToTask,
     finishWith,
  )
-import Icarium.Dispatch.Payload (FutureNote (..), WorkerPayload (..), WorkerStatus (..))
+import Icarium.Dispatch.Payload (
+    Finding (..),
+    FindingAxis (..),
+    FutureNote (..),
+    Severity (..),
+    WorkerPayload (..),
+    WorkerStatus (..),
+ )
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude, writeWarnContextEntry)
 import Icarium.Git qualified as Git
 import Icarium.Repo.Category qualified as RC
@@ -247,7 +254,12 @@ testWarnEntryLinksTask =
                         , RT.ntNoCommit = False
                         }
             cat <- mkCat c Domain "cli"
-            writeWarnContextEntry c db minTask{taskId = tid} [cat] "status: warn\nfindings: []\n"
+            writeWarnContextEntry
+                c
+                db
+                minTask{taskId = tid}
+                [cat]
+                [Finding AxisStandards SevWarn (Just "src/Foo.hs") "possible Duplicated Code"]
             edges <- RE.listEdges c (Just tid) Nothing (Just References)
             case edges of
                 [e] -> do

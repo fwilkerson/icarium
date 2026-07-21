@@ -2,17 +2,17 @@
 
 module Icarium.Dispatch.Reviewer (
     ReviewResult (..),
+    rrVerdict,
+    rrReport,
     runReviewer,
     loadReviewerPrompt,
     defaultReviewerPrompt,
-    parseReviewVerdictFromText,
 ) where
 
 import Control.Concurrent (forkIO)
 import Control.Exception (SomeException, handle, try)
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Lazy qualified as BL
-import Data.List (find)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -44,13 +44,33 @@ import Icarium.Dispatch.Claude (
     withLogHandle,
  )
 import Icarium.Dispatch.LogResult (LogResult (..), readLogResult)
+import Icarium.Dispatch.Payload (
+    Finding,
+    ReviewerPayload (..),
+    decodeReviewerPayload,
+    jsonSchemaArgs,
+    renderFindings,
+    reviewerSchema,
+    verdictFromFindings,
+ )
 import Icarium.Types (ReviewVerdict (..))
 
+{- | Either the reviewer reported (findings, possibly empty) or the run itself
+failed. The two are not one field: a process that timed out has no findings
+but is not a pass, so 'rrVerdict' fails closed on 'Left' rather than deriving
+a verdict from an empty list it never received.
+-}
 data ReviewResult = ReviewResult
-    { rrVerdict :: ReviewVerdict
-    , rrFindings :: Text
+    { rrOutcome :: Either Text [Finding]
     , rrLogPath :: FilePath
     }
+
+rrVerdict :: ReviewResult -> ReviewVerdict
+rrVerdict = either (const RVFail) verdictFromFindings . rrOutcome
+
+-- | What a human or the retrying worker reads: the findings table, or why the run failed.
+rrReport :: ReviewResult -> Text
+rrReport = either id renderFindings . rrOutcome
 
 {- | The two-axis brief (ADR 0004), adapted from the @code-review@ skill's
 Standards and Spec sub-agent prompts. The harness is one Read-only agent, so
@@ -104,44 +124,14 @@ defaultReviewerPrompt =
     \# Reporting bar\n\
     \\n\
     \Report every issue you find, including ones you are uncertain about or\n\
-    \consider minor -- attach a severity rather than withholding. The status\n\
-    \verdict is the filter, not the findings list: minor concerns belong in the\n\
-    \findings under warn, not omitted.\n\
+    \consider minor -- attach a severity rather than withholding. Severity is the\n\
+    \filter, not the findings list: minor concerns belong in the findings under\n\
+    \`warn`, not omitted. A baseline smell alone is a `warn`, never a `fail`; it\n\
+    \is a judgement call.\n\
     \\n\
-    \# Output\n\
-    \\n\
-    \Respond with ONLY a YAML block in this exact format:\n\
-    \\n\
-    \```yaml\n\
-    \status: pass\n\
-    \findings: []\n\
-    \```\n\
-    \\n\
-    \Or with findings, each tagged with the axis it came from:\n\
-    \\n\
-    \```yaml\n\
-    \status: warn\n\
-    \findings:\n\
-    \  - axis: spec\n\
-    \    severity: fail\n\
-    \    file: src/Foo.hs\n\
-    \    message: \"Task asks for X; the diff never implements it\"\n\
-    \  - axis: standards\n\
-    \    severity: warn\n\
-    \    file: src/Bar.hs\n\
-    \    message: \"possible Duplicated Code: the parse loop repeats parseFoo\"\n\
-    \```\n\
-    \\n\
-    \axis values: spec | standards\n\
-    \\n\
-    \status is the verdict over BOTH axes -- the worst outcome on either wins:\n\
-    \  pass - faithful to the task and consistent with repo standards\n\
-    \  warn - acceptable but has minor concerns; merge proceeds\n\
-    \  fail - misses/contradicts the task, is incomplete, or breaks a documented\n\
-    \         standard in a way that must be fixed before merge\n\
-    \A baseline smell alone is a warn, not a fail; it is a judgement call.\n\
-    \\n\
-    \Output ONLY the yaml block."
+    \Do not state an overall verdict -- you do not have one to give. icarium\n\
+    \derives it from the severities you report, and an empty findings list is the\n\
+    \pass case."
 
 {- | Load the reviewer system prompt override. Fails closed: an unreadable
 @prompt_path@ is an error naming the path, not a silent fallback to
@@ -179,40 +169,6 @@ buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText =
         , diffText
         , "```"
         ]
-
-{- | Anchors verdict parsing to the last fenced @```yaml@ block in the text.
-A @status:@ line found outside any fenced block, or in a bare @```@ block,
-is ignored; fail-closed if no valid yaml block/status is found.
--}
-parseReviewVerdictFromText :: Text -> ReviewVerdict
-parseReviewVerdictFromText t =
-    fromMaybe RVFail $ do
-        block <- lastYamlBlock (T.lines t)
-        line <- find (T.isPrefixOf "status:" . T.strip) block
-        let val = T.strip (T.drop 7 (T.strip line))
-        case val of
-            "pass" -> Just RVPass
-            "warn" -> Just RVWarn
-            "fail" -> Just RVFail
-            _ -> Nothing
-
--- | Extracts the lines of the last closed @```yaml@ fenced block, if any.
-lastYamlBlock :: [Text] -> Maybe [Text]
-lastYamlBlock = go Nothing Nothing
-  where
-    go :: Maybe (Bool, [Text]) -> Maybe [Text] -> [Text] -> Maybe [Text]
-    go Nothing lastBlock [] = lastBlock
-    go (Just _) lastBlock [] = lastBlock
-    go Nothing lastBlock (line : rest)
-        | "```" `T.isPrefixOf` T.strip line =
-            let fenceArg = T.toLower (T.strip (T.drop 3 (T.strip line)))
-             in go (Just (fenceArg == "yaml", [])) lastBlock rest
-        | otherwise = go Nothing lastBlock rest
-    go (Just (isYaml, acc)) lastBlock (line : rest)
-        | "```" `T.isPrefixOf` T.strip line =
-            let lastBlock' = if isYaml then Just (reverse acc) else lastBlock
-             in go Nothing lastBlock' rest
-        | otherwise = go (Just (isYaml, line : acc)) lastBlock rest
 
 runReviewer ::
     -- | directory the reviewer runs in (its Read tool sees branch state)
@@ -254,22 +210,22 @@ runReviewer workDir model mSysPrompt bodyReport taskTitle taskBody diffText revi
             , "dontAsk"
             , "--strict-mcp-config"
             ]
+                <> map T.unpack (jsonSchemaArgs reviewerSchema)
     hPutStrLn stderr "[reviewer] running..."
     exit <- runReviewerProcess workDir stdinBytes args reviewerLogPath maxMinutes
     mLR <- readLogResult reviewerLogPath
-    let responseText = case exit of
-            ExitFailure 124 -> "reviewer timed out"
-            ExitSuccess -> fromMaybe "" (mLR >>= lrResultText)
-            _ -> fromMaybe "reviewer agent failed" (mLR >>= lrResultText)
-        verdict = case exit of
-            ExitSuccess -> parseReviewVerdictFromText responseText
-            _ -> RVFail
-    pure
-        ReviewResult
-            { rrVerdict = verdict
-            , rrFindings = responseText
-            , rrLogPath = reviewerLogPath
-            }
+    let outcome = case exit of
+            ExitFailure 124 -> Left "reviewer timed out"
+            ExitFailure c -> Left ("reviewer agent failed (exit " <> T.pack (show c) <> ")")
+            ExitSuccess -> case mLR >>= lrResultText of
+                Nothing -> Left "reviewer produced no result message"
+                -- Constrained decoding makes the payload valid by construction,
+                -- so a decode failure means --json-schema did not take; that is
+                -- a broken gate, not a pass.
+                Just txt -> case decodeReviewerPayload txt of
+                    Left e -> Left ("reviewer payload not decodable: " <> e)
+                    Right p -> Right (rpFindings p)
+    pure ReviewResult{rrOutcome = outcome, rrLogPath = reviewerLogPath}
 
 runReviewerProcess :: FilePath -> BL.ByteString -> [String] -> FilePath -> Int -> IO ExitCode
 runReviewerProcess workDir stdinBytes args logPath maxMinutes = do

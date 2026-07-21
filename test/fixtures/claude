@@ -56,12 +56,10 @@ case "$mode" in
             commit_work
             result
         else
-            # Reviewer: prompt already captured above; verdict pass. The
-            # verdict must sit in a fenced yaml block — bare status lines
-            # are ignored by the anchored parser.
-            # printf %s: sh's echo would expand the \n inside the JSON.
+            # Reviewer: prompt already captured above; no findings = pass.
+            # printf %s: sh's echo would expand the escapes inside the JSON.
             init
-            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
+            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"findings\":[]}","num_turns":1}'
         fi
         exit 0
         ;;
@@ -77,7 +75,7 @@ case "$mode" in
         else
             # Reviewer: prompt captured above; verdict pass.
             init
-            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
+            printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"findings\":[]}","num_turns":1}'
         fi
         exit 0
         ;;
@@ -102,9 +100,9 @@ case "$mode" in
             init
             if [ "$(cat "$count" 2>/dev/null)" = 1 ]; then
                 echo 2 > "$count"
-                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: fail\nfindings: []\n```","num_turns":1}'
+                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"findings\":[{\"axis\":\"spec\",\"severity\":\"fail\",\"message\":\"stub reviewer fails attempt 1\"}]}","num_turns":1}'
             else
-                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"```yaml\nstatus: pass\nfindings: []\n```","num_turns":1}'
+                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"findings\":[]}","num_turns":1}'
             fi
         fi
         exit 0

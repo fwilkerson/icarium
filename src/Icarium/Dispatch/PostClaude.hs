@@ -26,8 +26,14 @@ import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), Re
 import Icarium.Dispatch.BodyDiff (bodyChanged, diffBody, renderBodyReport)
 import Icarium.Dispatch.LogResult (LogResult (..), readLogResult)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
-import Icarium.Dispatch.Payload (WorkerPayload (..), WorkerStatus (..), decodeWorkerPayload)
-import Icarium.Dispatch.Reviewer (ReviewResult (..), runReviewer)
+import Icarium.Dispatch.Payload (
+    Finding,
+    WorkerPayload (..),
+    WorkerStatus (..),
+    decodeWorkerPayload,
+    renderFindings,
+ )
+import Icarium.Dispatch.Reviewer (ReviewResult (..), rrReport, rrVerdict, runReviewer)
 import Icarium.Git qualified as Git
 import Icarium.Node (createContextWithBody)
 import Icarium.Repo.Category qualified as RC
@@ -196,22 +202,25 @@ runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
             pure (Just (task, rr))
     case mReviewResult of
         Just (_, rr) | rrVerdict rr == RVFail -> do
-            let findings = rrFindings rr
-            dr <- finish OFailure Nothing ("reviewer: fail\n" <> findings)
-            pure (PCRetry dr findings)
+            let report = rrReport rr
+            dr <- finish OFailure Nothing ("reviewer: fail\n" <> report)
+            pure (PCRetry dr report)
         _ -> do
             -- Parked-ness is derived (merge_sha NULL), so the note records
             -- only what stays true after the branch lands.
             let notes = case mReviewResult of
                     Just (_, rr)
                         | rrVerdict rr == RVWarn ->
-                            "reviewer warn\n" <> rrFindings rr
+                            "reviewer warn\n" <> rrReport rr
                     _ -> "gates passed"
             dr <- finish OSuccess Nothing notes
             case mReviewResult of
-                Just (task, rr) | rrVerdict rr == RVWarn -> do
-                    cats <- RC.taskCategoriesFor conn (taskId task)
-                    writeWarnContextEntry conn db task cats (rrFindings rr)
+                -- Right by construction: a warn verdict comes from findings.
+                Just (task, rr)
+                    | rrVerdict rr == RVWarn
+                    , Right fs <- rrOutcome rr -> do
+                        cats <- RC.taskCategoriesFor conn (taskId task)
+                        writeWarnContextEntry conn db task cats fs
                 _ -> pure ()
             pure (PCDone dr)
 
@@ -231,7 +240,11 @@ readWorkerPayload logPath = do
                 hPutStrLn stderr ("icarium: worker payload not decodable: " <> T.unpack e)
                 pure Nothing
 
-writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> Text -> IO ()
+{- | One ctx entry per warned dispatch, not per finding: the entry records that
+this review happened, and @/curate-ctx@ promotes it as a whole. The body is the
+findings table.
+-}
+writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> [Finding] -> IO ()
 writeWarnContextEntry conn db task cats findings = do
     (cid, _) <-
         createContextWithBody
@@ -239,7 +252,7 @@ writeWarnContextEntry conn db task cats findings = do
             db
             RCx.NewContext
                 { RCx.ncTitle = "reviewer warn: " <> taskTitle task
-                , RCx.ncBody = findings
+                , RCx.ncBody = renderFindings findings
                 }
     forM_ cats (RC.attachContextCategory conn cid)
     -- Link the note back to its task for provenance (task references ctx).

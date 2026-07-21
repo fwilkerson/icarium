@@ -17,6 +17,7 @@ tests =
         , testGroup "worker payload" workerCases
         , testGroup "reviewer payload" reviewerCases
         , testGroup "verdictFromFindings" verdictCases
+        , testGroup "renderFindings" renderCases
         ]
 
 -- =============================================================
@@ -120,3 +121,26 @@ verdictCases =
   where
     warnF = Finding AxisStandards SevWarn (Just "src/Foo.hs") "possible Duplicated Code"
     failF = Finding AxisSpec SevFail Nothing "the task asks for X; the diff never implements it"
+
+-- =============================================================
+-- Rendering
+-- =============================================================
+
+renderCases :: [TestTree]
+renderCases =
+    [ testCase "table of findings" $
+        renderFindings
+            [ Finding AxisStandards SevWarn (Just "src/Foo.hs") "possible Duplicated Code"
+            , Finding AxisSpec SevFail Nothing "asks for X; never implemented"
+            ]
+            @?= "| axis | severity | file | message |\n\
+                \| --- | --- | --- | --- |\n\
+                \| standards | warn | src/Foo.hs | possible Duplicated Code |\n\
+                \| spec | fail | - | asks for X; never implemented |\n"
+    , testCase "a multi-line, pipe-bearing message stays one row" $
+        renderFindings [Finding AxisSpec SevWarn Nothing "a | b\nsecond line"]
+            @?= "| axis | severity | file | message |\n\
+                \| --- | --- | --- | --- |\n\
+                \| spec | warn | - | a \\| b second line |\n"
+    , testCase "no findings" $ renderFindings [] @?= "(no findings)"
+    ]

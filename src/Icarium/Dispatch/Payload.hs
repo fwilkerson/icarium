@@ -36,6 +36,7 @@ module Icarium.Dispatch.Payload (
     ReviewerPayload (..),
     decodeReviewerPayload,
     verdictFromFindings,
+    renderFindings,
 ) where
 
 import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict, withObject, withText, (.:), (.:?))
@@ -44,6 +45,7 @@ import Data.Aeson.Encoding qualified as E
 import Data.Aeson.Key qualified as K
 import Data.Aeson.Types (Parser)
 import Data.ByteString.Lazy qualified as BL
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -261,6 +263,11 @@ parseFindingAxis = \case
     "standards" -> Just AxisStandards
     _ -> Nothing
 
+findingAxisText :: FindingAxis -> Text
+findingAxisText = \case
+    AxisSpec -> "spec"
+    AxisStandards -> "standards"
+
 instance FromJSON FindingAxis where
     parseJSON = enumFromJSON "finding axis" parseFindingAxis
 
@@ -272,6 +279,11 @@ parseSeverity = \case
     "warn" -> Just SevWarn
     "fail" -> Just SevFail
     _ -> Nothing
+
+severityText :: Severity -> Text
+severityText = \case
+    SevWarn -> "warn"
+    SevFail -> "fail"
 
 instance FromJSON Severity where
     parseJSON = enumFromJSON "severity" parseSeverity
@@ -311,6 +323,32 @@ verdictFromFindings [] = RVPass
 verdictFromFindings fs = case maximum (map findingSeverity fs) of
     SevWarn -> RVWarn
     SevFail -> RVFail
+
+{- | Findings as a Markdown table — the one rendering, shared by the retry
+prompt, the dispatch note, and the ctx entry a warn mints. A table because
+@/curate-ctx@ reads these entries per row; @message@ is flattened and its
+pipes escaped so a multi-line finding cannot break the row it lives in.
+-}
+renderFindings :: [Finding] -> Text
+renderFindings [] = "(no findings)"
+renderFindings fs =
+    T.unlines $
+        [ "| axis | severity | file | message |"
+        , "| --- | --- | --- | --- |"
+        ]
+            <> map row fs
+  where
+    row Finding{..} =
+        "| "
+            <> T.intercalate
+                " | "
+                [ findingAxisText findingAxis
+                , severityText findingSeverity
+                , cell (fromMaybe "-" findingFile)
+                , cell findingMessage
+                ]
+            <> " |"
+    cell = T.replace "|" "\\|" . T.unwords . T.words
 
 decodePayload :: (FromJSON a) => Text -> Either Text a
 decodePayload t =

@@ -142,23 +142,23 @@ worker → diff → reviewer ─┬─ pass / warn → land (parks if the merge 
                           └─ fail        → retry (findings injected) or block
 ```
 
-**Contract.** The reviewer must emit **only** a YAML block. icarium reads the `status:` line; a
-non-zero exit, a timeout, or an unparseable result all count as `fail`.
+**Contract.** The reviewer is invoked with `--json-schema`, so its final message is a validated
+payload: `findings[]`, each with `axis` (`spec | standards`), `severity` (`warn | fail`), optional
+`file`, and `message`. It reports no verdict — icarium derives one as the worst severity across the
+findings, and `[]` is the pass case ([ADR 0008](docs/adr/0008-icarium-derives-the-review-verdict-from-finding-severities.md)).
+A non-zero exit, a timeout, or an undecodable payload all count as `fail`.
 
-```yaml
-status: pass | warn | fail
-findings:
-  - severity: warn
-    file: src/Foo.hs
-    message: "Description of the concern"
+```json
+{"findings": [{"axis": "standards", "severity": "warn", "file": "src/Foo.hs",
+               "message": "Description of the concern"}]}
 ```
 
 **Verdicts.**
 
 - **`pass`** — the branch lands.
 - **`warn`** — the branch lands too, but the findings are captured as a context entry titled
-  `reviewer warn: <task title>` (body = the YAML), tagged with the task's categories and linked
-  back to it with a `references` edge for provenance. Surfaces via `icarium ctx list`,
+  `reviewer warn: <task title>` (body = the findings as a Markdown table), tagged with the task's
+  categories and linked back to it with a `references` edge for provenance. Surfaces via `icarium ctx list`,
   `icarium search`, and `icarium link list --from <task>` so the concern isn't lost.
 - **`fail`** — this attempt fails. If `max_attempts` remain, the worker retries with the findings
   injected into its prompt under a `## Reviewer findings from previous attempt` heading — address

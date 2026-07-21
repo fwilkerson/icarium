@@ -112,7 +112,6 @@ test-suite icarium-test
                       PostClaudeSpec
                       RenderSpec
                       RepoSpec
-                      ReviewerSpec
                       TestHelpers
                       TickSpec
                       TimeoutSpec
