@@ -212,6 +212,7 @@ tests =
         , testCase "dispatch --dry-run: Skill in tools drops --disable-slash-commands" testDispatchDryRunSkillTool
         , testCase "dispatch --dry-run prompt carries built-in agreement with no-user rules" testDryRunBuiltInAgreement
         , testCase "dispatch: agreement_path file wholly replaces built-in body" testDispatchAgreementFile
+        , testCase "dispatch: prompt names the resolved scratch path, override or not" testDispatchScratchPathResolved
         , testCase "dispatch: unreadable agreement_path fails closed before worker starts" testAgreementPathUnreadableFailsClosed
         , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
         , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
@@ -2380,11 +2381,35 @@ testDispatchAgreementFile = withDispatchRepo $ \dir db -> do
     -- anything of its own after the override is the regression to catch.
     let section =
             filter (not . null)
-                . takeWhile (not . ("dispatch:" `isPrefixOf`))
+                . takeWhile (not . ("## " `isPrefixOf`))
                 . drop 1
                 . dropWhile (/= "## Working agreement")
                 $ lines out
     section @?= ["Custom lane contract xagree1."]
+
+{- | Scenario: the worker is told where scratch is by absolute path, not by an
+env var it has no permitted way to expand. The path rides a section outside
+the agreement body, so an agreement_path override cannot drop it.
+-}
+testDispatchScratchPathResolved :: IO ()
+testDispatchScratchPathResolved = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "scratch path task"
+    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "prompt names the worktree-absolute scratch dir" (namesAbsScratch out)
+    -- The override replaces the agreement body; the scratch section survives.
+    writeFile (dir </> "agreement.md") "Custom lane contract xagree2.\n"
+    writeFile (dir </> "icarium.toml") (agreementToml "agreement.md")
+    (oCode, oOut, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
+    oCode @?= ExitSuccess
+    assertBool "override prompt still names the scratch path" (namesAbsScratch oOut)
+  where
+    -- Both segments on one line, both absolute: the dry-run header prints
+    -- `scratch_dir: .icarium/scratch` relative, so a plain substring test
+    -- would pass on the header even with the prompt section deleted.
+    namesAbsScratch =
+        any (\l -> "/.icarium/wt/" `isInfixOf` l && "/.icarium/scratch" `isInfixOf` l)
+            . lines
 
 -- Scenario: an unreadable agreement_path must fail closed before the worker
 -- starts (same posture as reviewer prompt_path) — and in dry-run too, which

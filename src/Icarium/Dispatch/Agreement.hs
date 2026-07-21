@@ -8,11 +8,15 @@ worker hands back rides the schema in "Icarium.Dispatch.Payload", whose
 property descriptions an override cannot weaken, and the gate performs the
 mutations. So the agreement holds only cross-cutting judgement the schema
 cannot localize to a field.
+
+Anything icarium must guarantee reaches every worker — the scratch path —
+rides its own section ('scratchSection'), outside the overridable body.
 -}
 module Icarium.Dispatch.Agreement (
     agreementSection,
     builtInAgreement,
     loadAgreementFile,
+    scratchSection,
 ) where
 
 import Control.Exception (SomeException, try)
@@ -33,8 +37,22 @@ builtInAgreement =
         , "- There is no user. Permission denials are policy, not questions —"
         , "  never wait for input; work within what the allowed tools permit."
         , "- Commit your code before exiting; after the gates pass the program parks your branch for merge."
-        , "- Test artifacts (snapshots, fixtures, scratch files) MUST go in `$ICARIUM_SCRATCH_DIR`,"
-        , "  never in the working tree. The post-claude gate refuses to accept a dirty tree."
+        ]
+
+{- | The scratch rule, carried outside the agreement body so an
+@agreement_path@ override cannot drop it — and with the path already
+resolved: a headless worker cannot expand an env var (the built-in
+read-only Bash classifier denies @printenv@, and @echo $VAR@ does not
+expand), so naming one would leave it writing blind.
+-}
+scratchSection :: FilePath -> Text
+scratchSection absScratch =
+    T.unlines
+        [ "## Scratch directory"
+        , ""
+        , "Test artifacts (snapshots, fixtures, scratch files) MUST go in"
+        , "`" <> T.pack absScratch <> "`, never in the working tree."
+        , "The post-claude gate refuses to accept a dirty tree."
         ]
 
 {- | Load the agreement override. Fails closed: an unreadable

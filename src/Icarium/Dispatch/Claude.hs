@@ -24,7 +24,6 @@ import Database.SQLite.Simple (close)
 import System.Directory (makeAbsolute)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
 import System.IO (
     BufferMode (..),
     Handle,
@@ -140,15 +139,13 @@ runClaudeStreaming ctx dcfg = do
         logPath = rcLogPath ctx
         tools = dcTools dcfg
         allowed = dcAllowedTools dcfg
-        scratchDir = dcScratchDir dcfg
         maxMinutes = dcMaxMinutesPerDispatch dcfg
         mcpConfig = dcMcpConfig dcfg
     parentEnv <- getEnvironment
-    -- Absolute paths: the worker's cwd is the worktree, and child `icarium`
-    -- invocations resolve ICARIUM_DB/scratch against it — a relative db
-    -- path would silently create a nested store inside the worktree.
+    -- Absolute: the worker's cwd is the worktree and child `icarium`
+    -- invocations resolve ICARIUM_DB against it — a relative db path
+    -- would silently create a nested store inside the worktree.
     absDb <- makeAbsolute dbPath
-    absScratch <- makeAbsolute (rcWorkDir ctx </> T.unpack scratchDir)
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
         args = map T.unpack (claudeArgs model effort tools allowed mcpConfig)
         -- Inherit parent env so claude can find ~/.claude credentials
@@ -157,7 +154,6 @@ runClaudeStreaming ctx dcfg = do
             parentEnv
                 ++ [ ("ICARIUM_DISPATCH_ID", T.unpack did)
                    , ("ICARIUM_TASK_ID", T.unpack (taskId task))
-                   , ("ICARIUM_SCRATCH_DIR", absScratch)
                    , ("ICARIUM_DB", absDb)
                    ]
         pcfg =

@@ -14,7 +14,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, makeAbsolute)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 
@@ -25,7 +25,7 @@ import Icarium.Config (
     ProjectConfig (..),
     ReviewConfig (..),
  )
-import Icarium.Dispatch.Agreement (agreementSection, loadAgreementFile)
+import Icarium.Dispatch.Agreement (agreementSection, loadAgreementFile, scratchSection)
 import Icarium.Dispatch.Claude (RunCtx (..), claudeArgs, runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
@@ -66,6 +66,14 @@ data DispatchRequest = DispatchRequest
 
 dispatchBranchName :: Text -> Text
 dispatchBranchName did = "dispatch/" <> did
+
+{- | The worker's scratch directory inside its worktree. Absolute: the
+worker's cwd is the worktree, and a relative path in the prompt would
+resolve differently for any child process that changes directory.
+One resolver so the directory we create and the path we name can't drift.
+-}
+resolveScratch :: FilePath -> DispatchConfig -> IO FilePath
+resolveScratch wt dcfg = makeAbsolute (wt </> T.unpack (dcScratchDir dcfg))
 
 data ResolvedOpts = ResolvedOpts
     { roModel :: Text
@@ -122,10 +130,11 @@ doDryRun conn req = do
 
 dryRunPreview :: Connection -> DispatchRequest -> Task -> Maybe Text -> IO DispatchResult
 dryRunPreview conn req task mAgreement = do
-    prompt <- buildPrompt conn task mAgreement Nothing
     fakeId <- newId
     let dcfg = cfgDispatch (drConfig req)
-        branch = dispatchBranchName fakeId
+    absScratch <- resolveScratch (worktreePath fakeId) dcfg
+    prompt <- buildPrompt conn task absScratch mAgreement Nothing
+    let branch = dispatchBranchName fakeId
         opts = resolveDispatchOpts req
         tools = dcTools dcfg
         allowed = dcAllowedTools dcfg
@@ -225,7 +234,8 @@ doRealAttempt conn req attempt mFindings mBaseline = do
             case mWt of
                 Left err -> pure (Left err)
                 Right wt -> do
-                    createDirectoryIfMissing True (wt </> T.unpack (dcScratchDir dcfg))
+                    absScratch <- resolveScratch wt dcfg
+                    createDirectoryIfMissing True absScratch
 
                     RD.insertDispatch
                         conn
@@ -241,7 +251,7 @@ doRealAttempt conn req attempt mFindings mBaseline = do
                             , RD.ndPid = Nothing
                             }
 
-                    prompt <- buildPrompt conn task mAgreement mFindings
+                    prompt <- buildPrompt conn task absScratch mAgreement mFindings
 
                     let dx =
                             DispatchCtx
@@ -299,9 +309,11 @@ doRealAttempt conn req attempt mFindings mBaseline = do
 
 {- | @mAgreement@ is the loaded agreement_path content (Nothing = built-in),
 appended after the shared task content — see 'agreementSection'.
+@absScratch@ is the worker's scratch directory, already resolved: the
+prompt names the path, never an env var (see 'scratchSection').
 -}
-buildPrompt :: Connection -> Task -> Maybe Text -> Maybe Text -> IO Text
-buildPrompt conn t mAgreement mFindings = do
+buildPrompt :: Connection -> Task -> FilePath -> Maybe Text -> Maybe Text -> IO Text
+buildPrompt conn t absScratch mAgreement mFindings = do
     refs <- RE.referencedContexts conn (taskId t)
     cats <- RC.taskCategoriesFor conn (taskId t)
     catMatch <- RCx.categoryMatchedContexts conn cats 5
@@ -310,7 +322,11 @@ buildPrompt conn t mAgreement mFindings = do
         mapM_ (TIO.hPutStrLn stderr) (untaggedPromptWarning (taskId t))
     let refIds = map contextId refs
         dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-        base = renderTaskPrompt t refs dedupedCat deps <> agreementSection mAgreement
+        base =
+            renderTaskPrompt t refs dedupedCat deps
+                <> agreementSection mAgreement
+                <> "\n"
+                <> scratchSection absScratch
     pure $ case mFindings of
         Nothing -> base
         Just f -> base <> "\n## Reviewer findings from previous attempt\n\n" <> f <> "\n"
