@@ -1,6 +1,7 @@
 module Icarium.Commands.Util (
     -- * Errors
     fatal,
+    lockBusy,
     resolveOrFatal,
     requireConfig,
 
@@ -73,6 +74,16 @@ fatal :: Int -> String -> IO a
 fatal code msg = do
     hPutStrLn stderr ("icarium: error: " <> msg)
     exitWith (ExitFailure code)
+
+{- | Exit for a claim that never got the database write lock. Code 3 —
+operational failure — because exit 1 is how the claim commands say "no work",
+and a caller that reads a lost race as an empty queue stops when it should
+retry. @retry@ is the command to run again.
+-}
+lockBusy :: String -> IO a
+lockBusy retry =
+    fatal 3 $
+        "another process holds the database write lock; nothing was claimed. Retry: " <> retry
 
 {- | Run an IO action returning Either; exit fatally with code 1 (the
 convention for ID-resolution failures) and the Left's message, or

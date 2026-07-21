@@ -51,7 +51,7 @@ parser =
             <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP Done)
             <> subcmd "rm" "Delete a task" (Rm <$> rmP)
             <> subcmd "next" "Print the next ready-interactive task id; exit 1 if empty. Same row as the head of `task queue --interactive`." (Next <$> nextP)
-            <> subcmd "claim" "Atomically claim a task: marks it in-progress, stamps an owner, prints its id. With TASK_ID, claims that task if it is in either ready state. Without, takes the head of the ready-interactive queue; exit 1 if empty." (Claim <$> claimP)
+            <> subcmd "claim" "Atomically claim a task: marks it in-progress, stamps an owner, prints its id. With TASK_ID, claims that task if it is in either ready state. Without, takes the head of the ready-interactive queue; exit 1 if empty, exit 3 if the database write lock stayed busy (retry)." (Claim <$> claimP)
             <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
             <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
             <> subcmd "exists" "Check whether a task id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
@@ -492,16 +492,16 @@ runClaim db o = do
         fatal 2 "--owner must not be empty"
     withDb db $ \c -> do
         owner <- maybe defaultOwner pure (clOwner o)
-        mt <- case clId o of
+        mtid <- traverse (resolveOrFatal . RT.resolveTaskId c) (clId o)
+        res <- case mtid of
             Nothing -> RT.claimNextTask c [ReadyInteractive] owner
-            Just raw -> do
-                tid <- resolveOrFatal (RT.resolveTaskId c raw)
-                claimed <- RT.claimReadyTask c tid owner
-                when (isNothing claimed) (refuseClaim c tid)
-                pure claimed
-        case mt of
-            Nothing -> exitWith (ExitFailure 1)
-            Just t -> TIO.putStrLn (taskId t)
+            Just tid -> RT.claimReadyTask c tid owner
+        case res of
+            RT.Claimed t -> TIO.putStrLn (taskId t)
+            RT.LockBusy -> lockBusy "icarium task claim"
+            -- Exit 1 with no output is the empty-queue signal scripts read;
+            -- a named task that was refused gets the reason instead.
+            RT.NoCandidate -> maybe (exitWith (ExitFailure 1)) (refuseClaim c) mtid
 
 -- | Only reached when the claim was refused; report the state that refused it.
 refuseClaim :: Connection -> Text -> IO ()

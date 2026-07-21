@@ -9,6 +9,7 @@ module Icarium.Repo.Task (
     resolveTaskId,
     listTasks,
     queueTasks,
+    ClaimResult (..),
     claimNextTask,
     claimReadyTask,
     claimTask,
@@ -22,6 +23,8 @@ module Icarium.Repo.Task (
     taskExists,
 ) where
 
+import Control.Concurrent (threadDelay)
+import Control.Exception (throwIO, try)
 import Control.Monad (void, when)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -31,11 +34,15 @@ import Database.SQLite.Simple (
     Only (..),
     Query (..),
     SQLData (..),
+    SQLError (..),
     execute,
+    execute_,
     query,
     query_,
     withImmediateTransaction,
  )
+import Database.SQLite3 (Error (..))
+import GHC.Clock (getMonotonicTime)
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
@@ -139,19 +146,67 @@ selectTasks conn tbl ord filterStates cats = do
         cs -> " WHERE " <> T.intercalate " AND " cs
     buildQ t o = Query $ "SELECT " <> taskCols "" <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
 
-{- | Take the head of the queue formed by @states@, mark it in-progress and
-stamp @owner@ on it. Returns the claimed task as it now stands, or Nothing
-when that queue is empty. Dispatch passes 'ReadyHeadless'; the interactive CLI
-passes 'ReadyInteractive'.
+{- | What a claim attempt found. 'NoCandidate' is an answer — the queue is
+empty, or the named task is not claimable. 'LockBusy' is not: the write lock
+never came free, so the queue's contents are still unknown. Callers that
+collapse the two report an empty queue to a caller that should retry.
+-}
+data ClaimResult
+    = Claimed Task
+    | NoCandidate
+    | LockBusy
+    deriving (Show)
+
+{- | Run a claim inside @BEGIN IMMEDIATE@, retrying while SQLite says busy.
 
 @BEGIN IMMEDIATE@ acquires the write lock before the read, so concurrent
 claims serialise and the loser re-reads a queue the winner has already
 shortened. A deferred transaction (sqlite-simple's @withTransaction@)
 would not do: both callers would read the same head row, then one would
 fail to upgrade its read lock — which @busy_timeout@ cannot resolve.
+
+@busy_timeout@ (see "Icarium.Db") waits out a lock held by a slow writer,
+but SQLite refuses to wait at all on a WAL snapshot conflict or a lock lost
+between the BEGIN and the COMMIT. There the only cure is to start the
+transaction over, which is what the backoff below does; exhausting it means
+'LockBusy', never 'NoCandidate'.
+
+The deadline bounds the whole thing: an attempt that burned the 5s
+@busy_timeout@ has already waited out a slow writer, and stacking seven more
+of those would hang a claim for most of a minute to no purpose.
 -}
-claimNextTask :: Connection -> [TaskState] -> Text -> IO (Maybe Task)
-claimNextTask conn states owner = withImmediateTransaction conn $ do
+withClaimLock :: Connection -> IO (Maybe Task) -> IO ClaimResult
+withClaimLock conn act = do
+    started <- getMonotonicTime
+    go started [5000, 10000, 20000, 40000, 80000, 160000, 320000]
+  where
+    go started delays = do
+        r <- try (withImmediateTransaction conn act)
+        case r of
+            Right (Just t) -> pure (Claimed t)
+            Right Nothing -> pure NoCandidate
+            Left e
+                | sqlError e `notElem` [ErrorBusy, ErrorLocked] -> throwIO e
+                | otherwise -> do
+                    -- sqlite-simple rolls back only when the action threw, so a
+                    -- busy COMMIT leaves the transaction open and the retry would
+                    -- die on "cannot start a transaction within a transaction".
+                    void (try (execute_ conn "ROLLBACK") :: IO (Either SQLError ()))
+                    now <- getMonotonicTime
+                    case delays of
+                        (d : rest) | now - started < claimRetryBudget -> threadDelay d >> go started rest
+                        _ -> pure LockBusy
+
+-- | Seconds a claim may spend retrying a busy write lock before giving up.
+claimRetryBudget :: Double
+claimRetryBudget = 5
+
+{- | Take the head of the queue formed by @states@, mark it in-progress and
+stamp @owner@ on it. Dispatch passes 'ReadyHeadless'; the interactive CLI
+passes 'ReadyInteractive'.
+-}
+claimNextTask :: Connection -> [TaskState] -> Text -> IO ClaimResult
+claimNextTask conn states owner = withClaimLock conn $ do
     rows <-
         query
             conn
@@ -170,13 +225,13 @@ claimNextTask conn states owner = withImmediateTransaction conn $ do
             getTask conn tid
 
 {- | Claim a *named* task, provided it is still in a ready-ish state.
-Returns Nothing when it is not — the caller reports why. Unlike
+'NoCandidate' when it is not — the caller reports why. Unlike
 'claimNextTask' this ignores the deps gate: naming the task is the
 selection, and the same lock discipline keeps the state test and the stamp
 atomic against a racing queue claim.
 -}
-claimReadyTask :: Connection -> Text -> Text -> IO (Maybe Task)
-claimReadyTask conn tid owner = withImmediateTransaction conn $ do
+claimReadyTask :: Connection -> Text -> Text -> IO ClaimResult
+claimReadyTask conn tid owner = withClaimLock conn $ do
     rows <-
         query
             conn
@@ -196,8 +251,8 @@ run TASK_ID@ re-runs tasks that are blocked or already in progress, so a
 compare-and-swap on 'ReadyHeadless' would refuse the cases it exists to serve;
 naming the task is itself the selection.
 -}
-claimTask :: Connection -> Text -> Text -> IO (Maybe Task)
-claimTask conn tid owner = do
+claimTask :: Connection -> Text -> Text -> IO ClaimResult
+claimTask conn tid owner = withClaimLock conn $ do
     stampClaim conn tid owner
     getTask conn tid
 

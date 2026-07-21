@@ -52,6 +52,8 @@ Used by `/wayfinder`. Maps onto icarium primitives:
 - **Frontier + claim**: `icarium task claim` — atomically takes the next
   unblocked `ready_interactive` task (safe with concurrent agents).
   `icarium task claim <id>` takes a named task in either ready state.
+  Exit 1 means the queue is empty; exit 3 means the write lock stayed busy
+  and the queue is still unknown — retry rather than concluding "no work".
 - **Resolve**: append the answer under `## Answer` in the body,
   `icarium task done <id>`, then add the gist + task id to the map's
   Decisions-so-far.

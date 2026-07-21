@@ -1,6 +1,7 @@
 module RepoSpec (tests) where
 
-import Control.Exception (SomeException, try)
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forM, forM_, void)
 import Data.Either (isLeft)
 import Data.Maybe (isJust, isNothing)
@@ -11,7 +12,7 @@ import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 import Icarium.Commands.Category (SyncReport (..), syncCategories)
 import Icarium.Commands.Ctx (autoDeriveDeps)
@@ -35,7 +36,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Search (ParsedQuery (..), Term (..), parseQuery)
 import Icarium.Repo.Search qualified as RS
 import Icarium.Repo.Task qualified as RT
-import Icarium.Schema (execSql, schemaSql, schemaVersion)
+import Icarium.Schema (applySchema, execSql, schemaSql, schemaVersion)
 import Icarium.Types
 
 import TestHelpers
@@ -119,6 +120,8 @@ tests =
             , testCase "claimNextTask honours the state filter" testClaimNextTaskStateFiltered
             , testCase "claimReadyTask claims a named task in either ready state" testClaimReadyTaskNamed
             , testCase "claimReadyTask refuses a task that is not ready-ish" testClaimReadyTaskRefusesNonReady
+            , testCase "a busy write lock is not an empty queue" testClaimReportsLockBusy
+            , testCase "a claim retries until the write lock frees" testClaimRetriesUntilLockFrees
             , testCase "migration 15 widens the state CHECK and the view" testMigration15ReadyInteractive
             , testCase "migration 16 renames ready rows and recreates the view" testMigration16ReadyHeadless
             ]
@@ -1654,6 +1657,13 @@ testInteractiveDepsGated = withTestDb $ \c -> do
     ready' <- map taskId <$> RT.queueTasks c [ReadyInteractive]
     ready' @?= [dependent]
 
+-- | Uncontended claims can only be Claimed or NoCandidate; drop to a Maybe.
+claimedTask :: RT.ClaimResult -> Maybe Task
+claimedTask = \case
+    RT.Claimed t -> Just t
+    RT.NoCandidate -> Nothing
+    RT.LockBusy -> error "LockBusy on a connection nothing else is using"
+
 {- | Dispatch and the interactive CLI share one claim path and differ only
 in which states they will take.
 -}
@@ -1662,9 +1672,9 @@ testClaimNextTaskStateFiltered = withTestDb $ \c -> do
     interactive <- mkTask c "Interactive work" ReadyInteractive
 
     headlessClaim <- RT.claimNextTask c [ReadyHeadless] "dispatch"
-    assertBool "headless queue does not see interactive work" (isNothing headlessClaim)
+    assertBool "headless queue does not see interactive work" (isNothing (claimedTask headlessClaim))
 
-    claimed <- RT.claimNextTask c [ReadyInteractive] "human"
+    claimed <- claimedTask <$> RT.claimNextTask c [ReadyInteractive] "human"
     fmap taskId claimed @?= Just interactive
     fmap taskState claimed @?= Just InProgress
 
@@ -1673,11 +1683,11 @@ testClaimReadyTaskNamed = withTestDb $ \c -> do
     headless <- mkTask c "Headless work" ReadyHeadless
     interactive <- mkTask c "Interactive work" ReadyInteractive
 
-    h <- RT.claimReadyTask c headless "human"
+    h <- claimedTask <$> RT.claimReadyTask c headless "human"
     fmap taskState h @?= Just InProgress
     fmap taskClaimedBy h @?= Just (Just "human")
 
-    i <- RT.claimReadyTask c interactive "human"
+    i <- claimedTask <$> RT.claimReadyTask c interactive "human"
     fmap taskState i @?= Just InProgress
 
 -- | Naming a task selects it; it does not license claiming unready work.
@@ -1685,9 +1695,49 @@ testClaimReadyTaskRefusesNonReady :: IO ()
 testClaimReadyTaskRefusesNonReady = withTestDb $ \c -> do
     planned <- mkTask c "Under-specified" Planned
     r <- RT.claimReadyTask c planned "human"
-    assertBool "planned task refused" (isNothing r)
+    assertBool "planned task refused" (isNothing (claimedTask r))
     still <- RT.getTask c planned
     fmap taskState still @?= Just Planned
+
+{- | Two connections onto one file DB, neither with a busy_timeout, so a
+held write lock surfaces as SQLITE_BUSY immediately — the contention the
+retry has to survive, without the wall-clock wait a real timeout adds.
+-}
+withRacingConns :: (Connection -> Connection -> IO a) -> IO a
+withRacingConns act =
+    withSystemTempFile "icarium-race.db" $ \path h -> do
+        hClose h
+        bracket (open path) close $ \claimer -> do
+            applySchema claimer
+            migrateDb claimer
+            bracket (open path) close (act claimer)
+
+{- | An empty queue and a lock we could not take are different answers.
+Conflating them made `task claim` exit 1 — the empty-queue signal — while
+four ready tasks sat in the queue.
+-}
+testClaimReportsLockBusy :: IO ()
+testClaimReportsLockBusy = withRacingConns $ \claimer holder -> do
+    _ <- mkTask claimer "Contended work" ReadyInteractive
+    execute_ holder "BEGIN IMMEDIATE"
+    r <- RT.claimNextTask claimer [ReadyInteractive] "human"
+    case r of
+        RT.LockBusy -> pure ()
+        other -> assertFailure ("expected LockBusy, got " <> show other)
+    execute_ holder "ROLLBACK"
+
+-- | A lock held only briefly must still yield a claim, not LockBusy.
+testClaimRetriesUntilLockFrees :: IO ()
+testClaimRetriesUntilLockFrees = withRacingConns $ \claimer holder -> do
+    tid <- mkTask claimer "Contended work" ReadyInteractive
+    execute_ holder "BEGIN IMMEDIATE"
+    _ <- forkIO (threadDelay 50000 >> execute_ holder "ROLLBACK")
+    r <- RT.claimNextTask claimer [ReadyInteractive] "human"
+    case r of
+        RT.Claimed t -> do
+            taskId t @?= tid
+            taskState t @?= InProgress
+        other -> assertFailure ("expected a claim, got " <> show other)
 
 {- | Migration 15 rebuilds `tasks` to widen its state CHECK. Existing rows
 and the child FKs must survive the rebuild, and the recreated view must

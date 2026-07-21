@@ -134,11 +134,12 @@ runRun db o = do
                 -- A dry run previews; it must not move the task.
                 mt <-
                     if rDryRun o
-                        then RT.getTask c tid
+                        then maybe RT.NoCandidate RT.Claimed <$> RT.getTask c tid
                         else defaultOwner >>= RT.claimTask c tid
                 case mt of
-                    Nothing -> fatal 1 ("task not found: " <> T.unpack tid)
-                    Just task -> do
+                    RT.NoCandidate -> fatal 1 ("task not found: " <> T.unpack tid)
+                    RT.LockBusy -> lockBusy ("icarium dispatch run " <> T.unpack tid)
+                    RT.Claimed task -> do
                         eres <-
                             D.dispatch
                                 c
@@ -213,11 +214,14 @@ drainLoop ctx !i
         -- Headless only: 'ready_interactive' is work a human must do.
         mt <-
             if rDryRun opts
-                then listToMaybe <$> RT.queueTasks conn [ReadyHeadless]
+                then maybe RT.NoCandidate RT.Claimed . listToMaybe <$> RT.queueTasks conn [ReadyHeadless]
                 else defaultOwner >>= RT.claimNextTask conn [ReadyHeadless]
         case mt of
-            Nothing -> hPutStrLn stderr "icarium: ready queue empty; stopping"
-            Just t -> do
+            RT.NoCandidate -> hPutStrLn stderr "icarium: ready queue empty; stopping"
+            -- Not an empty queue: stopping the drain here would silently leave
+            -- ready work behind, so fail loudly instead.
+            RT.LockBusy -> lockBusy "icarium dispatch run"
+            RT.Claimed t -> do
                 hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
                 eres <-
                     D.dispatch
