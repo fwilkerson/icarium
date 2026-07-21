@@ -12,9 +12,11 @@ matters because dispatch runs concurrent icarium processes: a clock-seeded
 generator would hand identical IDs to two processes starting in the same
 millisecond.
 
-IDs generated within a single millisecond are not monotonic with respect to
-each other — the spec's monotonic factory is not implemented, and nothing
-orders by id.
+Callers compare ids to tell which entity is newer. That works across CLI
+invocations because startup is ~20ms against a 1ms timestamp field, so no
+two invocations share a timestamp. It does not hold within one process: ids
+minted in the same millisecond order randomly. A path that mints several ids
+per process needs the spec's monotonic factory, which is not implemented.
 -}
 module Icarium.Id (
     newId,

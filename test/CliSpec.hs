@@ -9,7 +9,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace, toLower)
 import Data.Foldable (toList)
-import Data.List (dropWhileEnd, isInfixOf, isPrefixOf, sort, tails)
+import Data.List (dropWhileEnd, isInfixOf, isPrefixOf, nub, sort, tails)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
@@ -87,6 +87,7 @@ tests =
         [ testCase "--version prints icarium <semver> and exits 0" testVersion
         , testCase "-V short form works" testVersionShort
         , testCase "task add/list/show roundtrip" testTaskRoundtrip
+        , testCase "task ids sort into creation order" testTaskIdsSortByCreation
         , testCase "task update --state changes state" testTaskUpdateState
         , testCase "task list --limit caps rows" testTaskListLimit
         , testCase "ctx list --limit caps rows" testCtxListLimit
@@ -275,6 +276,22 @@ testTaskRoundtrip = withTempDb $ \db -> do
     sCode @?= ExitSuccess
     assertBool "show contains full id" (tid `isInfixOf` sOut)
     assertBool "show contains title" ("My roundtrip task" `isInfixOf` sOut)
+
+{- | Agents compare task ids to tell which task is newer, so ids must sort
+into creation order. That holds because separate invocations land in
+different milliseconds — startup is ~20ms against a 1ms timestamp field —
+not because generation is monotonic. A bulk path minting several ids inside
+one process would break this and need the spec's monotonic factory.
+-}
+testTaskIdsSortByCreation :: IO ()
+testTaskIdsSortByCreation = withTempDb $ \db -> do
+    ids <- forM [1 .. 5 :: Int] $ \i -> do
+        (code, out, _) <- runIcarium db ["task", "add", "Ordered " ++ show i]
+        code @?= ExitSuccess
+        pure (head (words out))
+    assertBool "ids are 26-char ULIDs" (all ((== 26) . length) ids)
+    assertEqual "ids are distinct" 5 (length (nub ids))
+    assertEqual "ids sort into creation order" ids (sort ids)
 
 testTaskUpdateState :: IO ()
 testTaskUpdateState = withTempDb $ \db -> do
