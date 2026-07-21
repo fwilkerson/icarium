@@ -148,31 +148,16 @@ runAdd db o = withDb db $ \c -> do
 {- | If no explicit --derived-from was supplied and ICARIUM_TASK_ID is set,
 returns a singleton edge pointing at the dispatched task.
 Explicit list non-empty → empty result (explicit wins).
-Task missing/ambiguous → warns to stderr and returns empty.
+
+A miss is silent: dispatch injects the full task id, so there is no prefix
+left to fail to resolve and nothing actionable to warn about.
 -}
 autoDeriveDeps :: Connection -> [Text] -> Maybe String -> IO [(NodeKind, Text)]
 autoDeriveDeps _ (_ : _) _ = pure []
 autoDeriveDeps _ [] Nothing = pure []
 autoDeriveDeps c [] (Just tid) = do
-    tasks <- RT.getTasksByPrefix c (T.pack tid)
-    case tasks of
-        [t] -> pure [(TaskNode, taskId t)]
-        [] -> do
-            hPutStrLn
-                stderr
-                ( "warn: ICARIUM_TASK_ID="
-                    <> tid
-                    <> " not found; skipping auto derived-from edge"
-                )
-            pure []
-        _ -> do
-            hPutStrLn
-                stderr
-                ( "warn: ICARIUM_TASK_ID="
-                    <> tid
-                    <> " ambiguous; skipping auto derived-from edge"
-                )
-            pure []
+    mt <- RT.getTask c (T.pack tid)
+    pure [(TaskNode, taskId t) | t <- maybe [] pure mt]
 
 -- =============================================================
 -- list

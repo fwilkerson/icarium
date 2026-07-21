@@ -1,6 +1,6 @@
 module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
 
-import Control.Monad (forM, forM_, mfilter, unless, void, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.Either (fromRight)
 import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.List (nub)
@@ -21,8 +21,8 @@ import Icarium.Dispatch.LogResult (
     LogUsage (..),
     fmtMs,
     readLogResult,
-    trimResult,
  )
+import Icarium.Dispatch.Payload (WorkerPayload (..), workerStatusText)
 import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
@@ -156,7 +156,7 @@ runRun db o = do
                                 release c o task
                                 fatal 3 (T.unpack (worktreeErrorText err))
                             Right res -> do
-                                D.applyOutcomeToTask c task res
+                                D.applyOutcomeToTask c db task res
                                 summarize res
                                 autoMerge cfg c res >>= mapM_ (uncurry reportSingleAutoMerge)
         Nothing -> do
@@ -243,7 +243,7 @@ drainLoop ctx !i
                         release conn opts t
                         fatal 3 (T.unpack (worktreeErrorText err))
                     Right res -> do
-                        D.applyOutcomeToTask conn t res
+                        D.applyOutcomeToTask conn db t res
                         TIO.hPutStrLn stderr $
                             "icarium: "
                                 <> dispatchOutcomeText (D.dresOutcome res)
@@ -323,6 +323,7 @@ printSummary r = do
     TIO.putStrLn $ "outcome:  " <> dispatchOutcomeText (D.dresOutcome r)
     TIO.putStrLn $ "branch:   " <> D.dresBranch r
     TIO.putStrLn $ "notes:    " <> D.dresNotes r
+    forM_ (D.dresPayload r) $ \p -> TIO.putStrLn $ "worker:   " <> workerLine p
     case D.dresLogPath r of
         Nothing -> pure ()
         Just lp -> do
@@ -339,9 +340,6 @@ printSummary r = do
                         , "cost:     " <> maybe "-" (T.pack . printf "$%.4f") (lrCostUsd lr)
                         , "tokens:   " <> fmtTokens (lrUsage lr)
                         ]
-                    case mfilter (not . T.null) (lrResultText lr) of
-                        Nothing -> pure ()
-                        Just t -> TIO.putStrLn $ "result:   " <> trimResult t
     case D.dresBaseSha r of
         Nothing -> pure ()
         Just sha -> do
@@ -360,6 +358,13 @@ printSummary r = do
                         allItems = shown ++ extraLine
                     TIO.putStrLn $ "files:    " <> T.intercalate ("\n" <> pad) allItems
   where
+    workerLine p =
+        T.intercalate "; " $
+            [workerStatusText (wpStatus p) <> maybe "" (": " <>) (wpBlockReason p)]
+                <> [ T.pack (show n) <> " for future agents"
+                   | let n = length (wpForFutureAgents p)
+                   , n > 0
+                   ]
     fmtTokens Nothing = "-"
     fmtTokens (Just u) =
         "in "

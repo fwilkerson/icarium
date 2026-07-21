@@ -3,7 +3,6 @@ module Icarium.Dispatch.LogResult (
     LogResult (..),
     readLogResult,
     fmtMs,
-    trimResult,
 ) where
 
 import Data.Aeson (FromJSON (..), decode, withObject, (.:?))
@@ -65,9 +64,3 @@ fmtMs :: Int -> Text
 fmtMs ms
     | ms >= 1000 = T.pack (printf "%.1fs" (fromIntegral ms / 1000.0 :: Double))
     | otherwise = T.pack (show ms) <> "ms"
-
-trimResult :: Text -> Text
-trimResult t =
-    let ls = filter (not . T.null) (T.lines t)
-        lastLine = case ls of [] -> t; _ -> last ls
-     in if T.length lastLine > 200 then T.take 197 lastLine <> "..." else lastLine

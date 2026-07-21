@@ -55,6 +55,7 @@ import System.Timeout (timeout)
 
 import Icarium.Config (DispatchConfig (..))
 import Icarium.Db (openDb)
+import Icarium.Dispatch.Payload (jsonSchemaArgs, workerSchema)
 import Icarium.Dispatch.Tick (TickAction (..), TickState (..), emptyTickState, summariseTick)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Types
@@ -101,6 +102,9 @@ so the two can't drift out of sync with each other.
 
 @--disable-slash-commands@ is derived from @tools@: listing @Skill@ opts the
 worker into slash commands and skills (ADR 0003).
+
+@--json-schema@ makes the final message a validated 'workerSchema' payload
+rather than prose; the gate ingests it in 'Icarium.Dispatch.Outcome.applyOutcomeToTask'.
 -}
 claudeArgs :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> [Text]
 claudeArgs model effort tools allowed mcpConfig =
@@ -123,6 +127,7 @@ claudeArgs model effort tools allowed mcpConfig =
            , "--strict-mcp-config"
            ]
         ++ maybe [] (\p -> ["--mcp-config", p]) mcpConfig
+        ++ jsonSchemaArgs workerSchema
 
 runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode
 runClaudeStreaming ctx dcfg = do

@@ -15,7 +15,6 @@ tests =
     testGroup
         "LogResult"
         [ testGroup "fmtMs" testFmtMs
-        , testGroup "trimResult" testTrimResult
         , testGroup "readLogResult" testReadLogResult
         ]
 
@@ -34,29 +33,6 @@ testFmtMs =
         , (1500, "1.5s")
         , (10000, "10.0s")
         ]
-    ]
-
--- =============================================================
--- trimResult
--- =============================================================
-
-testTrimResult :: [TestTree]
-testTrimResult =
-    [ testCase "empty input returns empty" $
-        trimResult "" @?= ""
-    , testCase "single short line returned as-is" $
-        trimResult "done" @?= "done"
-    , testCase "multi-line returns last non-empty line" $
-        trimResult "first\nsecond\nthird" @?= "third"
-    , testCase "trailing blank lines skipped" $
-        trimResult "first\nlast\n\n" @?= "last"
-    , testCase ">200 chars truncated with ellipsis" $ do
-        let long = T.replicate 201 "x"
-        assertBool "ends with ..." (T.isSuffixOf "..." (trimResult long))
-        trimResult long @?= T.replicate 197 "x" <> "..."
-    , testCase "exactly 200 chars not truncated" $ do
-        let exact = T.replicate 200 "x"
-        trimResult exact @?= exact
     ]
 
 -- =============================================================

@@ -9,7 +9,7 @@ module Icarium.Dispatch.PostClaude (
     runGates,
 ) where
 
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, mfilter, void)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
 import Data.Maybe (fromMaybe)
@@ -24,7 +24,9 @@ import System.Process.Typed (runProcess, setWorkingDir, shell)
 import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), ReviewConfig (..))
 import Icarium.Dispatch.BodyDiff (bodyChanged, diffBody, renderBodyReport)
+import Icarium.Dispatch.LogResult (LogResult (..), readLogResult)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
+import Icarium.Dispatch.Payload (WorkerPayload (..), WorkerStatus (..), decodeWorkerPayload)
 import Icarium.Dispatch.Reviewer (ReviewResult (..), runReviewer)
 import Icarium.Git qualified as Git
 import Icarium.Node (createContextWithBody)
@@ -91,6 +93,7 @@ handlePostClaudeImpl ::
     FilePath ->
     IO PostClaudeResult
 handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
+    mPayload <- readWorkerPayload logPath
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
@@ -107,14 +110,25 @@ handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
                     , faRetention = ret
                     , faLogPath = Just logPath
                     , faBaseSha = Just baseSha
+                    , faPayload = mPayload
                     }
         checkExit = case exit of
             ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
             ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
             ExitSuccess -> pure ()
+        -- A block is the worker's one unilateral claim (ADR 0008): it did not
+        -- deliver the task, so the dispatch did not succeed and its branch must
+        -- not auto-merge. Checked ahead of the guards so the recorded note is
+        -- the worker's own reason rather than the generic "made no commits".
+        checkWorkerBlocked = case mPayload of
+            Just p
+                | WBlocked <- wpStatus p ->
+                    throwE ("worker blocked: " <> fromMaybe "no reason given" (wpBlockReason p))
+            _ -> pure ()
         -- Returns Nothing for no-commit success, Just () when gates passed.
         preStep = do
             checkExit
+            checkWorkerBlocked
             porcelain <- liftIO (Git.statusPorcelain wt)
             mBranchSha <- liftIO (Git.revParse wt branch)
             mapM_ throwE (postClaudeGuard noCommit porcelain mBranchSha baseSha)
@@ -200,6 +214,22 @@ runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
                     writeWarnContextEntry conn db task cats (rrFindings rr)
                 _ -> pure ()
             pure (PCDone dr)
+
+{- | The worker's final message is a 'workerSchema' payload, validated by the
+harness. Absent means it never reached a final message (timeout, kill);
+undecodable means @--json-schema@ did not take, which is worth saying out loud
+because every mutation the payload implies is silently skipped.
+-}
+readWorkerPayload :: FilePath -> IO (Maybe WorkerPayload)
+readWorkerPayload logPath = do
+    mLR <- readLogResult logPath
+    case mfilter (not . T.null) (mLR >>= lrResultText) of
+        Nothing -> pure Nothing
+        Just txt -> case decodeWorkerPayload txt of
+            Right p -> pure (Just p)
+            Left e -> do
+                hPutStrLn stderr ("icarium: worker payload not decodable: " <> T.unpack e)
+                pure Nothing
 
 writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> Text -> IO ()
 writeWarnContextEntry conn db task cats findings = do

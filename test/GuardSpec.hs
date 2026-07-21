@@ -94,6 +94,8 @@ testClaudeArgsPermissionMode = do
     assertBool "adjacent --output-format stream-json" (hasAdjacentPair "--output-format" "stream-json" args)
     assertBool "--strict-mcp-config present" ("--strict-mcp-config" `elem` args)
     assertBool "no --mcp-config when key absent" ("--mcp-config" `notElem` args)
+    -- The gate ingests the worker's final message, so it must be constrained.
+    assertBool "--json-schema present" ("--json-schema" `elem` args)
     let argsWithMcp = claudeArgs "claude-sonnet-4-6" Medium ["Read", "Edit"] ["Read"] (Just ".mcp.json")
     assertBool
         "adjacent --mcp-config <path> when key set"

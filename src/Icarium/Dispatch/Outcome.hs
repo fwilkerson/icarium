@@ -7,13 +7,18 @@ module Icarium.Dispatch.Outcome (
     pruneLogFiles,
 ) where
 
-import Control.Monad (void, when)
+import Control.Monad (forM_, void, when)
 import Data.Text (Text)
 import Database.SQLite.Simple (Connection)
 import System.Directory (doesFileExist, removeFile)
 
+import Icarium.Dispatch.Payload (FutureNote (..), WorkerPayload (..))
 import Icarium.Git qualified as Git
+import Icarium.Node (createContextWithBody)
+import Icarium.Repo.Category qualified as RC
+import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -34,6 +39,10 @@ data DispatchResult = DispatchResult
     , dresNotes :: Text
     , dresLogPath :: Maybe FilePath
     , dresBaseSha :: Maybe Text
+    , dresPayload :: Maybe WorkerPayload
+    {- ^ The worker's schema-validated return; 'Nothing' when it never got as
+    far as a final message (timeout, kill) or emitted something undecodable.
+    -}
     }
 
 data FinishArgs = FinishArgs
@@ -43,10 +52,11 @@ data FinishArgs = FinishArgs
     , faRetention :: Int
     , faLogPath :: Maybe FilePath
     , faBaseSha :: Maybe Text
+    , faPayload :: Maybe WorkerPayload
     }
 
 finishWith :: DispatchCtx -> FinishArgs -> IO DispatchResult
-finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha} = do
+finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha, faPayload = mPayload} = do
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
@@ -79,6 +89,7 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
             , dresNotes = enrichedNotes
             , dresLogPath = mLogPath
             , dresBaseSha = mBaseSha
+            , dresPayload = mPayload
             }
 
 pruneLogFiles :: Connection -> Int -> IO ()
@@ -90,19 +101,32 @@ pruneLogFiles conn retention = do
         exists <- doesFileExist p
         when exists (removeFile p)
 
-{- | Reconcile task state with the dispatch outcome. Intended to be
+{- | Perform every tracker mutation the dispatch implies. Intended to be
 called from the CLI layer after @dispatch@ returns.
 
-* success and task still 'ready' -> mark 'done' (the agent
-  presumably didn't self-update; we don't want to re-pick it).
-* failure -> mark 'blocked' with the dispatch notes as reason.
+State:
+
+* success and task still in flight -> mark 'done' (the agent no longer
+  self-updates; we don't want to re-pick it).
+* failure -> mark 'blocked' with the dispatch notes as reason. A worker that
+  reported @blocked@ arrives here as a failure, carrying its own
+  @block_reason@ as those notes — the gate folds the block into the outcome
+  (see 'Icarium.Dispatch.PostClaude') so that everything keyed off outcome,
+  auto-merge included, agrees with the task row.
 * interrupted -> leave to @icarium dispatch recover@.
 * dry-run (dispatch id absent) -> no-op.
+
+Then the payload's @for_future_agents@ notes, whatever the outcome: a run
+that blocked still learned something, and that is what the next attempt needs.
 -}
-applyOutcomeToTask :: Connection -> Task -> DispatchResult -> IO ()
-applyOutcomeToTask conn t res
+applyOutcomeToTask :: Connection -> FilePath -> Task -> DispatchResult -> IO ()
+applyOutcomeToTask conn db t res
     | Nothing <- dresDispatchId res = pure ()
-    | otherwise = case dresOutcome res of
+    | otherwise = do
+        applyState
+        ingestFutureNotes conn db t (maybe [] wpForFutureAgents (dresPayload res))
+  where
+    applyState = case dresOutcome res of
         OSuccess -> do
             mFresh <- RT.getTask conn (taskId t)
             case mFresh of
@@ -126,3 +150,26 @@ applyOutcomeToTask conn t res
                         , RT.tuBlockReason = Just (Just (dresNotes res))
                         }
         OInterrupted -> pure ()
+
+{- | One ctx entry per note, tagged with the task's retrieval axes and linked
+back to it. The payload names no categories: the worker knows no more about
+retrieval than triage did, and a wrongly-tagged entry surfaces nowhere useful
+where a coarse one at least surfaces on the task's own axis. Axis eligibility
+is by construction — 'RC.attachContextCategory' drops what cannot ride on a
+context.
+-}
+ingestFutureNotes :: Connection -> FilePath -> Task -> [FutureNote] -> IO ()
+ingestFutureNotes _ _ _ [] = pure ()
+ingestFutureNotes conn db t notes = do
+    cats <- RC.taskCategoriesFor conn (taskId t)
+    forM_ notes $ \n -> do
+        (cid, _) <-
+            createContextWithBody
+                conn
+                db
+                RCx.NewContext
+                    { RCx.ncTitle = fnTitle n
+                    , RCx.ncBody = fnBody n
+                    }
+        forM_ cats (RC.attachContextCategory conn cid)
+        void $ RE.insertEdge conn DerivedFrom ContextNode cid TaskNode (taskId t)

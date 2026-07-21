@@ -158,20 +158,24 @@ dryRunPreview conn req task mAgreement = do
             , dresNotes = "dry-run"
             , dresLogPath = Nothing
             , dresBaseSha = Nothing
+            , dresPayload = Nothing
             }
 
-{- | Renders 'claudeArgs', quoting the comma-joined tool lists for
-human readability.
+{- | Renders 'claudeArgs' for human readability: the comma-joined tool lists
+get quoted, and the worker schema is elided. The preview exists to show what
+/varies/ with task and config — the schema is an icarium-owned constant, and
+inlining ~2 KB of JSON buries everything else on the line.
 -}
 renderCmdPreview :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> Text
 renderCmdPreview model effort tools allowed mcpConfig =
-    T.unwords ("claude" : quoteToolLists (claudeArgs model effort tools allowed mcpConfig))
+    T.unwords ("claude" : readable (claudeArgs model effort tools allowed mcpConfig))
   where
-    quoteToolLists (flag : val : rest)
+    readable (flag : val : rest)
         | flag `elem` ["--tools", "--allowedTools"] =
-            flag : ("\"" <> val <> "\"") : quoteToolLists rest
-        | otherwise = flag : quoteToolLists (val : rest)
-    quoteToolLists xs = xs
+            flag : ("\"" <> val <> "\"") : readable rest
+        | flag == "--json-schema" = flag : "<worker payload schema>" : readable rest
+        | otherwise = flag : readable (val : rest)
+    readable xs = xs
 
 -- =============================================================
 -- Real dispatch (with retry loop)

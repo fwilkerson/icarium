@@ -24,6 +24,7 @@ module Icarium.Dispatch.Payload (
 
     -- * Worker payload
     WorkerStatus (..),
+    workerStatusText,
     FutureNote (..),
     WorkerPayload (..),
     decodeWorkerPayload,
@@ -212,6 +213,11 @@ parseWorkerStatus = \case
     "submitted" -> Just WSubmitted
     "blocked" -> Just WBlocked
     _ -> Nothing
+
+workerStatusText :: WorkerStatus -> Text
+workerStatusText = \case
+    WSubmitted -> "submitted"
+    WBlocked -> "blocked"
 
 instance FromJSON WorkerStatus where
     parseJSON = enumFromJSON "worker status" parseWorkerStatus
