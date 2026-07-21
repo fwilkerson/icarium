@@ -211,7 +211,7 @@ writeWarnContextEntry conn db task cats findings = do
                 { RCx.ncTitle = "reviewer warn: " <> taskTitle task
                 , RCx.ncBody = findings
                 }
-    forM_ cats $ \cat -> RC.attachContextCategory conn cid (categoryId cat)
+    forM_ cats (RC.attachContextCategory conn cid)
     -- Link the note back to its task for provenance (task references ctx).
     void $ RE.insertEdge conn References TaskNode (taskId task) ContextNode cid
 

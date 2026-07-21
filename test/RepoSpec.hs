@@ -194,6 +194,7 @@ tests =
             [ testCase "task update --domain replaces existing domain" testTaskUpdateDomainReplaces
             , testCase "task update --domain empty string clears domain" testTaskUpdateDomainClears
             , testCase "ctx update --domain replaces not appends" testCtxUpdateDomainReplaces
+            , testCase "attaching a kind category to a context entry is a no-op" testContextCategoryKindBlocked
             ]
         , testGroup
             "searchEntries"
@@ -339,7 +340,7 @@ testCap = withTestDb $ \c -> do
             , "" :: Text
             , "2026-01-0" <> T.pack (show i) <> "T00:00:00" :: Text
             )
-        RC.attachContextCategory c kid (categoryId domCat)
+        RC.attachContextCategory c kid domCat
         pure kid
     result <- RK.categoryMatchedContexts c [domCat] 5
     length result @?= 5
@@ -505,7 +506,7 @@ testContextCategoriesCascade :: IO ()
 testContextCategoriesCascade = withTestDb $ \conn -> do
     domCat <- mkCat conn Domain "cli"
     kid <- mkContext conn "K" "body"
-    RC.attachContextCategory conn kid (categoryId domCat)
+    RC.attachContextCategory conn kid domCat
     pre <- query_ conn "SELECT context_id FROM context_categories" :: IO [Only Text]
     length pre @?= 1
     execute conn (Query "DELETE FROM context WHERE id = ?") (Only kid)
@@ -1087,13 +1088,23 @@ testCtxUpdateDomainReplaces = withTestDb $ \c -> do
     domA <- mkCat c Domain "domA"
     domB <- mkCat c Domain "domB"
     kid <- mkContext c "K" "body"
-    RC.attachContextCategory c kid (categoryId domA)
+    RC.attachContextCategory c kid domA
     RC.detachContextCategoriesByAxis c kid Domain
-    RC.attachContextCategory c kid (categoryId domB)
+    RC.attachContextCategory c kid domB
     cats <- RC.contextCategoriesFor c kid
     let doms = filter (\x -> categoryAxis x == Domain) cats
     length doms @?= 1
     map categoryName doms @?= ["domB"]
+
+testContextCategoryKindBlocked :: IO ()
+testContextCategoryKindBlocked = withTestDb $ \conn -> do
+    domCat <- mkCat conn Domain "cli"
+    kindCat <- mkCat conn Kind "bug"
+    kid <- mkContext conn "K" "body"
+    RC.attachContextCategory conn kid domCat
+    RC.attachContextCategory conn kid kindCat
+    cats <- RC.contextCategoriesFor conn kid
+    map categoryAxis cats @?= [Domain]
 
 -- =============================================================
 -- searchEntries tests

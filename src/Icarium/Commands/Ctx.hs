@@ -122,8 +122,7 @@ runAdd db o = withDb db $ \c -> do
                 { RCx.ncTitle = aTitle o
                 , RCx.ncBody = body
                 }
-    forM_ (catMaybes [mDomain, mDisc] <> inheritedCats) $ \cat ->
-        RC.attachContextCategory c cxid (categoryId cat)
+    forM_ (catMaybes [mDomain, mDisc] <> inheritedCats) (RC.attachContextCategory c cxid)
     forM_ (derived <> autoDerived) $ \(nkind, nid) ->
         void $ RE.insertEdge c DerivedFrom ContextNode cxid nkind nid
     case mSupersedesId of
@@ -138,12 +137,12 @@ runAdd db o = withDb db $ \c -> do
   where
     loadInherited conn tid = do
         allCats <- RC.taskCategoriesFor conn (T.pack tid)
-        pure (filter (inheritable . categoryAxis) allCats)
-    -- Only retrieval axes cross from task to context; a workflow axis
-    -- describes the work, not when the learning is relevant.
-    inheritable = \case
-        Domain -> isNothing (aDomain o)
-        Discipline -> isNothing (aDiscipline o)
+        pure (filter (not . overriddenByFlag . categoryAxis) allCats)
+    -- Which axes an explicit flag pre-empts. Axis eligibility is not decided
+    -- here: attachContextCategory drops whatever cannot ride on a context.
+    overriddenByFlag = \case
+        Domain -> isJust (aDomain o)
+        Discipline -> isJust (aDiscipline o)
         Kind -> False
 
 {- | If no explicit --derived-from was supplied and ICARIUM_TASK_ID is set,
@@ -298,10 +297,10 @@ runUpdate db o = withDb db $ \c -> do
             -- Apply replacements: detach all of that axis, then attach new one if given.
             forM_ mDomCat $ \mCat -> do
                 RC.detachContextCategoriesByAxis c cxid Domain
-                forM_ mCat $ \cat -> RC.attachContextCategory c cxid (categoryId cat)
+                forM_ mCat (RC.attachContextCategory c cxid)
             forM_ mDiscCat $ \mCat -> do
                 RC.detachContextCategoriesByAxis c cxid Discipline
-                forM_ mCat $ \cat -> RC.attachContextCategory c cxid (categoryId cat)
+                forM_ mCat (RC.attachContextCategory c cxid)
             TIO.putStrLn ("updated " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (uId o))
 

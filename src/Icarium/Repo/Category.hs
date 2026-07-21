@@ -28,7 +28,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Types (Category (..), CategoryAxis (..))
+import Icarium.Types (Category (..), CategoryAxis (..), isRetrievalAxis)
 
 insertCategory :: Connection -> CategoryAxis -> Text -> IO Text
 insertCategory conn axis name = do
@@ -96,12 +96,20 @@ attachTaskCategory conn tid cid =
         (Query "INSERT OR IGNORE INTO task_categories (task_id, category_id) VALUES (?, ?)")
         (tid, cid)
 
-attachContextCategory :: Connection -> Text -> Text -> IO ()
-attachContextCategory conn kid cid =
-    execute
-        conn
-        (Query "INSERT OR IGNORE INTO context_categories (context_id, category_id) VALUES (?, ?)")
-        (kid, cid)
+{- | Attach a category to a context entry, dropping any axis 'isRetrievalAxis'
+rejects. The gate lives here, not at the call sites: writers like the
+reviewer-warn note hand over a task's whole category list, so filtering per
+caller is a rule four places have to remember and one already got wrong. Takes
+a 'Category' — not an id — so the axis is in scope to gate on.
+-}
+attachContextCategory :: Connection -> Text -> Category -> IO ()
+attachContextCategory conn kid cat
+    | not (isRetrievalAxis (categoryAxis cat)) = pure ()
+    | otherwise =
+        execute
+            conn
+            (Query "INSERT OR IGNORE INTO context_categories (context_id, category_id) VALUES (?, ?)")
+            (kid, categoryId cat)
 
 detachTaskCategoriesByAxis :: Connection -> Text -> CategoryAxis -> IO ()
 detachTaskCategoriesByAxis conn tid axis =

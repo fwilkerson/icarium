@@ -48,7 +48,7 @@ mkContext c title body =
 
 attachContextCats :: Connection -> Text -> [Category] -> IO ()
 attachContextCats c kid cats =
-    forM_ cats $ \cat -> RC.attachContextCategory c kid (categoryId cat)
+    forM_ cats (RC.attachContextCategory c kid)
 
 minTask :: Task
 minTask =
