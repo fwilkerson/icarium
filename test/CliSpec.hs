@@ -278,10 +278,8 @@ testTaskRoundtrip = withTempDb $ \db -> do
     assertBool "show contains title" ("My roundtrip task" `isInfixOf` sOut)
 
 {- | Agents compare task ids to tell which task is newer, so ids must sort
-into creation order. That holds because separate invocations land in
-different milliseconds — startup is ~20ms against a 1ms timestamp field —
-not because generation is monotonic. A bulk path minting several ids inside
-one process would break this and need the spec's monotonic factory.
+into creation order. See "Icarium.Id" for why that holds across invocations
+but not within a single process.
 -}
 testTaskIdsSortByCreation :: IO ()
 testTaskIdsSortByCreation = withTempDb $ \db -> do

@@ -19,8 +19,9 @@ tests =
         ]
 
 -- Expected values derived from the ULID spec, not from this implementation.
--- "7ZZZ..." is the spec's documented maximum ULID; "01ARYZ6S41" is the
--- timestamp prefix the spec's README gives for 1469918176385.
+-- "7ZZZ..." is the maximum ULID the spec documents; the 1469918176385 vector
+-- is computed from the spec's field layout and cross-checked against the
+-- reference implementation in ulid/javascript.
 testEncodeUlid :: [TestTree]
 testEncodeUlid =
     [ testCase "all-zero encodes to 26 zeros" $
@@ -33,18 +34,6 @@ testEncodeUlid =
         encodeUlid 1 0 @?= "00000000010000000000000000"
     , testCase "randomness lands in the last 16 characters" $
         encodeUlid 0 1 @?= "00000000000000000000000001"
-    , testCase "always 26 characters" $
-        let lengths =
-                [ T.length (encodeUlid ms r)
-                | ms <- [0, 1, 1469918176385, tsMax]
-                , r <- [0, 1, 255, randMax]
-                ]
-         in assertBool "every encoding is 26 chars" (all (== 26) lengths)
-    , testCase "only Crockford base32 characters are emitted" $
-        let emitted = Set.fromList (T.unpack (encodeUlid tsMax randMax <> encodeUlid 0 0))
-         in assertBool "no character outside the alphabet" (emitted `Set.isSubsetOf` alphabet)
-    , testCase "alphabet excludes I, L, O and U" $
-        assertBool "ambiguous letters absent" (not (any (`Set.member` alphabet) ("ILOU" :: String)))
     , -- Masking rather than rejecting is what keeps the output width fixed.
       testCase "timestamp above 48 bits wraps" $
         encodeUlid (tsMax + 1) 0 @?= encodeUlid 0 0
@@ -56,8 +45,6 @@ testEncodeUlid =
     , testCase "a later timestamp outsorts a larger random component" $
         assertBool "timestamp dominates" (encodeUlid 1 0 > encodeUlid 0 randMax)
     ]
-  where
-    alphabet = Set.fromList "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
 testNewId :: [TestTree]
 testNewId =

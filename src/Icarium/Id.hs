@@ -1,15 +1,11 @@
-{- | ULID identifiers.
+{- | ULID identifiers. Spec: https://github.com/ulid/spec
 
-A ULID is 128 bits — a 48-bit millisecond timestamp followed by 80 bits of
-randomness — rendered as 26 Crockford base32 characters. The timestamp leads,
-so IDs sort lexicographically by creation time.
-
-Spec: https://github.com/ulid/spec
-
-Randomness comes from 'randomRIO', whose global generator splitmix seeds from
-the OS CSPRNG (@SecRandomCopyBytes@ on macOS, @getentropy@ elsewhere). That
+Randomness comes from 'randomRIO'. Under GHC, splitmix seeds its global
+generator through a C shim over the OS CSPRNG (@SecRandomCopyBytes@ on macOS,
+@getentropy@ elsewhere); the clock-based fallback visible in its @Init.hs@ is
+CPP-gated to non-GHC compilers, which is easy to misread. That distinction
 matters because dispatch runs concurrent icarium processes: a clock-seeded
-generator would hand identical IDs to two processes starting in the same
+generator would hand identical ids to two processes starting in the same
 millisecond.
 
 Callers compare ids to tell which entity is newer. That works across CLI
