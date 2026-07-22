@@ -17,7 +17,7 @@ Tests should cover the **interface and larger functional units**. Get nuanced on
 
 If a function is hard to test, that's usually a design signal — extract the pure core, then the test is easy. Don't reach for mocks first.
 
-**Run `make install` before the CLI tests.** `test/CliSpec.hs` shells out to `bin/icarium`, which `cabal build` does not produce. Skipping it fails with `posix_spawnp: does not exist` — a stale-binary problem wearing a flake's clothes. Worse, after a source change `bin/icarium` is the *previous* build until you reinstall, so a green run can be testing code you already replaced.
+**Run `make install` before the CLI tests.** The `test/Cli*Spec.hs` modules shell out to `bin/icarium`, which `cabal build` does not produce. Skipping it fails with `posix_spawnp: does not exist` — a stale-binary problem wearing a flake's clothes. Worse, after a source change `bin/icarium` is the *previous* build until you reinstall, so a green run can be testing code you already replaced.
 
 ## Code style
 

@@ -8,6 +8,7 @@ import Test.Tasty.HUnit (assertFailure, testCase, (@?=))
 
 import Icarium.Dispatch.Payload
 import Icarium.Types (ReviewVerdict (..))
+import TestHelpers (withCwdLock)
 
 tests :: TestTree
 tests =
@@ -29,9 +30,12 @@ schemaArg s = case jsonSchemaArgs s of
     ["--json-schema", v] -> v
     other -> error ("unexpected jsonSchemaArgs shape: " <> show other)
 
+-- The path is relative, so this read races the specs that chdir the whole
+-- process (GitSpec, TimeoutSpec) — under -N it loses and the file "does not
+-- exist". Reading under the same lock those specs take is the fix.
 goldenCase :: String -> FilePath -> Schema -> TestTree
 goldenCase name path s = testCase name $ do
-    expected <- T.strip <$> TIO.readFile path
+    expected <- T.strip <$> withCwdLock (TIO.readFile path)
     schemaArg s @?= expected
 
 schemaCases :: [TestTree]
