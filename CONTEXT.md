@@ -120,6 +120,13 @@ disposition is `keep`. Retired = latest disposition is `guidance`, `rule`,
 derived from curation events.
 _Avoid_: stale flag (the dropped `context.stale` column)
 
+**Supersede**:
+A context→context edge marking one entry as the newer version of another.
+Hides the older entry from `ctx list` (unless `--all`); does *not* retire it
+or stop it reaching prompts — only a `stale` disposition does that. A full
+replacement is both: the edge for the link, the disposition for the pull.
+_Avoid_: using "supersede" to mean retire (it is the link, not the retirement)
+
 **Artifact**:
 The pointer on a curation event to where the content went: a task id
 (`refactor`), rule/test name (`rule`), or doc/skill path (`guidance`).
