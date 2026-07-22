@@ -88,6 +88,11 @@ scratch_dir = ".icarium/scratch"
 
 # Wall-clock timeout per dispatch (minutes, must be a positive integer).
 max_minutes_per_dispatch = 30
+# Wall-clock timeout for each gate command (build, test) on its own. A full
+# build plus suite is not the same shape of work as one worker turn, so it
+# gets its own budget. Default 20. A gate that expires is killed with its
+# whole process tree and recorded as a timeout failure.
+max_minutes_per_gate     = 20
 heartbeat_stale_seconds  = 300
 log_retention_runs       = 25
 # Retry-storm watchdog: kill a dispatch after this many consecutive api_retry events.

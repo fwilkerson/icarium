@@ -36,6 +36,7 @@ tests =
         , testCase "raceTimeout completes before deadline" testRaceTimeoutPasses
         , testCase "zero max_minutes rejected by config" testZeroMaxMinutes
         , testCase "negative max_minutes rejected by config" testNegativeMaxMinutes
+        , testCase "zero max_minutes_per_gate rejected by config" testZeroGateMinutes
         , testCase "timeout sentinel → OFailure recorded" testTimeoutOutcome
         ]
 
@@ -63,6 +64,15 @@ testNegativeMaxMinutes =
     case validateConfig (configWith (-1)) of
         Left _ -> pure ()
         Right _ -> error "expected Left for max_minutes_per_dispatch = -1"
+
+testZeroGateMinutes :: IO ()
+testZeroGateMinutes =
+    case validateConfig (fakeConfig{cfgDispatch = (cfgDispatch fakeConfig){dcMaxMinutesPerGate = 0}}) of
+        Left msg ->
+            assertBool
+                "message names field"
+                ("max_minutes_per_gate" `T.isInfixOf` T.pack msg)
+        Right _ -> error "expected Left for max_minutes_per_gate = 0"
 
 testTimeoutOutcome :: IO ()
 testTimeoutOutcome = withTestRepo $ \dir -> withOutOfTreeDb $ \dbPath -> withTestDb $ \conn -> withCwdLock $ withCurrentDirectory dir $ do
@@ -126,6 +136,7 @@ fakeConfig =
                 , dcAllowedTools = []
                 , dcScratchDir = "/tmp"
                 , dcMaxMinutesPerDispatch = 5
+                , dcMaxMinutesPerGate = 20
                 , dcHeartbeatStaleSeconds = 300
                 , dcLogRetentionRuns = 1
                 , dcRetryStormThreshold = 3

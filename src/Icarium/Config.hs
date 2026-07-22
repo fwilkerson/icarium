@@ -61,6 +61,7 @@ data DispatchConfig = DispatchConfig
     , dcAllowedTools :: [Text]
     , dcScratchDir :: Text
     , dcMaxMinutesPerDispatch :: Int
+    , dcMaxMinutesPerGate :: Int
     , dcHeartbeatStaleSeconds :: Int
     , dcLogRetentionRuns :: Int
     , dcRetryStormThreshold :: Int
@@ -120,6 +121,7 @@ dispatchCodec =
         <*> Toml.arrayOf Toml._Text "allowed_tools" .= dcAllowedTools
         <*> Toml.text "scratch_dir" .= dcScratchDir
         <*> Toml.int "max_minutes_per_dispatch" .= dcMaxMinutesPerDispatch
+        <*> (fromMaybe 20 <$> Toml.dioptional (Toml.int "max_minutes_per_gate")) .= (Just . dcMaxMinutesPerGate)
         <*> Toml.int "heartbeat_stale_seconds" .= dcHeartbeatStaleSeconds
         <*> Toml.int "log_retention_runs" .= dcLogRetentionRuns
         <*> (fromMaybe 3 <$> Toml.dioptional (Toml.int "retry_storm_threshold")) .= (Just . dcRetryStormThreshold)
@@ -166,6 +168,8 @@ validateConfig :: Config -> Either String Config
 validateConfig c
     | dcMaxMinutesPerDispatch (cfgDispatch c) <= 0 =
         Left "dispatch.max_minutes_per_dispatch must be a positive integer"
+    | dcMaxMinutesPerGate (cfgDispatch c) <= 0 =
+        Left "dispatch.max_minutes_per_gate must be a positive integer"
     | otherwise = Right c
 
 loadConfig :: FilePath -> IO (Either String Config)
@@ -280,6 +284,10 @@ defaultConfigText =
     \scratch_dir = \".icarium/scratch\"\n\
     \# Wall-clock timeout per dispatch (minutes, must be a positive integer).\n\
     \max_minutes_per_dispatch = 30\n\
+    \# Wall-clock timeout for each gate command (build, test) on its own. A\n\
+    \# full build plus suite is not the same shape of work as one worker turn,\n\
+    \# so it gets its own budget. Default 20.\n\
+    \max_minutes_per_gate     = 20\n\
     \heartbeat_stale_seconds  = 300\n\
     \log_retention_runs       = 25\n\
     \# Retry-storm watchdog: kill dispatch after this many consecutive api_retry\n\

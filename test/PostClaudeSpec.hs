@@ -51,6 +51,7 @@ tests =
         , testCase "checkpointDirtyTree is no-op on clean tree" testCheckpointCleanTree
         , testCase "handlePostClaude failure leaves wip commit on dispatch branch" testHandlePostClaudeFailureCheckpoints
         , testCase "handlePostClaude no-commit success with agent commits is failure; branch retained" testNoCommitAgentCommittedAnyway
+        , testCase "a failing gate's note is recorded on the dispatch row" testGateFailureNoteRecorded
         , testCase "finishWith OFailure checkpoints staged changes and leaves base clean" testFinishWithWipCheckpoint
         , testCase "writeWarnContextEntry links the note back to its task" testWarnEntryLinksTask
         , testGroup
@@ -303,6 +304,7 @@ minCfg =
                 , dcAllowedTools = []
                 , dcScratchDir = "/tmp"
                 , dcMaxMinutesPerDispatch = 30
+                , dcMaxMinutesPerGate = 20
                 , dcHeartbeatStaleSeconds = 300
                 , dcLogRetentionRuns = 25
                 , dcRetryStormThreshold = 3
@@ -393,6 +395,63 @@ testHandlePostClaudeFailureCheckpoints =
                 -- a wip commit is on the dispatch branch
                 logOut <- gitIn dir ["log", T.unpack branch, "--oneline"]
                 assertBool "wip commit on dispatch branch" ("wip: dispatch" `isInfixOf` logOut)
+
+{- | A gate's own note is what the dispatch row records — the path a gate
+timeout also takes ('Icarium.Dispatch.Gate.runGate' returns the timeout as a
+'Left' note like any other gate failure), covered here with a gate that fails
+at once rather than one that burns the whole budget.
+-}
+testGateFailureNoteRecorded :: IO ()
+testGateFailureNoteRecorded =
+    withTestRepo $ \dir ->
+        withOutOfTreeDb $ \dbPath ->
+            withTestDb $ \conn -> do
+                let did = "01TESTGATENOTE00000000000A" :: Text
+                    branch = "dispatch/" <> did
+                gitIn_ dir ["checkout", "-b", T.unpack branch]
+                writeFile (dir <> "/agent-work.hs") "module A where"
+                gitIn_ dir ["add", "agent-work.hs"]
+                gitIn_ dir ["commit", "-m", "agent: edit"]
+                baseShaRaw <- gitIn dir ["rev-parse", "main"]
+                let baseSha = T.pack (takeWhile (/= '"') (dropWhile (== '"') baseShaRaw))
+                tid <-
+                    RT.insertTask
+                        conn
+                        RT.NewTask
+                            { RT.ntTitle = "Gate note task"
+                            , RT.ntBody = ""
+                            , RT.ntState = ReadyHeadless
+                            , RT.ntPriority = Nothing
+                            , RT.ntNoCommit = False
+                            }
+                RD.insertDispatch
+                    conn
+                    did
+                    RD.NewDispatch
+                        { RD.ndTaskId = tid
+                        , RD.ndBranch = branch
+                        , RD.ndBaseBranch = "main"
+                        , RD.ndBaseSha = baseSha
+                        , RD.ndModel = "claude-sonnet-4-6"
+                        , RD.ndEffort = Medium
+                        , RD.ndLogPath = Nothing
+                        , RD.ndPid = Nothing
+                        }
+                let dx =
+                        DispatchCtx
+                            { dxConn = conn
+                            , dxDbPath = dbPath
+                            , dxDid = did
+                            , dxBranch = branch
+                            , dxBase = "main"
+                            , dxWorkDir = dir
+                            }
+                    cfg = minCfg{cfgCommands = Just CommandsConfig{ccBuild = "exit 7", ccTest = "true"}}
+                res <- handlePostClaude dx cfg False ExitSuccess baseSha "/dev/null"
+                dresOutcome res @?= OFailure
+                dresNotes res @?= "exit 7 -> exit 7"
+                Just d <- RD.getDispatch conn did
+                dispatchNotes d @?= Just "exit 7 -> exit 7"
 
 {- | finishWith with OFailure must snapshot staged/unstaged changes onto the
 dispatch branch before the worktree is torn down — the branch is what

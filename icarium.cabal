@@ -34,6 +34,7 @@ library
                       Icarium.Dispatch.Agreement
                       Icarium.Dispatch.BodyDiff
                       Icarium.Dispatch.Claude
+                      Icarium.Dispatch.Gate
                       Icarium.Dispatch.LogResult
                       Icarium.Dispatch.Merge
                       Icarium.Dispatch.PostClaude
@@ -113,6 +114,7 @@ test-suite icarium-test
                       CliTaskSpec
                       CliWorktreeSpec
                       EventsSpec
+                      GateSpec
                       GitSpec
                       GuardSpec
                       HeartbeatSpec

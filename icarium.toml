@@ -22,6 +22,7 @@ allowed_tools = [
 ]
 scratch_dir = ".icarium/scratch"
 max_minutes_per_dispatch = 30
+max_minutes_per_gate     = 20
 heartbeat_stale_seconds  = 300
 log_retention_runs       = 25
 # Provision the pinned fourmolu into each worktree; the pre-commit hook

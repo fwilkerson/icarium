@@ -5,13 +5,11 @@ module Icarium.Dispatch.PostClaude (
     writeWarnContextEntry,
     checkpointDirtyTree,
     postClaudeGuard,
-    runGate,
-    runGates,
 ) where
 
 import Control.Monad (forM_, mfilter, void)
 import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (ExceptT (..), runExceptT, throwE)
+import Control.Monad.Trans.Except (runExceptT, throwE)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -19,11 +17,11 @@ import Database.SQLite.Simple (Connection)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory)
 import System.IO (hPutStrLn, stderr)
-import System.Process.Typed (runProcess, setWorkingDir, shell)
 
 import Icarium.Bodies.Sweep (refreshTaskBody)
-import Icarium.Config (CommandsConfig (..), Config (..), DispatchConfig (..), ReviewConfig (..))
+import Icarium.Config (Config (..), DispatchConfig (..), ReviewConfig (..))
 import Icarium.Dispatch.BodyDiff (bodyChanged, diffBody, renderBodyReport)
+import Icarium.Dispatch.Gate (GateEnv (..), GateHeartbeat (..), gateBudgetUsecs, runGates)
 import Icarium.Dispatch.LogResult (LogResult (..), readLogResult)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
 import Icarium.Dispatch.Payload (
@@ -144,8 +142,17 @@ handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
                     liftIO $ case mBranchSha of
                         Right sha -> RD.setLastCommit conn did sha
                         Left _ -> pure ()
-                    liftIO (runGates wt cfg) >>= either throwE pure
+                    liftIO (runGates gates (cfgCommands cfg)) >>= either throwE pure
                     pure (Just ())
+        -- Gates run on behalf of this dispatch: they keep its heartbeat warm
+        -- and, on expiry, leave the wedged process tree in its log.
+        gates =
+            GateEnv
+                { geDir = wt
+                , geBudgetUsecs = gateBudgetUsecs (cfgDispatch cfg)
+                , geLogPath = Just logPath
+                , geHeartbeat = Just GateHeartbeat{ghDbPath = dxDbPath dx, ghDid = did}
+                }
 
     runExceptT preStep >>= \case
         Left notes -> do
@@ -299,27 +306,3 @@ postClaudeGuard noCommit porcelain mBranchSha baseSha
     dirtyMsg =
         "agent left uncommitted changes; refusing to accept\nuncommitted:\n"
             <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))
-
-{- | Run the configured build and test gates in order, stopping at the
-first failure. This owns the gate contract — which commands run, in what
-order, and the missing-config message — for both the post-claude check
-and the merge rebase path.
--}
-runGates :: FilePath -> Config -> IO (Either Text ())
-runGates dir cfg = runExceptT $ do
-    cc <- maybe (throwE "no [commands] section configured") pure (cfgCommands cfg)
-    ExceptT (runGate dir (ccBuild cc))
-    ExceptT (runGate dir (ccTest cc))
-
-{- | Run a shell command (as a single string, so users can include
-pipes and &&) inside the given directory. Returns () on exit 0;
-otherwise a short note.
--}
-runGate :: FilePath -> Text -> IO (Either Text ())
-runGate dir cmdText
-    | T.null (T.strip cmdText) = pure (Right ())
-    | otherwise = do
-        code <- runProcess (setWorkingDir dir (shell (T.unpack cmdText)))
-        pure $ case code of
-            ExitSuccess -> Right ()
-            ExitFailure c -> Left (cmdText <> " -> exit " <> T.pack (show c))

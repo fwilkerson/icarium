@@ -148,6 +148,7 @@ minDispatchConfig =
         , dcAllowedTools = []
         , dcScratchDir = ".icarium/scratch"
         , dcMaxMinutesPerDispatch = 1
+        , dcMaxMinutesPerGate = 20
         , dcHeartbeatStaleSeconds = 1
         , dcLogRetentionRuns = 1
         , dcRetryStormThreshold = 3

@@ -12,8 +12,8 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (Connection)
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Config (CommandsConfig (..), Config, cfgCommands, cfgDispatch)
-import Icarium.Dispatch.PostClaude (runGate)
+import Icarium.Config (Config, cfgCommands, cfgDispatch)
+import Icarium.Dispatch.Gate (GateEnv (..), gateBudgetUsecs, runGates)
 import Icarium.Dispatch.Worktree (
     WorktreeError (..),
     mergeWorktreePath,
@@ -62,7 +62,7 @@ mergeParked cfg conn d = do
             Left _ -> throwE (MergeBlocked 1 ("branch missing (deleted manually?): " <> branch))
             Right _ -> pure ()
         ffPossible <- liftIO (Git.mergeBaseIsAncestor "." base branch)
-        unless ffPossible (rebaseThenGate cfg did branch base)
+        unless ffPossible (rebaseThenGate cfg d)
         landFF did base branch
         newSha <-
             liftIO (Git.revParse "." base)
@@ -80,9 +80,12 @@ gates there. Note the rebase rewrites the parked branch even when the
 gates then fail — the pre-rebase commits stay reachable via the reflog,
 and retrying the merge after a fix is a plain FF.
 -}
-rebaseThenGate :: Config -> Text -> Text -> Text -> ExceptT MergeOutcome IO ()
-rebaseThenGate cfg did branch base = do
+rebaseThenGate :: Config -> Dispatch -> ExceptT MergeOutcome IO ()
+rebaseThenGate cfg d = do
     let dcfg = cfgDispatch cfg
+        did = dispatchId d
+        branch = dispatchBranch d
+        base = dispatchBaseBranch d
     cc <-
         maybe (throwE (MergeBlocked 2 "no [commands] section configured")) pure (cfgCommands cfg)
     liftIO $ hPutStrLn stderr ("icarium: base moved since park; rebasing " <> T.unpack branch)
@@ -98,9 +101,17 @@ rebaseThenGate cfg did branch base = do
                 teardownWorktree "." dcfg wt
             throwE (MergeBlocked 3 ("merge conflict; needs manual rebase onto " <> base))
         Right () -> do
-            gateResult <- liftIO . runExceptT $ do
-                ExceptT (runGate wt (ccBuild cc))
-                ExceptT (runGate wt (ccTest cc))
+            -- The row ended when it parked, so there is no heartbeat to keep
+            -- warm — but a gate that wedges here still leaves its forensics
+            -- in the dispatch's own log.
+            let gates =
+                    GateEnv
+                        { geDir = wt
+                        , geBudgetUsecs = gateBudgetUsecs dcfg
+                        , geLogPath = T.unpack <$> dispatchLogPath d
+                        , geHeartbeat = Nothing
+                        }
+            gateResult <- liftIO (runGates gates (Just cc))
             liftIO (teardownWorktree "." dcfg wt)
             case gateResult of
                 Left note -> throwE (MergeBlocked 3 ("gates failed after rebase: " <> note))

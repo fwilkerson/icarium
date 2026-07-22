@@ -6,6 +6,7 @@ import BodiesSpec qualified
 import BodyDiffSpec qualified
 import CliSpec qualified
 import EventsSpec qualified
+import GateSpec qualified
 import GitSpec qualified
 import GuardSpec qualified
 import HeartbeatSpec qualified
@@ -28,6 +29,7 @@ main =
             , BodyDiffSpec.tests
             , CliSpec.tests
             , EventsSpec.tests
+            , GateSpec.tests
             , GitSpec.tests
             , TickSpec.tests
             , GuardSpec.tests

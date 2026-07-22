@@ -6,6 +6,7 @@ module Icarium.Dispatch.Claude (
     raceTimeout,
     timeoutSentinel,
     killGroupGracefully,
+    killGroupAfter,
     runClaudeStreaming,
     withLogHandle,
     teeAndHeartbeat,
@@ -76,10 +77,25 @@ SIGKILL. Errors from signalProcessGroup (e.g. ESRCH if already dead)
 are silently ignored.
 -}
 killGroupGracefully :: CPid -> IO ()
-killGroupGracefully pgid = do
-    handle (\(_ :: SomeException) -> pure ()) (signalProcessGroup sigINT pgid)
-    threadDelay (10 * 1_000_000)
-    handle (\(_ :: SomeException) -> pure ()) (signalProcessGroup sigKILL pgid)
+killGroupGracefully = killGroupAfter (threadDelay killGrace)
+
+{- | 'killGroupGracefully' for a caller that holds the child and can reap it:
+the SIGKILL sweep follows as soon as @reap@ returns instead of after the
+full grace period. Reaping between the signals is also what makes the sweep
+meaningful — an unreaped zombie leader keeps the group alive on paper.
+-}
+killGroupAfter :: IO () -> CPid -> IO ()
+killGroupAfter reap pgid = do
+    signalQuietly sigINT
+    _ <- raceTimeout killGrace reap
+    signalQuietly sigKILL
+  where
+    signalQuietly s =
+        handle (\(_ :: SomeException) -> pure ()) (signalProcessGroup s pgid)
+
+-- | How long a process group gets to honour SIGINT before SIGKILL.
+killGrace :: Int
+killGrace = 10 * 1_000_000
 
 data RunCtx = RunCtx
     { rcDbPath :: FilePath
