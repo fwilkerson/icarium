@@ -26,7 +26,7 @@ import Icarium.Types (
     Effort (..),
     TaskState (..),
  )
-import TestHelpers (withCwdLock, withTestDb, withTestRepo)
+import TestHelpers (withCwdLock, withOutOfTreeDb, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -65,7 +65,7 @@ testNegativeMaxMinutes =
         Right _ -> error "expected Left for max_minutes_per_dispatch = -1"
 
 testTimeoutOutcome :: IO ()
-testTimeoutOutcome = withTestRepo $ \dir -> withTestDb $ \conn -> withCwdLock $ withCurrentDirectory dir $ do
+testTimeoutOutcome = withTestRepo $ \dir -> withOutOfTreeDb $ \dbPath -> withTestDb $ \conn -> withCwdLock $ withCurrentDirectory dir $ do
     tid <-
         RT.insertTask
             conn
@@ -93,7 +93,7 @@ testTimeoutOutcome = withTestRepo $ \dir -> withTestDb $ \conn -> withCwdLock $ 
     let dx =
             DispatchCtx
                 { dxConn = conn
-                , dxDbPath = ":memory:"
+                , dxDbPath = dbPath
                 , dxDid = did
                 , dxBranch = "dispatch/" <> did
                 , dxBase = "main"

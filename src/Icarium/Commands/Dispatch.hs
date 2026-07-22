@@ -37,6 +37,7 @@ import Icarium.Dispatch.Worktree (
     worktreeErrorText,
     worktreePath,
  )
+import Icarium.Events qualified as Ev
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Context qualified as RCx
@@ -132,10 +133,22 @@ runRun db o = do
             withDbSync db $ \c -> do
                 tid <- resolveOrFatal (RT.resolveTaskId c rawId)
                 -- A dry run previews; it must not move the task.
+                before <- RT.getTask c tid
                 mt <-
                     if rDryRun o
-                        then maybe RT.NoCandidate RT.Claimed <$> RT.getTask c tid
-                        else defaultOwner >>= RT.claimTask c tid
+                        then pure (maybe RT.NoCandidate RT.Claimed before)
+                        else do
+                            owner <- defaultOwner
+                            r <- RT.claimTask c tid owner
+                            -- A busy lock claimed nothing; the log is
+                            -- append-only, so a claim event written here
+                            -- could never be retracted.
+                            case r of
+                                RT.Claimed _ ->
+                                    forM_ before $ \t ->
+                                        Ev.emit db "dispatch run" (Ev.TaskClaimed tid (taskState t) owner)
+                                _ -> pure ()
+                            pure r
                 case mt of
                     RT.NoCandidate -> fatal 1 ("task not found: " <> T.unpack tid)
                     RT.LockBusy -> lockBusy ("icarium dispatch run " <> T.unpack tid)
@@ -154,7 +167,7 @@ runRun db o = do
                                     }
                         case eres of
                             Left err -> do
-                                release c o task
+                                release db c o task
                                 fatal 3 (T.unpack (worktreeErrorText err))
                             Right res -> do
                                 D.applyOutcomeToTask c db task res
@@ -215,7 +228,15 @@ drainLoop ctx !i
         mt <-
             if rDryRun opts
                 then maybe RT.NoCandidate RT.Claimed . listToMaybe <$> RT.queueTasks conn [ReadyHeadless]
-                else defaultOwner >>= RT.claimNextTask conn [ReadyHeadless]
+                else do
+                    owner <- defaultOwner
+                    r <- RT.claimNextTask conn [ReadyHeadless] owner
+                    case r of
+                        -- The queue it drew from names the state it came from.
+                        RT.Claimed t ->
+                            Ev.emit db "dispatch run" (Ev.TaskClaimed (taskId t) ReadyHeadless owner)
+                        _ -> pure ()
+                    pure r
         case mt of
             RT.NoCandidate -> hPutStrLn stderr "icarium: ready queue empty; stopping"
             -- Not an empty queue: stopping the drain here would silently leave
@@ -240,11 +261,11 @@ drainLoop ctx !i
                     -- capacity may free up later (back-pressure), while a
                     -- setup error would just repeat.
                     Left err@(WtNoCapacity _) -> do
-                        release conn opts t
+                        release db conn opts t
                         hPutStrLn stderr $
                             "icarium: " <> T.unpack (worktreeErrorText err) <> "; stopping"
                     Left err -> do
-                        release conn opts t
+                        release db conn opts t
                         fatal 3 (T.unpack (worktreeErrorText err))
                     Right res -> do
                         D.applyOutcomeToTask conn db t res
@@ -281,8 +302,10 @@ drainLoop ctx !i
 {- | Undo a claim whose dispatch never started (no-op under --dry-run,
 which never claimed).
 -}
-release :: Connection -> RunOpts -> Task -> IO ()
-release conn opts t = unless (rDryRun opts) $ RT.releaseTask conn (taskId t)
+release :: FilePath -> Connection -> RunOpts -> Task -> IO ()
+release db conn opts t = unless (rDryRun opts) $ do
+    RT.releaseTask conn (taskId t)
+    Ev.emit db "dispatch run" (Ev.TaskUpdated (taskId t) InProgress ReadyHeadless)
 
 {- | Land a just-successful dispatch immediately (attempt-then-park).
 Returns Nothing when there is nothing to land: dry-run, non-success, or
@@ -580,11 +603,11 @@ runRecover db o = do
             then TIO.putStrLn "no open dispatches"
             else do
                 now <- getCurrentTime
-                forM_ open (reconcileDispatch c (cfgDispatch cfg) now staleSec)
+                forM_ open (reconcileDispatch db c (cfgDispatch cfg) now staleSec)
                 Git.worktreePrune "."
 
-reconcileDispatch :: Connection -> DispatchConfig -> UTCTime -> Int -> Dispatch -> IO ()
-reconcileDispatch c dcfg now staleSec d = do
+reconcileDispatch :: FilePath -> Connection -> DispatchConfig -> UTCTime -> Int -> Dispatch -> IO ()
+reconcileDispatch db c dcfg now staleSec d = do
     alive <- maybe (pure False) pidAlive (dispatchPid d)
     let stale = heartbeatStale now staleSec (dispatchHeartbeat d)
     if alive && not stale
@@ -613,6 +636,9 @@ reconcileDispatch c dcfg now staleSec d = do
                             <> wtNotes
                             <> ["last_commit=" <> lastCommit]
             RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
+            Ev.emit db "dispatch recover" $
+                Ev.DispatchFinished (dispatchId d) (dispatchTaskId d) OInterrupted
+            mTask <- RT.getTask c (dispatchTaskId d)
             void $
                 RT.updateTask
                     c
@@ -621,6 +647,9 @@ reconcileDispatch c dcfg now staleSec d = do
                         { RT.tuState = Just Blocked
                         , RT.tuBlockReason = Just (Just notes)
                         }
+            forM_ mTask $ \t ->
+                Ev.emit db "dispatch recover" $
+                    Ev.TaskUpdated (dispatchTaskId d) (taskState t) Blocked
             TIO.putStrLn $
                 "dispatch:"
                     <> dispatchId d

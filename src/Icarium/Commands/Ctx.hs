@@ -16,6 +16,7 @@ import System.IO (hPutStrLn, stderr)
 import Icarium.Bodies (bodiesDir, ctxBodyPath, readBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
+import Icarium.Events qualified as Ev
 import Icarium.Node (createContextWithBody)
 import Icarium.Render qualified as Render
 import Icarium.Render.Json qualified as Json
@@ -132,6 +133,7 @@ runAdd db o = withDb db $ \c -> do
         Just target ->
             void $ RE.insertEdge c Supersedes ContextNode cxid ContextNode target
         Nothing -> pure ()
+    Ev.emit db "ctx add" (Ev.CtxCreated cxid)
     TIO.putStrLn cxid
     TIO.putStrLn (T.pack fp)
     when (T.null body) $ do
@@ -289,6 +291,7 @@ runUpdate db o = withDb db $ \c -> do
             forM_ mDiscCat $ \mCat -> do
                 RC.detachContextCategoriesByAxis c cxid Discipline
                 forM_ mCat (RC.attachContextCategory c cxid)
+            Ev.emit db "ctx update" (Ev.CtxUpdated cxid)
             TIO.putStrLn ("updated " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (uId o))
 
@@ -346,6 +349,7 @@ runCurateRecord db o cid disp = do
         cxid <- resolveOrFatal (RCx.resolveContextId c cid)
         artifact <- requireArtifact c disp (cArtifact o)
         void $ RCur.insertCuration c cxid disp artifact (cNote o)
+        Ev.emit db "ctx curate" (Ev.CtxCurated cxid disp artifact)
         TIO.putStrLn ("curated " <> cxid <> " " <> dispositionText disp)
 
 {- | Enforce the artifact rule per disposition; the sweep must leave a
@@ -403,6 +407,7 @@ runRm db o = withDb db $ \c -> do
             let fp = ctxBodyPath (bodiesDir db) cxid
             exists <- doesFileExist fp
             when exists $ removeFile fp
+            Ev.emit db "ctx rm" (Ev.CtxDeleted cxid)
             TIO.putStrLn ("deleted " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (rId o))
 

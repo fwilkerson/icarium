@@ -130,6 +130,13 @@ case "$mode" in
         result
         exit 0
         ;;
+    blocked)
+        # Worker escalation: it stops inside policy and says why. No commits,
+        # so the dispatch is a failure carrying the worker's own reason.
+        init
+        printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"status\":\"blocked\",\"block_reason\":\"needs a decision from a human\",\"for_future_agents\":[]}","num_turns":1}'
+        exit 0
+        ;;
     commit | *)
         init
         commit_work

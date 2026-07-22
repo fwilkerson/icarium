@@ -10,13 +10,22 @@ module TestHelpers (
     minTask,
     withTestRepo,
     withCwdLock,
+    withOutOfTreeDb,
+    readEventLog,
+    eventField,
 ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (bracket)
 import Control.Monad (forM_)
+import Data.Aeson (Key, Object, Value (..), decode)
+import Data.Aeson.KeyMap qualified as KM
+import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Text (Text)
+import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Query (..), close, execute, open)
+import Icarium.Events (eventLogPath)
+import System.Directory (doesFileExist)
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, setWorkingDir)
@@ -96,6 +105,37 @@ cwdLock = unsafePerformIO (newMVar ())
 
 withCwdLock :: IO a -> IO a
 withCwdLock = withMVar cwdLock . const
+
+{- | A DB path outside any repo under test. 'DispatchCtx' carries the
+invoking checkout's DB, never the dispatch worktree's — and the event log
+sits beside it, so pointing @dxDbPath@ into the worktree would dirty the
+very tree those tests assert on.
+-}
+withOutOfTreeDb :: (FilePath -> IO a) -> IO a
+withOutOfTreeDb k = withSystemTempDirectory "icarium-dbdir" $ \d -> k (d <> "/icarium.db")
+
+-- | Every line of the event log beside @db@, decoded, oldest first.
+readEventLog :: FilePath -> IO [Object]
+readEventLog db = do
+    let path = eventLogPath db
+    exists <- doesFileExist path
+    if not exists
+        then pure []
+        else do
+            raw <- BLC.readFile path
+            pure
+                [ case decode l of
+                    Just (Object o) -> o
+                    _ -> error ("event log line is not a JSON object: " <> BLC.unpack l)
+                | l <- BLC.lines raw
+                , not (BLC.null l)
+                ]
+
+-- | A string field of a logged event, or 'Nothing' when the key is absent.
+eventField :: Key -> Object -> Maybe String
+eventField k o = case KM.lookup k o of
+    Just (String t) -> Just (T.unpack t)
+    _ -> Nothing
 
 {- | A dispatch row for @tid@ under id @did@. Enough to satisfy the foreign
 keys that hang off a run — anything a test asserts on is set by the code

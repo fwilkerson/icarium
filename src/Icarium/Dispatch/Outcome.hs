@@ -8,11 +8,13 @@ module Icarium.Dispatch.Outcome (
 ) where
 
 import Control.Monad (forM_, void, when)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Database.SQLite.Simple (Connection)
 import System.Directory (doesFileExist, removeFile)
 
-import Icarium.Dispatch.Payload (FutureNote (..), WorkerPayload (..))
+import Icarium.Dispatch.Payload (FutureNote (..), WorkerPayload (..), WorkerStatus (..))
+import Icarium.Events qualified as Ev
 import Icarium.Git qualified as Git
 import Icarium.Node (createContextWithBody)
 import Icarium.Repo.Category qualified as RC
@@ -80,6 +82,16 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
             Nothing -> notes
             Just sha -> notes <> "\nwip_commit: " <> sha
     RD.finishDispatch conn did outcome mSha (Just enrichedNotes)
+    -- The row is the only place the owning task is recorded; the event
+    -- carries it so a watcher need not join back to the DB.
+    mDispatch <- RD.getDispatch conn did
+    forM_ mDispatch $ \d -> do
+        let tid = dispatchTaskId d
+        -- Escalation first: it is the worker's report, and the outcome
+        -- below is icarium's conclusion about it (ADR 0008).
+        forM_ (blockReason mPayload) $ \reason ->
+            Ev.emit (dxDbPath dx) "dispatch" (Ev.DispatchEscalated did tid reason)
+        Ev.emit (dxDbPath dx) "dispatch" (Ev.DispatchFinished did tid outcome)
     pruneLogFiles conn retention
     pure
         DispatchResult
@@ -91,6 +103,14 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
             , dresBaseSha = mBaseSha
             , dresPayload = mPayload
             }
+
+-- | The worker's escalation reason, when it reported one.
+blockReason :: Maybe WorkerPayload -> Maybe Text
+blockReason mPayload = do
+    p <- mPayload
+    case wpStatus p of
+        WBlocked -> Just (fromMaybe "no reason given" (wpBlockReason p))
+        WSubmitted -> Nothing
 
 pruneLogFiles :: Connection -> Int -> IO ()
 pruneLogFiles conn retention = do
@@ -132,24 +152,22 @@ applyOutcomeToTask conn db t res
             case mFresh of
                 Just t'
                     | taskState t' `elem` [InProgress, ReadyHeadless] ->
-                        void $
-                            RT.updateTask
-                                conn
-                                (taskId t')
-                                RT.emptyUpdate
-                                    { RT.tuState = Just Done
-                                    }
+                        transition t' Done RT.emptyUpdate{RT.tuState = Just Done}
                 _ -> pure ()
-        OFailure ->
-            void $
-                RT.updateTask
-                    conn
-                    (taskId t)
+        OFailure -> do
+            mFresh <- RT.getTask conn (taskId t)
+            forM_ mFresh $ \t' ->
+                transition
+                    t'
+                    Blocked
                     RT.emptyUpdate
                         { RT.tuState = Just Blocked
                         , RT.tuBlockReason = Just (Just (dresNotes res))
                         }
         OInterrupted -> pure ()
+    transition before new upd = do
+        void $ RT.updateTask conn (taskId before) upd
+        Ev.emit db "dispatch" (Ev.TaskUpdated (taskId before) (taskState before) new)
 
 {- | One ctx entry per note, tagged with the task's retrieval axes and linked
 back to it. The payload names no categories: the worker knows no more about
@@ -174,3 +192,4 @@ ingestFutureNotes conn db did t notes = do
                     }
         forM_ cats (RC.attachContextCategory conn cid)
         void $ RE.insertEdge conn DerivedFrom ContextNode cid TaskNode (taskId t)
+        Ev.emit db "dispatch" (Ev.CtxCreated cid)

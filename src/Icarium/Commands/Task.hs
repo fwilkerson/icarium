@@ -16,6 +16,7 @@ import System.IO (hPutStrLn, stderr)
 import Icarium.Bodies (bodiesDir, readBody, taskBodyPath)
 import Icarium.Commands.Util
 import Icarium.Db (withDb, withDbSync)
+import Icarium.Events qualified as Ev
 import Icarium.Node (createTaskWithBody)
 import Icarium.Render qualified as Render
 import Icarium.Render.Json qualified as Json
@@ -145,6 +146,7 @@ runAdd db o = withDb db $ \c -> do
         void $ RE.insertEdge c DependsOn TaskNode tid TaskNode depId
     forM_ refIds $ \refId ->
         void $ RE.insertEdge c References TaskNode tid ContextNode refId
+    Ev.emit db "task add" (Ev.TaskCreated tid (aState o))
     TIO.putStrLn tid
     TIO.putStrLn (T.pack fp)
     when (T.null body) $ do
@@ -408,6 +410,8 @@ runUpdate db o = withDb db $ \c -> do
     when (uState o == Just Blocked && isNothing (uBlockReason o)) $
         fatal 2 "--state blocked requires --block-reason"
     tid <- resolveOrFatal (RT.resolveTaskId c (uId o))
+    -- Read the pre-update row here: the event needs the state it moved from.
+    mBefore <- RT.getTask c tid
     -- Validate every axis before any mutation.
     changes <-
         forM [(Domain, uDomain o), (Discipline, uDiscipline o), (Kind, uKind o)] $
@@ -426,7 +430,14 @@ runUpdate db o = withDb db $ \c -> do
                 }
     ok <- RT.updateTask c tid upd
     if ok
-        then TIO.putStrLn ("updated " <> tid)
+        then do
+            -- Only a transition is an event: a title or priority edit has no
+            -- from/to, and logging one with from == to invents a move.
+            forM_ mBefore $ \before ->
+                forM_ (uState o) $ \new ->
+                    when (new /= taskState before) $
+                        Ev.emit db "task update" (Ev.TaskUpdated tid (taskState before) new)
+            TIO.putStrLn ("updated " <> tid)
         else fatal 1 ("task not found: " <> T.unpack (uId o))
 
 -- =============================================================
@@ -447,6 +458,7 @@ runRm db o = withDb db $ \c -> do
             let fp = taskBodyPath (bodiesDir db) tid
             exists <- doesFileExist fp
             when exists $ removeFile fp
+            Ev.emit db "task rm" (Ev.TaskDeleted tid)
             TIO.putStrLn ("deleted " <> tid)
         else fatal 1 ("task not found: " <> T.unpack (rId o))
 
@@ -494,11 +506,19 @@ runClaim db o = do
     withDb db $ \c -> do
         owner <- maybe defaultOwner pure (clOwner o)
         mtid <- traverse (resolveOrFatal . RT.resolveTaskId c) (clId o)
-        res <- case mtid of
-            Nothing -> RT.claimNextTask c [ReadyInteractive] owner
-            Just tid -> RT.claimReadyTask c tid owner
+        -- The state the claim took the task *from*: for the queue form the
+        -- query itself guarantees it; for a named task it must be read
+        -- before the stamp overwrites it.
+        (res, from) <- case mtid of
+            Nothing -> (,Just ReadyInteractive) <$> RT.claimNextTask c [ReadyInteractive] owner
+            Just tid -> do
+                before <- RT.getTask c tid
+                (,taskState <$> before) <$> RT.claimReadyTask c tid owner
         case res of
-            RT.Claimed t -> TIO.putStrLn (taskId t)
+            RT.Claimed t -> do
+                forM_ from $ \was ->
+                    Ev.emit db "task claim" (Ev.TaskClaimed (taskId t) was owner)
+                TIO.putStrLn (taskId t)
             RT.LockBusy -> lockBusy "icarium task claim"
             -- Exit 1 with no output is the empty-queue signal scripts read;
             -- a named task that was refused gets the reason instead.

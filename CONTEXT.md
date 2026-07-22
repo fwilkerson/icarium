@@ -135,3 +135,19 @@ Distinct from the freeform note.
 **Sweep**:
 A periodic session that curates accumulated candidates — entries never
 curated or aged since their last curation event.
+
+### Event log
+
+**Event log**:
+The append-only `.icarium/events.jsonl` beside the DB: one JSON object per
+line, appended by every state-changing task/ctx command and every dispatch
+outcome. The substrate reactive tooling reads instead of polling `doctor`
+or `list`. Never rewritten, never rotated — retention is deliberately
+unbounded until something consumes the log.
+_Avoid_: audit log (it records transitions, not who was allowed to make
+them), dispatch log (that is the per-run `.icarium/logs/<id>.jsonl`)
+
+**Actor**:
+What caused an event — the CLI command (`task update`) or the subsystem
+(`dispatch`). Separate from the event itself, because the same transition
+can be driven from either.

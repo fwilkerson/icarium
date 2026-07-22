@@ -5,6 +5,7 @@ import Test.Tasty (defaultMain, testGroup)
 import BodiesSpec qualified
 import BodyDiffSpec qualified
 import CliSpec qualified
+import EventsSpec qualified
 import GitSpec qualified
 import GuardSpec qualified
 import HeartbeatSpec qualified
@@ -26,6 +27,7 @@ main =
             [ BodiesSpec.tests
             , BodyDiffSpec.tests
             , CliSpec.tests
+            , EventsSpec.tests
             , GitSpec.tests
             , TickSpec.tests
             , GuardSpec.tests

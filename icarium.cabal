@@ -25,6 +25,7 @@ library
                       Icarium.Migrations
                       Icarium.Db
                       Icarium.Config
+                      Icarium.Events
                       Icarium.Render
                       Icarium.Render.Json
                       Icarium.Git
@@ -102,6 +103,7 @@ test-suite icarium-test
     other-modules:    BodiesSpec
                       BodyDiffSpec
                       CliSpec
+                      EventsSpec
                       GitSpec
                       GuardSpec
                       HeartbeatSpec

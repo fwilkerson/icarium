@@ -41,7 +41,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Schema (applySchema)
 import Icarium.Types
-import TestHelpers (insertTestDispatch, minTask, mkCat, withTestDb, withTestRepo)
+import TestHelpers (insertTestDispatch, minTask, mkCat, withOutOfTreeDb, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -172,7 +172,7 @@ is why the block is checked ahead of the guards.
 testWorkerBlockedIsFailure :: IO ()
 testWorkerBlockedIsFailure =
     withTestRepo $ \dir ->
-        withTestDb $ \conn -> do
+        withOutOfTreeDb $ \dbPath -> withTestDb $ \conn -> do
             let did = "01TESTWORKERBLOCKED00000AA" :: Text
                 branch = "dispatch/" <> did
                 logPath = dir </> "worker.jsonl"
@@ -217,7 +217,7 @@ testWorkerBlockedIsFailure =
             let dx =
                     DispatchCtx
                         { dxConn = conn
-                        , dxDbPath = ":memory:"
+                        , dxDbPath = dbPath
                         , dxDid = did
                         , dxBranch = branch
                         , dxBase = "main"
@@ -337,8 +337,8 @@ testCheckpointCleanTree =
 testHandlePostClaudeFailureCheckpoints :: IO ()
 testHandlePostClaudeFailureCheckpoints =
     withTestRepo $ \dir ->
-        withTestDb $ \conn ->
-            do
+        withOutOfTreeDb $ \dbPath ->
+            withTestDb $ \conn -> do
                 let did = "01TESTDISPATCH0000000000AA" :: Text
                     branch = "dispatch/" <> did
                 -- create dispatch branch with one commit so it diverges from main
@@ -378,7 +378,7 @@ testHandlePostClaudeFailureCheckpoints =
                 let dx =
                         DispatchCtx
                             { dxConn = conn
-                            , dxDbPath = ":memory:"
+                            , dxDbPath = dbPath
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
@@ -403,8 +403,8 @@ commit SHA is embedded in dresNotes for easy recovery.
 testFinishWithWipCheckpoint :: IO ()
 testFinishWithWipCheckpoint =
     withTestRepo $ \dir ->
-        withTestDb $ \conn ->
-            do
+        withOutOfTreeDb $ \dbPath ->
+            withTestDb $ \conn -> do
                 let did = "01TESTWIPCHECKPOINT000000A" :: Text
                     branch = "dispatch/" <> did
                 gitIn_ dir ["checkout", "-b", T.unpack branch]
@@ -439,7 +439,7 @@ testFinishWithWipCheckpoint =
                 let dx =
                         DispatchCtx
                             { dxConn = conn
-                            , dxDbPath = ":memory:"
+                            , dxDbPath = dbPath
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"
@@ -463,8 +463,8 @@ success, orphaning the agent's commits.
 testNoCommitAgentCommittedAnyway :: IO ()
 testNoCommitAgentCommittedAnyway =
     withTestRepo $ \dir ->
-        withTestDb $ \conn ->
-            do
+        withOutOfTreeDb $ \dbPath ->
+            withTestDb $ \conn -> do
                 let did = "01TESTNCBRANCH0000000000AA" :: Text
                     branch = "dispatch/" <> did
                 -- agent commits on the dispatch branch despite no-commit flag
@@ -500,7 +500,7 @@ testNoCommitAgentCommittedAnyway =
                 let dx =
                         DispatchCtx
                             { dxConn = conn
-                            , dxDbPath = ":memory:"
+                            , dxDbPath = dbPath
                             , dxDid = did
                             , dxBranch = branch
                             , dxBase = "main"

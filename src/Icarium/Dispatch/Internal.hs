@@ -41,6 +41,7 @@ import Icarium.Dispatch.Worktree (
     worktreeErrorText,
     worktreePath,
  )
+import Icarium.Events qualified as Ev
 import Icarium.Git qualified as Git
 import Icarium.Id (newId)
 import Icarium.Render (renderTaskPrompt, untaggedPromptWarning)
@@ -250,6 +251,7 @@ doRealAttempt conn req attempt mFindings mBaseline = do
                             , RD.ndLogPath = Just logPath
                             , RD.ndPid = Nothing
                             }
+                    Ev.emit dbPath "dispatch" (Ev.DispatchStarted did (taskId task) branch)
 
                     prompt <- buildPrompt conn task absScratch mAgreement mFindings
 
