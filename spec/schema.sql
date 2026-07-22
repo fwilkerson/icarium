@@ -29,6 +29,11 @@ CREATE TABLE tasks (
     -- Any other state transition clears both, so a claim cannot outlive the work.
     claimed_by  TEXT,
     claimed_at  TEXT,
+    -- Dispatch routing overrides. NULL = inherit the [dispatch] defaults from
+    -- icarium.toml, so one queue can mix cheap mechanical work and expensive
+    -- hard work. What actually ran is recorded on the dispatch row.
+    model       TEXT,
+    effort      TEXT CHECK (effort IN ('low','medium','high','xhigh','max')),
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

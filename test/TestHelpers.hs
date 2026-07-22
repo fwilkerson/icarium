@@ -77,6 +77,8 @@ minTask =
         , taskNoCommit = False
         , taskClaimedBy = Nothing
         , taskClaimedAt = Nothing
+        , taskModel = Nothing
+        , taskEffort = Nothing
         }
 
 {- | Create a throwaway git repo with one commit on main. The directory
@@ -177,4 +179,6 @@ mkTaskRow c title =
             , RT.ntState = ReadyHeadless
             , RT.ntPriority = Nothing
             , RT.ntNoCommit = False
+            , RT.ntModel = Nothing
+            , RT.ntEffort = Nothing
             }

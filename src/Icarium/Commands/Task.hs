@@ -1,6 +1,6 @@
 module Icarium.Commands.Task (Command, parser, run) where
 
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (forM, forM_, join, unless, void, when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Char (isSpace)
 import Data.Maybe (catMaybes, fromMaybe, isNothing)
@@ -87,6 +87,8 @@ data AddOpts = AddOpts
     , aDependsOn :: [Text]
     , aReferences :: [Text]
     , aNoCommit :: Bool
+    , aModel :: Maybe Text
+    , aEffort :: Maybe Effort
     }
 
 addP :: Parser AddOpts
@@ -115,6 +117,34 @@ addP =
         <*> many (textOption "depends-on" "TASK_ID" "Add a depends_on edge to TASK_ID")
         <*> many (textOption "references" "CONTEXT_ID" "Add a references edge to CONTEXT_ID")
         <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
+        <*> (join <$> modelOverrideP)
+        <*> (join <$> effortOverrideP)
+
+{- | @--model@/@--effort@ route one task away from the @[dispatch]@ defaults.
+The outer Maybe is "flag given"; the inner is the value, where the empty
+string clears — same shape and spelling as the category-axis flags.
+-}
+modelOverrideP :: Parser (Maybe (Maybe Text))
+modelOverrideP =
+    fmap blank
+        <$> optional
+            (textOption "model" "NAME" "Dispatch this task with this model instead of the [dispatch] default; empty string clears")
+  where
+    blank t = if T.null (T.strip t) then Nothing else Just t
+
+effortOverrideP :: Parser (Maybe (Maybe Effort))
+effortOverrideP =
+    optional
+        ( option
+            clearableEffortReader
+            ( long "effort"
+                <> metavar "LEVEL"
+                <> help ("Dispatch this task with this effort instead of the [dispatch] default (" <> effortChoices <> "); empty string clears")
+            )
+        )
+
+effortChoices :: String
+effortChoices = T.unpack (T.intercalate " | " (map effortText [Low, Medium, High, XHigh, Max]))
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
@@ -139,6 +169,8 @@ runAdd db o = withDb db $ \c -> do
                 , RT.ntState = aState o
                 , RT.ntPriority = aPriority o
                 , RT.ntNoCommit = aNoCommit o
+                , RT.ntModel = aModel o
+                , RT.ntEffort = aEffort o
                 }
     forM_ (catMaybes [mDomain, mDisc, mKind]) $ \cat ->
         RC.attachTaskCategory c tid (categoryId cat)
@@ -355,6 +387,8 @@ data UpdateOpts = UpdateOpts
     , uDiscipline :: Maybe Text
     , uKind :: Maybe Text
     , uNoCommit :: Maybe Bool
+    , uModel :: Maybe (Maybe Text)
+    , uEffort :: Maybe (Maybe Effort)
     }
 
 updateP :: Parser UpdateOpts
@@ -387,6 +421,8 @@ updateP =
             ( flag' True (long "no-commit" <> help "Mark as side-effect-only (no code commits required)")
                 <|> flag' False (long "commit-required" <> help "Clear no-commit flag (commit required)")
             )
+        <*> modelOverrideP
+        <*> effortOverrideP
 
 -- | @task start@ / @task done@: an update that only sets the state.
 stateShorthandP :: TaskState -> Parser UpdateOpts
@@ -403,6 +439,8 @@ stateShorthandP st = mk . T.pack <$> strArgument (metavar "TASK_ID")
             , uDiscipline = Nothing
             , uKind = Nothing
             , uNoCommit = Nothing
+            , uModel = Nothing
+            , uEffort = Nothing
             }
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
@@ -427,6 +465,8 @@ runUpdate db o = withDb db $ \c -> do
                 , RT.tuPriority = fmap Just (uPriority o)
                 , RT.tuBlockReason = fmap Just (uBlockReason o)
                 , RT.tuNoCommit = uNoCommit o
+                , RT.tuModel = uModel o
+                , RT.tuEffort = uEffort o
                 }
     ok <- RT.updateTask c tid upd
     if ok

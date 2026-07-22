@@ -11,6 +11,7 @@ module Icarium.Commands.Util (
     edgeKindReader,
     axisReader,
     effortReader,
+    clearableEffortReader,
 
     -- * Category validation
     requireCategory,
@@ -140,6 +141,18 @@ effortReader = eitherReader $ \s ->
     case parseEffort (T.pack s) of
         Just e -> Right e
         Nothing -> Left ("invalid effort: " <> s)
+
+{- | @--effort@ where the empty string clears the value, matching the
+category-axis flags. One flag sets and unsets, so there is no second
+@--no-effort@ spelling to remember.
+-}
+clearableEffortReader :: ReadM (Maybe Effort)
+clearableEffortReader = eitherReader $ \s ->
+    if null s
+        then Right Nothing
+        else case parseEffort (T.pack s) of
+            Just e -> Right (Just e)
+            Nothing -> Left ("invalid effort: " <> s)
 
 data BodyInput = BodyInline Text | BodyStdin | BodyNone
 

@@ -65,6 +65,7 @@ renderTaskHuman utf8 t bodyPath refs deps derived cats retiredIds =
         ]
             <> blockReasonLines t
             <> noCommitLine t
+            <> routingLines t
             <> claimLines t
             <> [ "created:   " <> taskCreatedAt t
                , "updated:   " <> taskUpdatedAt t
@@ -88,6 +89,14 @@ noCommitLine :: Task -> [Text]
 noCommitLine t
     | taskNoCommit t = ["no-commit:   yes"]
     | otherwise = []
+
+{- | Dispatch routing overrides. Absent when the task inherits the
+@[dispatch]@ defaults, so the lines mean "this task is special".
+-}
+routingLines :: Task -> [Text]
+routingLines t =
+    ["model:     " <> m | m <- maybeToList (taskModel t)]
+        <> ["effort:    " <> effortText e | e <- maybeToList (taskEffort t)]
 
 -- | Set by `task claim`; absent for tasks nobody claimed.
 claimLines :: Task -> [Text]

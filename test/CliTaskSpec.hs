@@ -62,6 +62,9 @@ tests =
         , testCase "task cat on no-body task prints empty and exits 0" testTaskCatNoBody
         , testCase "task add --no-commit sets flag; task show displays it" testTaskNoCommitAddShow
         , testCase "task update --no-commit and --commit-required toggle flag" testTaskNoCommitUpdate
+        , testCase "task add --model/--effort shown by task show; unset omits" testTaskModelEffortAddShow
+        , testCase "task update --model/--effort sets and clears" testTaskModelEffortUpdate
+        , testCase "task add --effort rejects an unknown value" testTaskEffortInvalid
         , testCase "task exists: found exits 0, not-found exits 1, ambiguous exits 2" testTaskExists
         , testCase "task exists --verbose prints full id on match" testTaskExistsVerbose
         , testCase "task start/done shorthands transition state" testTaskStartDone
@@ -561,6 +564,54 @@ testTaskNoCommitUpdate = withTempDb $ \db -> do
     uCode2 @?= ExitSuccess
     (_, showOut2, _) <- runIcarium db ["task", "show", tid]
     assertBool "no-commit cleared after --commit-required" (not ("no-commit" `isInfixOf` showOut2))
+
+testTaskModelEffortAddShow :: IO ()
+testTaskModelEffortAddShow = withTempDb $ \db -> do
+    (addCode, addOut, _) <-
+        runIcarium db ["task", "add", "Cheap task", "--model", "claude-haiku-4-5-20251001", "--effort", "low"]
+    addCode @?= ExitSuccess
+    let tid = head (words addOut)
+
+    (showCode, showOut, _) <- runIcarium db ["task", "show", tid]
+    showCode @?= ExitSuccess
+    assertBool "model shown in task show" ("claude-haiku-4-5-20251001" `isInfixOf` showOut)
+    assertBool "effort shown in task show" ("low" `isInfixOf` showOut)
+
+    (jCode, jOut, _) <- runIcarium db ["task", "show", tid, "--json"]
+    jCode @?= ExitSuccess
+    let obj = expectObject (decodeOut jOut)
+    expectField "model" obj @?= "claude-haiku-4-5-20251001"
+    expectField "effort" obj @?= "low"
+
+    (_, addOut2, _) <- runIcarium db ["task", "add", "Default task"]
+    let tid2 = head (words addOut2)
+    (_, showOut2, _) <- runIcarium db ["task", "show", tid2]
+    assertBool "model line absent when unset" (not ("model:" `isInfixOf` showOut2))
+    assertBool "effort line absent when unset" (not ("effort:" `isInfixOf` showOut2))
+
+testTaskModelEffortUpdate :: IO ()
+testTaskModelEffortUpdate = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Retier me"]
+    let tid = head (words addOut)
+
+    (uCode, _, _) <- runIcarium db ["task", "update", tid, "--model", "claude-opus-4-8", "--effort", "xhigh"]
+    uCode @?= ExitSuccess
+    (_, showOut, _) <- runIcarium db ["task", "show", tid]
+    assertBool "model set" ("claude-opus-4-8" `isInfixOf` showOut)
+    assertBool "effort set" ("xhigh" `isInfixOf` showOut)
+
+    -- Empty string clears, matching the category-axis flags.
+    (cCode, _, _) <- runIcarium db ["task", "update", tid, "--model", "", "--effort", ""]
+    cCode @?= ExitSuccess
+    (_, showOut2, _) <- runIcarium db ["task", "show", tid]
+    assertBool "model cleared" (not ("model:" `isInfixOf` showOut2))
+    assertBool "effort cleared" (not ("effort:" `isInfixOf` showOut2))
+
+testTaskEffortInvalid :: IO ()
+testTaskEffortInvalid = withTempDb $ \db -> do
+    (code, _, err) <- runIcarium db ["task", "add", "Bad effort", "--effort", "turbo"]
+    code @?= ExitFailure 1
+    assertBool "names the bad effort" ("turbo" `isInfixOf` err)
 
 testTaskExists :: IO ()
 testTaskExists = withTempDb $ \db -> do

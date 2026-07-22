@@ -47,7 +47,7 @@ import GHC.Clock (getMonotonicTime)
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix, taskCols)
-import Icarium.Types (CategoryAxis, NodeKind (..), Task (..), TaskState (..), readyStates, taskStateText)
+import Icarium.Types (CategoryAxis, Effort, NodeKind (..), Task (..), TaskState (..), readyStates, taskStateText)
 
 data NewTask = NewTask
     { ntTitle :: Text
@@ -55,6 +55,8 @@ data NewTask = NewTask
     , ntState :: TaskState
     , ntPriority :: Maybe Int
     , ntNoCommit :: Bool
+    , ntModel :: Maybe Text
+    , ntEffort :: Maybe Effort
     }
 
 data TaskUpdate = TaskUpdate
@@ -63,10 +65,12 @@ data TaskUpdate = TaskUpdate
     , tuPriority :: Maybe (Maybe Int)
     , tuBlockReason :: Maybe (Maybe Text)
     , tuNoCommit :: Maybe Bool
+    , tuModel :: Maybe (Maybe Text)
+    , tuEffort :: Maybe (Maybe Effort)
     }
 
 emptyUpdate :: TaskUpdate
-emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing
+emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 {- | Queue ordering, shared by @queueTasks@ and @claimNextTask@ so
 `task queue` and `task claim` cannot drift apart.
@@ -80,10 +84,10 @@ insertTask conn NewTask{..} = do
     execute
         conn
         ( Query
-            "INSERT INTO tasks (id, title, body, state, priority, no_commit) \
-            \VALUES (?, ?, ?, ?, ?, ?)"
+            "INSERT INTO tasks (id, title, body, state, priority, no_commit, model, effort) \
+            \VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        (tid, ntTitle, ntBody, ntState, ntPriority, ntNoCommit)
+        (tid, ntTitle, ntBody, ntState, ntPriority, ntNoCommit, ntModel, ntEffort)
     Fts.indexEntry conn tid TaskNode ntTitle ntBody
     pure tid
 
@@ -293,6 +297,8 @@ updateTask conn tid TaskUpdate{..} = do
                         then fromMaybe (taskBlockReason t) tuBlockReason
                         else Nothing
                 newNoCommit = fromMaybe (taskNoCommit t) tuNoCommit
+                newModel = fromMaybe (taskModel t) tuModel
+                newEffort = fromMaybe (taskEffort t) tuEffort
                 -- Claims live only while in_progress (spec/schema.sql).
                 (newClaimBy, newClaimAt)
                     | newState == InProgress = (taskClaimedBy t, taskClaimedAt t)
@@ -302,9 +308,9 @@ updateTask conn tid TaskUpdate{..} = do
                 ( Query
                     "UPDATE tasks SET title=?, state=?, \
                     \priority=?, block_reason=?, no_commit=?, \
-                    \claimed_by=?, claimed_at=? WHERE id=?"
+                    \claimed_by=?, claimed_at=?, model=?, effort=? WHERE id=?"
                 )
-                (newTitle, newState, newPrio, newBlock, newNoCommit, newClaimBy, newClaimAt, tid)
+                (newTitle, newState, newPrio, newBlock, newNoCommit, newClaimBy, newClaimAt, newModel, newEffort, tid)
             -- Keep FTS title in sync when title changes.
             when (isJust tuTitle) $
                 Fts.indexEntry conn tid TaskNode newTitle (taskBody t)

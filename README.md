@@ -71,8 +71,9 @@ build = "cabal build all"
 test  = "cabal test all"
 
 [dispatch]
-# Defaults for the headless agent; override per-run with
-# `dispatch run --model / --effort`.
+# Defaults for the headless agent. A task can carry its own
+# `task add --model / --effort`; a `dispatch run --model / --effort` flag
+# beats both.
 model  = "claude-sonnet-5"
 effort = "high"
 

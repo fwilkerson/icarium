@@ -7,6 +7,7 @@ module Icarium.Dispatch.Internal (
     applyOutcomeToTask,
 ) where
 
+import Control.Applicative ((<|>))
 import Control.Exception (onException)
 import Control.Monad (unless, void, when)
 import Data.Maybe (fromMaybe)
@@ -82,11 +83,19 @@ data ResolvedOpts = ResolvedOpts
     , roBase :: Text
     }
 
+{- | Precedence: the @dispatch run@ flag, then the task's own override, then
+the @[dispatch]@ config default. The flag is a deliberate one-off, so it
+outranks the task's standing routing choice.
+-}
 resolveDispatchOpts :: DispatchRequest -> ResolvedOpts
 resolveDispatchOpts req =
     ResolvedOpts
-        { roModel = fromMaybe (dcModel (cfgDispatch (drConfig req))) (drModelOverride req)
-        , roEffort = fromMaybe (dcEffort (cfgDispatch (drConfig req))) (drEffortOverride req)
+        { roModel =
+            fromMaybe (dcModel (cfgDispatch (drConfig req))) $
+                drModelOverride req <|> taskModel (drTask req)
+        , roEffort =
+            fromMaybe (dcEffort (cfgDispatch (drConfig req))) $
+                drEffortOverride req <|> taskEffort (drTask req)
         , roBase = fromMaybe (pcIntegrationBranch (cfgProject (drConfig req))) (drBaseOverride req)
         }
 

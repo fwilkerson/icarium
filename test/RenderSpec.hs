@@ -94,6 +94,8 @@ mkRow tid title st pri cats deps refs blockReason =
                 , taskNoCommit = False
                 , taskClaimedBy = Nothing
                 , taskClaimedAt = Nothing
+                , taskModel = Nothing
+                , taskEffort = Nothing
                 }
         , Icarium.Render.trCats = cats
         , Icarium.Render.trDeps = deps

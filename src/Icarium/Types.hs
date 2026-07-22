@@ -287,6 +287,9 @@ data Task = Task
     , taskNoCommit :: Bool
     , taskClaimedBy :: Maybe Text
     , taskClaimedAt :: Maybe Text
+    , -- Nothing = inherit the [dispatch] defaults from icarium.toml.
+      taskModel :: Maybe Text
+    , taskEffort :: Maybe Effort
     }
     deriving (Show)
 
@@ -294,6 +297,8 @@ instance FromRow Task where
     fromRow =
         Task
             <$> field
+            <*> field
+            <*> field
             <*> field
             <*> field
             <*> field

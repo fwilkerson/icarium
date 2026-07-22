@@ -142,6 +142,8 @@ newTask title =
         , RT.ntState = ReadyHeadless
         , RT.ntPriority = Nothing
         , RT.ntNoCommit = False
+        , RT.ntModel = Nothing
+        , RT.ntEffort = Nothing
         }
 
 -- | The gate command and process-tree rows from the log's forensics line.

@@ -271,6 +271,8 @@ defaultConfigText =
     \test  = \"cabal test all\"\n\
     \\n\
     \[dispatch]\n\
+    \# Routing defaults. A task carrying its own --model/--effort overrides\n\
+    \# these; a `dispatch run --model/--effort` flag overrides the task.\n\
     \model  = \"claude-opus-4-8\"\n\
     \effort = \"medium\"\n\
     \# The tools list is the gate: a tool absent here does not exist for the\n\

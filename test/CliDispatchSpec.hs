@@ -30,6 +30,7 @@ tests =
         , testCase "dispatch run drains empty queue without --max" testDispatchRunEmptyQueue
         , testCase "dispatch run ignores stale max_dispatches_per_run" testDispatchRunStaleConfig
         , testCase "dispatch dry-run: prompt reads body file even when sweep is blind" testDryRunPromptReadsBodyFile
+        , testCase "dispatch dry-run: task model/effort beat config, flags beat task" testDryRunTaskOverrides
         ]
 
 testDispatchListEmpty :: IO ()
@@ -258,6 +259,49 @@ staleIcariumToml =
         , "domains     = [\"core\"]"
         , "disciplines = [\"development\"]"
         ]
+
+{- | Routing precedence, read off the dry run: @[dispatch]@ config is the
+floor (claude-sonnet-4-6 / high in 'minimalIcariumToml'), the task's own
+columns override it, and a @dispatch run@ flag overrides both.
+-}
+testDryRunTaskOverrides :: IO ()
+testDryRunTaskOverrides = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir </> "icarium.db"
+    writeFile (dir </> "icarium.toml") minimalIcariumToml
+    (_, addOut, _) <-
+        runIcarium
+            db
+            [ "task"
+            , "add"
+            , "routed task"
+            , "--state"
+            , "ready-headless"
+            , "--body"
+            , "b"
+            , "--model"
+            , "claude-haiku-4-5-20251001"
+            , "--effort"
+            , "low"
+            ]
+    let tid = head (words addOut)
+
+    (code, out, _) <- runIcariumIn dir db ["dispatch", "run", tid, "--dry-run"]
+    code @?= ExitSuccess
+    assertBool "task model wins over config" ("model:                   claude-haiku-4-5-20251001" `isInfixOf` out)
+    assertBool "task effort wins over config" ("effort:                  low" `isInfixOf` out)
+
+    (fCode, fOut, _) <-
+        runIcariumIn dir db ["dispatch", "run", tid, "--dry-run", "--model", "claude-opus-4-8", "--effort", "max"]
+    fCode @?= ExitSuccess
+    assertBool "flag model wins over task" ("model:                   claude-opus-4-8" `isInfixOf` fOut)
+    assertBool "flag effort wins over task" ("effort:                  max" `isInfixOf` fOut)
+
+    -- An untouched task still inherits the config defaults.
+    (_, addOut2, _) <- runIcarium db ["task", "add", "plain task", "--state", "ready-headless", "--body", "b"]
+    let tid2 = head (words addOut2)
+    (_, out2, _) <- runIcariumIn dir db ["dispatch", "run", tid2, "--dry-run"]
+    assertBool "config model when task has none" ("model:                   claude-sonnet-4-6" `isInfixOf` out2)
+    assertBool "config effort when task has none" ("effort:                  high" `isInfixOf` out2)
 
 {- | Regression for issue #8: the dispatch prompt must render the body FILE
 even when mtimeSweep is blind to it. A PAST mtime guarantees the sweep's

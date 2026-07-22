@@ -64,6 +64,8 @@ testTask = withDiskDb $ \db c -> do
                 , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
+                , RT.ntModel = Nothing
+                , RT.ntEffort = Nothing
                 }
     body <- RT.getTaskBody c tid
     body @?= "task body"

@@ -33,6 +33,8 @@ taskCols alias =
             , "no_commit"
             , "claimed_by"
             , "claimed_at"
+            , "model"
+            , "effort"
             ]
 
 {- | One @id IN (…)@ clause per @(axis, name)@ filter, ANDed by the caller.
