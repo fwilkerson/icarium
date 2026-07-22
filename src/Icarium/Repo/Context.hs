@@ -4,6 +4,7 @@ module Icarium.Repo.Context (
     emptyUpdate,
     contextCols,
     insertContext,
+    contextsFromDispatch,
     getContext,
     getContextsByPrefix,
     resolveContextId,
@@ -47,6 +48,10 @@ import Icarium.Types (
 data NewContext = NewContext
     { ncTitle :: Text
     , ncBody :: Text
+    , ncSourceDispatch :: Maybe Text
+    {- ^ The dispatch that produced this entry, when the gate is writing it.
+    'Nothing' for anything a human filed.
+    -}
     }
 
 newtype ContextUpdate = ContextUpdate
@@ -61,10 +66,31 @@ insertContext conn NewContext{..} = do
     cid <- newId
     execute
         conn
-        (Query "INSERT INTO context (id, title, body) VALUES (?, ?, ?)")
-        (cid, ncTitle, ncBody)
+        ( Query
+            "INSERT INTO context (id, title, body, source_dispatch_id) \
+            \VALUES (?, ?, ?, ?)"
+        )
+        (cid, ncTitle, ncBody, ncSourceDispatch)
     Fts.indexEntry conn cid ContextNode ncTitle ncBody
     pure cid
+
+{- | Context entries produced by one dispatch, oldest first.
+
+Reads provenance off the row. The predecessor joined the ctx→task edge and
+filtered @created_at@ against the run's start/end window, which silently
+mis-attributed entries once two dispatches on a task overlapped.
+-}
+contextsFromDispatch :: Connection -> Text -> IO [Context]
+contextsFromDispatch conn did =
+    query
+        conn
+        ( Query $
+            "SELECT "
+                <> contextCols
+                <> " FROM context WHERE source_dispatch_id = ?"
+                <> " ORDER BY created_at ASC, id ASC"
+        )
+        (Only did)
 
 contextCols :: Text
 contextCols = "id, title, body, created_at, updated_at"

@@ -6,9 +6,9 @@ module Icarium.Repo.Edge (
     resolveEdgeId,
     referencedContexts,
     dependencyTasks,
+    derivedFromTasks,
     taskEdgeCounts,
     contextInboundCounts,
-    contextDerivedFromDispatch,
     ctxChildEdges,
 ) where
 
@@ -145,6 +145,25 @@ dependencyTasks conn tid =
         )
         (Only tid)
 
+{- | Tasks this task was derived from — a follow-up pointing back at the work
+that turned it up. Distinct from depends_on: the parent does not block it.
+-}
+derivedFromTasks :: Connection -> Text -> IO [Task]
+derivedFromTasks conn tid =
+    query
+        conn
+        ( Query $
+            "SELECT "
+                <> taskCols "t."
+                <> " FROM edges e \
+                   \JOIN tasks t ON t.id = e.dst_id \
+                   \WHERE e.kind = 'derived_from' \
+                   \  AND e.src_kind = 'task' AND e.src_id = ? \
+                   \  AND e.dst_kind = 'task' \
+                   \ORDER BY e.created_at ASC"
+        )
+        (Only tid)
+
 {- | Count outgoing depends_on and references edges for multiple task ids.
 Returns @(deps_count, refs_count)@ per task id.
 Tasks with no edges are included with counts of 0.
@@ -209,30 +228,3 @@ ctxChildEdges conn dstId mKind =
     params = case mKind of
         Nothing -> [SQLText dstId]
         Just k -> [SQLText dstId, SQLText (edgeKindDbText k)]
-
-{- | Context entries derived from a task during a specific dispatch window.
-Filters by context.created_at >= started_at (and <= ended_at when present)
-so that only entries from this dispatch are returned when the same task has
-had multiple dispatches.
--}
-contextDerivedFromDispatch :: Connection -> Text -> Text -> Maybe Text -> IO [Context]
-contextDerivedFromDispatch conn tid startedAt mEndedAt =
-    query conn q params
-  where
-    endClause = case mEndedAt of
-        Nothing -> ""
-        Just _ -> " AND cx.created_at <= ?"
-    q =
-        Query $
-            "SELECT cx.id, cx.title, cx.body, cx.created_at, cx.updated_at \
-            \FROM edges e \
-            \JOIN context cx ON cx.id = e.src_id \
-            \WHERE e.kind = 'derived_from' \
-            \  AND e.src_kind = 'context' \
-            \  AND e.dst_kind = 'task' AND e.dst_id = ? \
-            \  AND cx.created_at >= ?"
-                <> endClause
-                <> " ORDER BY cx.created_at ASC"
-    params = case mEndedAt of
-        Nothing -> [SQLText tid, SQLText startedAt]
-        Just ea -> [SQLText tid, SQLText startedAt, SQLText ea]

@@ -41,7 +41,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Schema (applySchema)
 import Icarium.Types
-import TestHelpers (minTask, mkCat, withTestDb, withTestRepo)
+import TestHelpers (insertTestDispatch, minTask, mkCat, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -69,9 +69,9 @@ tests =
 dispatchResult :: DispatchOutcome -> Text -> Maybe WorkerPayload -> DispatchResult
 dispatchResult outcome notes mPayload =
     DispatchResult
-        { dresDispatchId = Just "01DISPATCH0000000000000000"
+        { dresDispatchId = Just ingestDispatchId
         , dresOutcome = outcome
-        , dresBranch = "dispatch/01DISPATCH0000000000000000"
+        , dresBranch = "dispatch/" <> ingestDispatchId
         , dresNotes = notes
         , dresLogPath = Nothing
         , dresBaseSha = Nothing
@@ -101,8 +101,13 @@ withIngestTask act =
             mapM_
                 (\(axis, name) -> mkCat c axis name >>= RC.attachTaskCategory c tid . categoryId)
                 [(Domain, "dispatch"), (Discipline, "haskell"), (Kind, "enhancement")]
+            insertTestDispatch c ingestDispatchId tid
             Just t <- RT.getTask c tid
             act c db t
+
+-- | The run every 'dispatchResult' in this module claims to come from.
+ingestDispatchId :: Text
+ingestDispatchId = "01DISPATCH0000000000000000"
 
 testIngestSubmitted :: IO ()
 testIngestSubmitted = withIngestTask $ \c db t -> do
@@ -254,12 +259,19 @@ testWarnEntryLinksTask =
                         , RT.ntNoCommit = False
                         }
             cat <- mkCat c Domain "cli"
+            let did = "01WARNDISPATCH00000000000A"
+            insertTestDispatch c did tid
             writeWarnContextEntry
                 c
                 db
+                did
                 minTask{taskId = tid}
                 [cat]
                 [Finding AxisStandards SevWarn (Just "src/Foo.hs") "possible Duplicated Code"]
+            -- The reviewer entry is gate-written, so it carries the run that
+            -- produced it; `dispatch show` reads it back off this column.
+            fromRun <- RCx.contextsFromDispatch c did
+            length fromRun @?= 1
             edges <- RE.listEdges c (Just tid) Nothing (Just References)
             case edges of
                 [e] -> do

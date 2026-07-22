@@ -43,7 +43,7 @@ withDiskDb act =
 
 testContext :: IO ()
 testContext = withDiskDb $ \db c -> do
-    (cid, fp) <- createContextWithBody c db RCx.NewContext{RCx.ncTitle = "warn", RCx.ncBody = "ctx findings"}
+    (cid, fp) <- createContextWithBody c db RCx.NewContext{RCx.ncTitle = "warn", RCx.ncBody = "ctx findings", RCx.ncSourceDispatch = Nothing}
     body <- RCx.getContextBody c cid
     body @?= "ctx findings"
     fp @?= ctxBodyPath (bodiesDir db) cid

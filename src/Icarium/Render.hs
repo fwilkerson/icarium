@@ -55,8 +55,8 @@ data TaskRow = TaskRow
 @bodyPath@: path to the body file on disk (agents @Read@ this to see content).
 @retiredIds@: refs among these ids get a [retired] marker in the links tree.
 -}
-renderTaskHuman :: Bool -> Task -> Text -> [Context] -> [Task] -> [Category] -> [Text] -> Text
-renderTaskHuman utf8 t bodyPath refs deps cats retiredIds =
+renderTaskHuman :: Bool -> Task -> Text -> [Context] -> [Task] -> [Task] -> [Category] -> [Text] -> Text
+renderTaskHuman utf8 t bodyPath refs deps derived cats retiredIds =
     T.unlines $
         [ "id:        " <> taskId t
         , "title:     " <> taskTitle t
@@ -72,7 +72,7 @@ renderTaskHuman utf8 t bodyPath refs deps cats retiredIds =
                ]
             <> categoriesBlock cats
             <> [""]
-            <> linksSection utf8 t deps refs retiredIds
+            <> linksSection utf8 t deps derived refs retiredIds
 
 priorityLine :: Task -> Text
 priorityLine t = case taskPriority t of
@@ -100,31 +100,37 @@ claimLines t =
 All depends-on edges first (sorted by target id ASC), then references.
 Last edge gets └─ (or \- in ASCII mode); others get ├─ (or +-).
 -}
-linksSection :: Bool -> Task -> [Task] -> [Context] -> [Text] -> [Text]
-linksSection _ _ [] [] _ = ["## Links", "", "(none)", ""]
-linksSection utf8 t deps refs retiredIds = ["## Links", "", rootLine] <> edgeLines <> [""]
+linksSection :: Bool -> Task -> [Task] -> [Task] -> [Context] -> [Text] -> [Text]
+linksSection _ _ [] [] [] _ = ["## Links", "", "(none)", ""]
+linksSection utf8 t deps derived refs retiredIds = ["## Links", "", rootLine] <> edgeLines <> [""]
   where
     rootLine = T.take 10 (taskId t) <> "  " <> taskTitle t
 
-    sortedDeps = sortBy (\a b -> compare (taskId a) (taskId b)) deps
+    byId = sortBy (\a b -> compare (taskId a) (taskId b))
     sortedRefs = sortBy (\a b -> compare (contextId a) (contextId b)) refs
 
-    allEdges :: [Either Task Context]
-    allEdges = map Left sortedDeps <> map Right sortedRefs
+    -- Left carries the kind: two task→task kinds now share the column, and the
+    -- spelling stays owned by 'edgeKindDisplay' rather than repeated here.
+    allEdges :: [Either (EdgeKind, Task) Context]
+    allEdges =
+        map (\d -> Left (DependsOn, d)) (byId deps)
+            <> map (\d -> Left (DerivedFrom, d)) (byId derived)
+            <> map Right sortedRefs
     n = length allEdges
 
-    kindWidth = max (T.length "depends-on") (T.length "references")
+    kindWidth =
+        maximum (map (T.length . edgeKindDisplay) [DependsOn, References, DerivedFrom])
 
     branchG = if utf8 then "├─" else "+-"
     lastG = if utf8 then "└─" else "\\-"
 
     mkEdge i e =
         let g = if i == n - 1 then lastG else branchG
-            kindStr = either (const "depends-on") (const "references") e
-            idStr = either (T.take 10 . taskId) (T.take 10 . contextId) e
-            titStr = either taskTitle contextTitle e
+            kindStr = either (edgeKindDisplay . fst) (const (edgeKindDisplay References)) e
+            idStr = either (T.take 10 . taskId . snd) (T.take 10 . contextId) e
+            titStr = either (taskTitle . snd) contextTitle e
             suffix = case e of
-                Left dep -> "  [" <> taskStateText (taskState dep) <> "]"
+                Left (_, dep) -> "  [" <> taskStateText (taskState dep) <> "]"
                 Right ref -> if contextId ref `elem` retiredIds then "  [retired]" else ""
          in g <> " " <> padr kindWidth kindStr <> "  " <> idStr <> "  " <> titStr <> suffix
 

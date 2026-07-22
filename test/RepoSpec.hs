@@ -88,6 +88,12 @@ tests =
             , testCase "user_version=0 with existing tables: stamps schemaVersion, no DDL re-run" testMigrateVersionZeroWithSchema
             , testCase "full migration chain runs from an empty DB to schemaVersion" testMigrateChainFromEmpty
             , testCase "migration 14 widens the axis CHECK, keeping rows and FKs" testMigration14KindAxis
+            , testCase "migration 17 adds the column to a pre-17 context table" testMigration17AddsProvenance
+            , testCase "migration 18 rebuild preserves existing edges" testMigration18PreservesEdges
+            ]
+        , testGroup
+            "context provenance"
+            [ testCase "overlapping dispatches each attribute their own entries" testCtxProvenanceOverlappingRuns
             ]
         , testGroup
             "dispatch token columns"
@@ -578,24 +584,6 @@ testMigrateChainFromEmpty =
 -- resolveDispatchId tests
 -- =============================================================
 
-insertTestDispatch :: Connection -> Text -> Text -> IO ()
-insertTestDispatch c did tid =
-    execute
-        c
-        ( Query
-            "INSERT INTO dispatches \
-            \(id, task_id, branch, base_branch, base_sha, model, effort) \
-            \VALUES (?,?,?,?,?,?,?)"
-        )
-        ( did
-        , tid
-        , "dispatch/" <> did :: Text
-        , "main" :: Text
-        , "0000000000000000000000000000000000000000" :: Text
-        , "claude-sonnet-4-6" :: Text
-        , "medium" :: Text
-        )
-
 testResolveDispatchFullId :: IO ()
 testResolveDispatchFullId = withTestDb $ \c -> do
     tid <-
@@ -786,7 +774,7 @@ testListEdgesSrcKindFilter = withTestDb $ \c -> do
     t1 <- RT.insertTask c RT.NewTask{RT.ntTitle = "A", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     t2 <- RT.insertTask c RT.NewTask{RT.ntTitle = "B", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
     t3 <- RT.insertTask c RT.NewTask{RT.ntTitle = "C", RT.ntBody = "", RT.ntState = ReadyHeadless, RT.ntPriority = Nothing, RT.ntNoCommit = False}
-    kid <- RK.insertContext c RK.NewContext{RK.ncTitle = "K", RK.ncBody = ""}
+    kid <- RK.insertContext c RK.NewContext{RK.ncTitle = "K", RK.ncBody = "", RK.ncSourceDispatch = Nothing}
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
     _ <- RE.insertEdge c References TaskNode t1 ContextNode kid
     _ <- RE.insertEdge c DependsOn TaskNode t2 TaskNode t3
@@ -1952,3 +1940,80 @@ testListParkedDispatches = withTestDb $ \c -> do
     RD.setMerged c did "cafebabe"
     parked' <- RD.listParkedDispatches c
     null parked' @?= True
+
+-- =============================================================
+-- schema/migration agreement and context provenance
+-- =============================================================
+
+{- | Migration 17 has to land on a DB that predates it. Note this cannot be
+tested via @migrateDb@ from empty: 'migrations' starts with @Migration 1
+applySchema@, which stamps @user_version@ at the current version, so the
+incremental steps never run on a fresh DB. The pre-17 shape is restored by
+hand instead, as migration 14's test does.
+-}
+testMigration17AddsProvenance :: IO ()
+testMigration17AddsProvenance = withBaseTestDb $ \conn -> do
+    execSql
+        conn
+        "DROP TABLE context;\n\
+        \CREATE TABLE context (\n\
+        \  id TEXT PRIMARY KEY,\n\
+        \  title TEXT NOT NULL,\n\
+        \  body TEXT NOT NULL DEFAULT '',\n\
+        \  created_at TEXT NOT NULL DEFAULT (datetime('now')),\n\
+        \  updated_at TEXT NOT NULL DEFAULT (datetime('now')));\n\
+        \INSERT INTO context (id, title, body) VALUES ('01PRE17', 'Pre-migration', 'kept');"
+
+    let m17 = case filter ((== 17) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 17 not registered"
+    migrationUp m17 conn
+
+    -- The row survives, and reads as belonging to no run rather than vanishing.
+    rows <-
+        query_
+            conn
+            "SELECT id, body, source_dispatch_id FROM context" ::
+            IO [(Text, Text, Maybe Text)]
+    rows @?= [("01PRE17", "kept", Nothing)]
+
+{- | Migration 18 rebuilds the edges table to widen a CHECK. A rebuild that
+drops rows is silent — the constraint still looks right afterwards.
+-}
+testMigration18PreservesEdges :: IO ()
+testMigration18PreservesEdges = withTestDb $ \c -> do
+    parent <- mkTaskRow c "Parent"
+    child <- mkTaskRow c "Child"
+    cx <- mkContext c "Learning" ""
+    dep <- RE.insertEdge c DependsOn TaskNode child TaskNode parent
+    ref <- RE.insertEdge c References TaskNode parent ContextNode cx
+    der <- RE.insertEdge c DerivedFrom TaskNode child TaskNode parent
+
+    let m18 = case filter ((== 18) . migrationVersion) migrations of
+            (m : _) -> m
+            [] -> error "migration 18 not registered"
+    migrationUp m18 c
+
+    survivors <- RE.listEdges c Nothing Nothing Nothing
+    let allIds = map edgeId survivors
+    mapM_ (\e -> assertBool "edge survived rebuild" (e `elem` allIds)) [dep, ref, der]
+
+{- | Scenario: two dispatches on one task overlap, and both write ctx. The
+created_at window this replaced could not separate runs that share a range;
+each run now reads its own rows off the provenance column.
+-}
+testCtxProvenanceOverlappingRuns :: IO ()
+testCtxProvenanceOverlappingRuns = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Racing task"
+    d1 <- newId
+    d2 <- newId
+    insertTestDispatch c d1 tid
+    insertTestDispatch c d2 tid
+    first <- mkCtxFrom c "from run one" (Just d1)
+    second <- mkCtxFrom c "from run two" (Just d2)
+    _handFiled <- mkCtxFrom c "filed by a human" Nothing
+
+    one <- RK.contextsFromDispatch c d1
+    map contextId one @?= [first]
+    two <- RK.contextsFromDispatch c d2
+    map contextId two @?= [second]

@@ -40,8 +40,16 @@ CREATE TABLE context (
     title       TEXT NOT NULL,
     body        TEXT NOT NULL DEFAULT '',            -- markdown
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Which dispatch produced this entry. NULL = hand-written. Provenance is
+    -- an attribute of the row, not a graph edge: nothing traverses ctx→run,
+    -- and a run is an execution event rather than a peer of task/context.
+    -- SET NULL rather than CASCADE for if FKs are ever enforced: the learning
+    -- outlives the run. Declarative only today, like the other FKs here.
+    source_dispatch_id TEXT REFERENCES dispatches(id) ON DELETE SET NULL
 );
+
+CREATE INDEX context_source_dispatch_idx ON context(source_dispatch_id);
 
 -- Append-only record of curation decisions (ADR 0001). An entry's
 -- visibility (current/retired) is derived from its latest event; there is
@@ -117,6 +125,9 @@ CREATE TABLE edges (
         (kind = 'references'   AND src_kind = 'task'    AND dst_kind = 'context') OR
         (kind = 'references'   AND src_kind = 'context' AND dst_kind = 'context') OR
         (kind = 'derived_from' AND src_kind = 'context' AND dst_kind IN ('task','context')) OR
+        -- task→task: a task discovered while working another one. depends_on
+        -- inverts it (the child does not block on its parent).
+        (kind = 'derived_from' AND src_kind = 'task'    AND dst_kind = 'task') OR
         (kind = 'supersedes'   AND src_kind = 'context' AND dst_kind = 'context')
     ),
 

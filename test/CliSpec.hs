@@ -174,6 +174,7 @@ tests =
         , testCase "reindex: rebuilds FTS from DB after body_fts wipe" testReindexRestoresFts
         , testCase "dispatch dry-run: prompt reads body file even when sweep is blind" testDryRunPromptReadsBodyFile
         , testCase "link add ctx references ctx is accepted" testLinkAddCtxReferencesCtx
+        , testCase "link add task derived-from task records a follow-up" testLinkAddTaskDerivedFromTask
         , testCase "ctx children lists direct children by edge kind" testCtxChildren
         , testCase "ctx tree recurses and detects cycles" testCtxTree
         , testCase "task exists: found exits 0, not-found exits 1, ambiguous exits 2" testTaskExists
@@ -1499,6 +1500,31 @@ testLinkAddCtxReferencesCtx = withTempDb $ \db -> do
     (lCode, lOut, _) <- runIcarium db ["link", "list", "--to", aId]
     lCode @?= ExitSuccess
     assertBool "link list shows references edge" ("references" `isInfixOf` lOut)
+
+{- | Scenario: a follow-up task discovered while working another one. Filing it
+unlinked was the old outcome — `references` is task→context and `depends-on`
+claims the child is blocked on its parent, which it is not.
+-}
+testLinkAddTaskDerivedFromTask :: IO ()
+testLinkAddTaskDerivedFromTask = withTempDb $ \db -> do
+    (_, pOut, _) <- runIcarium db ["task", "add", "Parent work"]
+    let pId = head (words pOut)
+    (_, cOut, _) <- runIcarium db ["task", "add", "Follow-up found while working it"]
+    let cId = head (words cOut)
+
+    (code, out, _) <- runIcarium db ["link", "add", cId, "derived-from", pId]
+    code @?= ExitSuccess
+    assertBool "link add task derived-from task returns edge id" (not (null out))
+
+    (lCode, lOut, _) <- runIcarium db ["link", "list", "--to", pId]
+    lCode @?= ExitSuccess
+    assertBool "link list shows the derived-from edge" ("derived-from" `isInfixOf` lOut)
+
+    -- Widening one kind must not widen the table: `supersedes` still has no
+    -- task→task shape, and the error has to name the shapes that are allowed.
+    (bad, _, bErr) <- runIcarium db ["link", "add", cId, "supersedes", pId]
+    bad @?= ExitFailure 2
+    assertBool "error names the expected shape" ("context -> context" `isInfixOf` bErr)
 
 testCtxChildren :: IO ()
 testCtxChildren = withTempDb $ \db -> do

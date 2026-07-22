@@ -327,14 +327,15 @@ runShow db o = do
             else do
                 refs <- RE.referencedContexts c (taskId t)
                 deps <- RE.dependencyTasks c (taskId t)
+                derived <- RE.derivedFromTasks c (taskId t)
                 cats <- RC.taskCategoriesFor c (taskId t)
                 retiredIds <- RCur.retiredContextIds c (map contextId refs)
                 let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
                 if sJson o
-                    then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps cats retiredIds)
+                    then BLC.putStrLn (Json.renderTaskShowJson t bodyPath refs deps derived cats retiredIds)
                     else do
                         utf8 <- detectUtf8
-                        TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps cats retiredIds)
+                        TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps derived cats retiredIds)
   where
     openDb = if sPrompt o then withDbSync else withDb
 

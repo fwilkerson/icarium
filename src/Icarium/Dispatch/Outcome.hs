@@ -121,10 +121,10 @@ that blocked still learned something, and that is what the next attempt needs.
 -}
 applyOutcomeToTask :: Connection -> FilePath -> Task -> DispatchResult -> IO ()
 applyOutcomeToTask conn db t res
-    | Nothing <- dresDispatchId res = pure ()
-    | otherwise = do
+    | Just did <- dresDispatchId res = do
         applyState
-        ingestFutureNotes conn db t (maybe [] wpForFutureAgents (dresPayload res))
+        ingestFutureNotes conn db did t (maybe [] wpForFutureAgents (dresPayload res))
+    | otherwise = pure ()
   where
     applyState = case dresOutcome res of
         OSuccess -> do
@@ -158,9 +158,9 @@ where a coarse one at least surfaces on the task's own axis. Axis eligibility
 is by construction — 'RC.attachContextCategory' drops what cannot ride on a
 context.
 -}
-ingestFutureNotes :: Connection -> FilePath -> Task -> [FutureNote] -> IO ()
-ingestFutureNotes _ _ _ [] = pure ()
-ingestFutureNotes conn db t notes = do
+ingestFutureNotes :: Connection -> FilePath -> Text -> Task -> [FutureNote] -> IO ()
+ingestFutureNotes _ _ _ _ [] = pure ()
+ingestFutureNotes conn db did t notes = do
     cats <- RC.taskCategoriesFor conn (taskId t)
     forM_ notes $ \n -> do
         (cid, _) <-
@@ -170,6 +170,7 @@ ingestFutureNotes conn db t notes = do
                 RCx.NewContext
                     { RCx.ncTitle = fnTitle n
                     , RCx.ncBody = fnBody n
+                    , RCx.ncSourceDispatch = Just did
                     }
         forM_ cats (RC.attachContextCategory conn cid)
         void $ RE.insertEdge conn DerivedFrom ContextNode cid TaskNode (taskId t)

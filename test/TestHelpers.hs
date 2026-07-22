@@ -3,6 +3,9 @@ module TestHelpers (
     withBaseTestDb,
     mkCat,
     mkContext,
+    mkCtxFrom,
+    mkTaskRow,
+    insertTestDispatch,
     attachContextCats,
     minTask,
     withTestRepo,
@@ -13,7 +16,7 @@ import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Control.Exception (bracket)
 import Control.Monad (forM_)
 import Data.Text (Text)
-import Database.SQLite.Simple (Connection, close, open)
+import Database.SQLite.Simple (Connection, Query (..), close, execute, open)
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, setWorkingDir)
@@ -21,6 +24,7 @@ import System.Process.Typed (proc, readProcess, setWorkingDir)
 import Icarium.Db (migrateDb)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RK
+import Icarium.Repo.Task qualified as RT
 import Icarium.Schema (applySchema)
 import Icarium.Types
 
@@ -44,7 +48,7 @@ mkCat c axis name = do
 
 mkContext :: Connection -> Text -> Text -> IO Text
 mkContext c title body =
-    RK.insertContext c RK.NewContext{RK.ncTitle = title, RK.ncBody = body}
+    RK.insertContext c RK.NewContext{RK.ncTitle = title, RK.ncBody = body, RK.ncSourceDispatch = Nothing}
 
 attachContextCats :: Connection -> Text -> [Category] -> IO ()
 attachContextCats c kid cats =
@@ -92,3 +96,45 @@ cwdLock = unsafePerformIO (newMVar ())
 
 withCwdLock :: IO a -> IO a
 withCwdLock = withMVar cwdLock . const
+
+{- | A dispatch row for @tid@ under id @did@. Enough to satisfy the foreign
+keys that hang off a run — anything a test asserts on is set by the code
+under test, not here.
+-}
+insertTestDispatch :: Connection -> Text -> Text -> IO ()
+insertTestDispatch c did tid =
+    execute
+        c
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, model, effort) \
+            \VALUES (?,?,?,?,?,?,?)"
+        )
+        ( did
+        , tid
+        , "dispatch/" <> did :: Text
+        , "main" :: Text
+        , "0000000000000000000000000000000000000000" :: Text
+        , "claude-sonnet-4-6" :: Text
+        , "medium" :: Text
+        )
+
+-- | A context entry tagged with the dispatch that produced it (Nothing = hand-filed).
+mkCtxFrom :: Connection -> Text -> Maybe Text -> IO Text
+mkCtxFrom c title mDid =
+    RK.insertContext
+        c
+        RK.NewContext{RK.ncTitle = title, RK.ncBody = "", RK.ncSourceDispatch = mDid}
+
+-- | A minimal headless-ready task; returns its id.
+mkTaskRow :: Connection -> Text -> IO Text
+mkTaskRow c title =
+    RT.insertTask
+        c
+        RT.NewTask
+            { RT.ntTitle = title
+            , RT.ntBody = ""
+            , RT.ntState = ReadyHeadless
+            , RT.ntPriority = Nothing
+            , RT.ntNoCommit = False
+            }

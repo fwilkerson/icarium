@@ -121,6 +121,9 @@ runAdd db o = withDb db $ \c -> do
             RCx.NewContext
                 { RCx.ncTitle = aTitle o
                 , RCx.ncBody = body
+                , -- Hand-filed: `ctx add` has no run behind it. The gate sets
+                  -- provenance directly rather than shelling out to this.
+                  RCx.ncSourceDispatch = Nothing
                 }
     forM_ (catMaybes [mDomain, mDisc] <> inheritedCats) (RC.attachContextCategory c cxid)
     forM_ (derived <> autoDerived) $ \(nkind, nid) ->

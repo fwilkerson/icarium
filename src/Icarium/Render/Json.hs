@@ -42,13 +42,14 @@ taskRowEnc r =
             <> E.pair "references_count" (E.int (trRefs r))
 
 -- | Mirrors 'Icarium.Render.renderTaskHuman': metadata, body path, links.
-renderTaskShowJson :: Task -> Text -> [Context] -> [Task] -> [Category] -> [Text] -> BL.ByteString
-renderTaskShowJson t bodyPath refs deps cats retiredIds =
+renderTaskShowJson :: Task -> Text -> [Context] -> [Task] -> [Task] -> [Category] -> [Text] -> BL.ByteString
+renderTaskShowJson t bodyPath refs deps derived cats retiredIds =
     enc . E.pairs $
         taskCore t
             <> E.pair "body_path" (E.text bodyPath)
             <> catsSeries cats
             <> E.pair "depends_on" (E.list taskLinkEnc deps)
+            <> E.pair "derived_from" (E.list taskLinkEnc derived)
             <> E.pair "references" (E.list (contextLinkEnc retiredIds) refs)
 
 taskCore :: Task -> Series

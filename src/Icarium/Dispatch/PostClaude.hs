@@ -220,7 +220,7 @@ runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
                     | rrVerdict rr == RVWarn
                     , Right fs <- rrOutcome rr -> do
                         cats <- RC.taskCategoriesFor conn (taskId task)
-                        writeWarnContextEntry conn db task cats fs
+                        writeWarnContextEntry conn db did task cats fs
                 _ -> pure ()
             pure (PCDone dr)
 
@@ -244,8 +244,8 @@ readWorkerPayload logPath = do
 this review happened, and @/curate-ctx@ promotes it as a whole. The body is the
 findings table.
 -}
-writeWarnContextEntry :: Connection -> FilePath -> Task -> [Category] -> [Finding] -> IO ()
-writeWarnContextEntry conn db task cats findings = do
+writeWarnContextEntry :: Connection -> FilePath -> Text -> Task -> [Category] -> [Finding] -> IO ()
+writeWarnContextEntry conn db did task cats findings = do
     (cid, _) <-
         createContextWithBody
             conn
@@ -253,6 +253,7 @@ writeWarnContextEntry conn db task cats findings = do
             RCx.NewContext
                 { RCx.ncTitle = "reviewer warn: " <> taskTitle task
                 , RCx.ncBody = renderFindings findings
+                , RCx.ncSourceDispatch = Just did
                 }
     forM_ cats (RC.attachContextCategory conn cid)
     -- Link the note back to its task for provenance (task references ctx).

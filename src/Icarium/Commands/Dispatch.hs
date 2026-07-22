@@ -39,8 +39,8 @@ import Icarium.Dispatch.Worktree (
  )
 import Icarium.Heartbeat (heartbeatStale, pidAlive)
 import Icarium.Render qualified as Render
+import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
-import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -454,12 +454,7 @@ runList db o = withDb db $ \c -> do
     tasks <- RT.getTasksByIds c taskIds
     let titleMap = [(taskId t, taskTitle t) | t <- tasks]
     ctxCounts <- forM filtered $ \d ->
-        length
-            <$> RE.contextDerivedFromDispatch
-                c
-                (dispatchTaskId d)
-                (dispatchStartedAt d)
-                (dispatchEndedAt d)
+        length <$> RCx.contextsFromDispatch c (dispatchId d)
     let rows =
             zipWith
                 ( \d kc ->
@@ -494,12 +489,7 @@ runShow db o = withDb db $ \c -> do
         Nothing -> fatal 1 ("dispatch not found: " <> T.unpack did)
         Just d -> do
             mt <- RT.getTask c (dispatchTaskId d)
-            ks <-
-                RE.contextDerivedFromDispatch
-                    c
-                    (dispatchTaskId d)
-                    (dispatchStartedAt d)
-                    (dispatchEndedAt d)
+            ks <- RCx.contextsFromDispatch c (dispatchId d)
             mRetryId <- case dispatchOutcome d of
                 Just OFailure -> do
                     later <- RD.listDispatches c (Just (dispatchTaskId d))

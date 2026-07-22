@@ -48,7 +48,7 @@ addP =
         <*> argument
             edgeKindReader
             ( metavar "KIND"
-                <> help "depends-on | references | derived-from | supersedes. For derived-from, `ctx add --derived-from <ID>` is the convenience equivalent. Ctx→ctx allowed for references, derived-from, supersedes."
+                <> help "depends-on | references | derived-from | supersedes. For derived-from, `ctx add --derived-from <ID>` is the convenience equivalent. Ctx→ctx allowed for references, derived-from, supersedes; task→task derived-from records a follow-up discovered while working the parent (use depends-on only when it actually blocks)."
             )
         <*> (T.pack <$> strArgument (metavar "DST_ID"))
 
@@ -62,6 +62,7 @@ checkTyping References TaskNode ContextNode = Right ()
 checkTyping References ContextNode ContextNode = Right ()
 checkTyping DerivedFrom ContextNode TaskNode = Right ()
 checkTyping DerivedFrom ContextNode ContextNode = Right ()
+checkTyping DerivedFrom TaskNode TaskNode = Right ()
 checkTyping Supersedes ContextNode ContextNode = Right ()
 checkTyping k sk dk =
     Left $
@@ -77,7 +78,7 @@ checkTyping k sk dk =
 expectedShape :: EdgeKind -> String
 expectedShape DependsOn = "task -> task"
 expectedShape References = "task -> context | context -> context"
-expectedShape DerivedFrom = "context -> (task|context)"
+expectedShape DerivedFrom = "context -> (task|context) | task -> task"
 expectedShape Supersedes = "context -> context"
 
 runAdd :: FilePath -> AddOpts -> IO ()
