@@ -46,6 +46,9 @@ guide =
     \  Read $(icarium ctx  path <id>)\n\
     \  FTS picks up edits on the next icarium command (mtime sweep) -\n\
     \  no manual `reindex` needed.\n\
+    \  Discussion (triage notes, proof, resolutions) accrues as APPENDED H2\n\
+    \  sections; sections already written are immutable. Dispatch diffs bodies\n\
+    \  by H2 section and flags any edit to an existing one for the reviewer.\n\
     \\n\
     \Inspecting\n\
     \  icarium task show <id>                 # metadata only; body NOT printed.\n\

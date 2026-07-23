@@ -40,6 +40,7 @@ tests =
         , testCase "bare dispatch prints help and exits non-zero" testBareDispatchHelp
         , testCase "bare link prints help and exits non-zero" testBareLinkHelp
         , testCase "bare category prints help and exits non-zero" testBareCategoryHelp
+        , testCase "agents quickstart states the append-only body convention" testAgentsAppendConvention
         , testCase "task ls and task list produce identical output" testTaskLsAlias
         , testCase "task ls --state ready works" testTaskLsStateFlag
         , testCase "task --state ready errors with usage message" testBareTaskWithFlag
@@ -109,6 +110,13 @@ testBareCategoryHelp = withTempDb $ \db -> do
     code @?= ExitSuccess
     assertBool "bare category shows full help" ("Available commands:" `isInfixOf` out)
     assertBool "bare category help notes ls alias" ("(alias: ls)" `isInfixOf` out)
+
+testAgentsAppendConvention :: IO ()
+testAgentsAppendConvention = withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db ["agents"]
+    code @?= ExitSuccess
+    assertBool "quickstart names the append unit" ("H2 section" `isInfixOf` out)
+    assertBool "quickstart says prior sections are immutable" ("immutable" `isInfixOf` out)
 
 testTaskLsAlias :: IO ()
 testTaskLsAlias = withTempDb $ \db -> do
