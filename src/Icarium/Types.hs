@@ -8,6 +8,7 @@ module Icarium.Types (
     parseTaskState,
     parseTaskStateDb,
     Effort (..),
+    allEfforts,
     effortText,
     parseEffort,
     EdgeKind (..),
@@ -136,6 +137,10 @@ parseTaskStateDb = \case
     _ -> Nothing
 
 data Effort = Low | Medium | High | XHigh | Max deriving (Show, Eq)
+
+-- | Every level, cheapest first. Drives the CLI's choice lists.
+allEfforts :: [Effort]
+allEfforts = [Low, Medium, High, XHigh, Max]
 
 effortText :: Effort -> Text
 effortText = \case

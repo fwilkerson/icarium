@@ -119,7 +119,7 @@ runP =
                 effortReader
                 ( long "effort"
                     <> metavar "LEVEL"
-                    <> help "low | medium | high"
+                    <> help ("Override the effort for this dispatch (" <> effortChoices <> ")")
                 )
             )
         <*> optional (textOption "base-branch" "NAME" "Override the base branch for git operations")

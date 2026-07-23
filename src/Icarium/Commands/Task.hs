@@ -143,9 +143,6 @@ effortOverrideP =
             )
         )
 
-effortChoices :: String
-effortChoices = T.unpack (T.intercalate " | " (map effortText [Low, Medium, High, XHigh, Max]))
-
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
     body <- resolveBody (aBody o)

@@ -10,6 +10,7 @@ module Icarium.Commands.Util (
     stateChoices,
     edgeKindReader,
     axisReader,
+    effortChoices,
     effortReader,
     clearableEffortReader,
 
@@ -135,6 +136,9 @@ axisReader = eitherReader $ \s ->
     case parseCategoryAxis (T.pack s) of
         Just a -> Right a
         Nothing -> Left ("invalid axis: " <> s)
+
+effortChoices :: String
+effortChoices = T.unpack (T.intercalate " | " (map effortText allEfforts))
 
 effortReader :: ReadM Effort
 effortReader = eitherReader $ \s ->
