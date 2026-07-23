@@ -340,13 +340,11 @@ runShow db o = do
         tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
         mt <- RT.getTask c tid
         t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
+        (refs, deps, cats) <- loadShowLinks c (taskId t)
         if sPrompt o
             then do
                 bodyFromFile <- readBody (taskBodyPath (bodiesDir db) tid)
                 let t' = t{taskBody = bodyFromFile}
-                refs <- RE.referencedContexts c (taskId t')
-                deps <- RE.dependencyTasks c (taskId t')
-                cats <- RC.taskCategoriesFor c (taskId t')
                 catMatch <- RCx.categoryMatchedContexts c cats 5
                 let refIds = map contextId refs
                     dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
@@ -356,10 +354,7 @@ runShow db o = do
                     mapM_ (TIO.hPutStrLn stderr) (Render.untaggedPromptWarning (taskId t'))
                 TIO.putStr (Render.renderTaskPrompt t' refs dedupedCat deps)
             else do
-                refs <- RE.referencedContexts c (taskId t)
-                deps <- RE.dependencyTasks c (taskId t)
                 derived <- RE.derivedFromTasks c (taskId t)
-                cats <- RC.taskCategoriesFor c (taskId t)
                 retiredIds <- RCur.retiredContextIds c (map contextId refs)
                 let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
                 if sJson o
@@ -369,6 +364,16 @@ runShow db o = do
                         TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps derived cats retiredIds)
   where
     openDb = if sPrompt o then withDbSync else withDb
+
+{- | The link sets every @task show@ branch needs. One fetch site so adding a
+fourth can't land in the prompt render and miss the human one.
+-}
+loadShowLinks :: Connection -> Text -> IO ([Context], [Task], [Category])
+loadShowLinks c tid =
+    (,,)
+        <$> RE.referencedContexts c tid
+        <*> RE.dependencyTasks c tid
+        <*> RC.taskCategoriesFor c tid
 
 -- =============================================================
 -- update

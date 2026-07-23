@@ -76,6 +76,7 @@ tests =
         , testCase "task show --prompt: retired ref delivered, stale ref never" testPromptRetiredRefs
         , testCase "task show --prompt: untagged task warns on stderr" testPromptUntaggedWarns
         , testCase "task show --prompt: kind-only task warns too" testPromptKindOnlyWarns
+        , testCase "task show: refs, deps and cats reach both branches" testShowBranchesAgree
         , testCase "task show --prompt: one retrieval axis is quiet" testPromptTaggedQuiet
         , testCase "task add: untagged capture nudges without blocking" testTaskAddUntaggedNudge
         ]
@@ -756,6 +757,51 @@ testPromptUntaggedWarns = withSystemTempDirectory "icarium-test" $ \dir -> do
     assertBool "warning names the fixing command" ("task update" `isInfixOf` err)
     assertBool "warning names --domain" ("--domain" `isInfixOf` err)
     assertBool "warning names the task id" (tid `isInfixOf` err)
+
+{- | @task show@ and @task show --prompt@ read the same three link sets. Pin
+both against one fixture so a field added to one branch and forgotten in the
+other shows up here.
+-}
+testShowBranchesAgree :: IO ()
+testShowBranchesAgree = withSystemTempDirectory "icarium-test" $ \dir -> do
+    let db = dir <> "/icarium.db"
+    writeFile (dir <> "/icarium.toml") minimalIcariumToml
+    _ <- runIcariumIn dir db ["category", "add", "--axis", "domain", "core"]
+    (_, kOut, _) <- runIcariumIn dir db ["ctx", "add", "linked ref", "--body", "xrefbody"]
+    -- The human links tree truncates ids to 10 chars; assert on that prefix.
+    let kId = take 10 (head (words kOut))
+    (_, dOut, _) <- runIcariumIn dir db ["task", "add", "dependency task"]
+    let dId = take 10 (head (words dOut))
+    (_, aOut, _) <-
+        runIcariumIn
+            dir
+            db
+            [ "task"
+            , "add"
+            , "linked task"
+            , "--state"
+            , "ready-headless"
+            , "--domain"
+            , "core"
+            , "--depends-on"
+            , dId
+            , "--references"
+            , kId
+            ]
+    let tid = head (words aOut)
+
+    (hCode, hOut, _) <- runIcariumIn dir db ["task", "show", tid]
+    hCode @?= ExitSuccess
+    assertBool "human shows ref" (kId `isInfixOf` hOut)
+    assertBool "human shows dep" (dId `isInfixOf` hOut)
+    assertBool "human shows category" ("core" `isInfixOf` hOut)
+
+    (pCode, pOut, pErr) <- runIcariumIn dir db ["task", "show", tid, "--prompt"]
+    pCode @?= ExitSuccess
+    assertBool "prompt shows ref" (kId `isInfixOf` pOut)
+    assertBool "prompt shows dep" (dId `isInfixOf` pOut)
+    -- Cats aren't printed in the prompt; their absence is what warns.
+    assertBool "prompt read the categories" (not ("warn:" `isInfixOf` pErr))
 
 {- | @kind@ is not a retrieval axis, so a kind-only task pulls nothing either --
 the guard is "no retrieval axis", not "no categories".
