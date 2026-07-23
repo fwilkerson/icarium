@@ -7,19 +7,18 @@ authoring durable tasks and ctx entries.
 
 ## When a skill says "publish to the issue tracker"
 
-    icarium task add "Title" --domain <d> --discipline <d> --kind <k> --body-stdin <<'EOF'
+    icarium task add "Title" --domain <d> --discipline <d> --kind <k> \
+      --state <s> --body-stdin <<'EOF'
     ...markdown body...
     EOF
 
-All three must be registered (`icarium category list`; register with
+All three categories must be registered (`icarium category list`; register with
 `icarium category add --axis <axis> <name>`). `--domain`/`--discipline` are the
 retrieval axes — they decide which ctx entries a dispatch prompt pulls in, so
 fill them. `--kind` (`bug`, `enhancement`, `chore`, …) records the shape of the
-work; it is task-only and never affects the pull. New tasks start in state
-`planned`; pass `--state` to file one straight into triage (`idea`) or onto the
-dispatch queue (`ready-headless`) — see [triage labels](triage-labels.md).
-Specs/PRDs are ctx entries (`icarium ctx add`), linked via
-`icarium link add <task> references <ctx>`.
+work and never affects the pull. `--state` defaults to `planned`; pick one from
+[triage labels](triage-labels.md). Specs/PRDs are ctx entries
+(`icarium ctx add`), linked via `icarium link add <task> references <ctx>`.
 
 ## When a skill says "fetch the relevant ticket"
 
