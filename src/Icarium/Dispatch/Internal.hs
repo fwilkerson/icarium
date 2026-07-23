@@ -10,6 +10,8 @@ module Icarium.Dispatch.Internal (
 import Control.Applicative ((<|>))
 import Control.Exception (onException)
 import Control.Monad (unless, void, when)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Except (ExceptT (..), runExceptT, withExceptT)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -103,9 +105,11 @@ resolveDispatchOpts req =
 -- Entry
 -- =============================================================
 
-{- | Run one dispatch. 'Left' means the worktree could not be provisioned
-(no capacity, setup error) before any dispatch row existed — the task is
-untouched and the caller decides whether to stop or fail loudly.
+{- | Run one dispatch. 'Left' means provisioning failed before any dispatch
+row existed — either a preflight check (an unreadable reviewer prompt_path
+or agreement_path, see 'loadPreflight') or the worktree itself (no capacity,
+setup error). The task is untouched and the caller decides whether to stop
+or fail loudly.
 -}
 dispatch :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 dispatch conn req
@@ -117,8 +121,11 @@ dispatch conn req
 -- =============================================================
 
 {- | Loads the reviewer system prompt and working agreement, the two
-externally-named files that must fail closed before a worker starts.
-Shared by the dry-run and real-run preflights so they can't drift.
+externally-named files that must fail closed: an unreadable prompt_path or
+agreement_path has to stop the run before the worker starts (and before any
+dispatch row or task state exists), not silently degrade to a weaker
+built-in once the work is already done. A dry run runs the same checks —
+previewing a prompt the real run would refuse to build is a lie.
 -}
 loadPreflight :: Config -> IO (Either Text (Maybe Text, Maybe Text))
 loadPreflight cfg = do
@@ -131,8 +138,6 @@ loadPreflight cfg = do
 doDryRun :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 doDryRun conn req = do
     task <- refreshTaskBody conn (drDbPath req) (drTask req)
-    -- Same fail-closed posture as the real run: a dry run previewing a
-    -- prompt the real run would refuse to build is a lie.
     preflightResult <- loadPreflight (drConfig req)
     case preflightResult of
         Left err -> pure (Left (WtPreflightFailed err))
@@ -225,98 +230,93 @@ doRealAttempt conn req attempt mFindings mBaseline = do
     let baselineBody = fromMaybe (taskBody task) mBaseline
     baseSha <- either (ioFail . show) pure =<< Git.revParse "." base
 
-    -- Load the reviewer's system prompt and the working agreement before
-    -- the worker starts (and before any dispatch row/task state exists):
-    -- an unreadable prompt_path or agreement_path must fail closed, not
-    -- silently degrade to a weaker built-in after the worker has run.
-    preflightResult <- loadPreflight cfg
+    provisioned <- runExceptT $ do
+        (mSysPrompt, mAgreement) <-
+            withExceptT WtPreflightFailed (ExceptT (loadPreflight cfg))
+        did <- lift newId
+        wt <- ExceptT (createDispatchWorktree "." dcfg did (dispatchBranchName did) base)
+        pure (mSysPrompt, mAgreement, did, wt)
 
-    case preflightResult of
-        Left err -> pure (Left (WtPreflightFailed err))
-        Right (mSysPrompt, mAgreement) -> do
-            did <- newId
+    case provisioned of
+        Left err -> pure (Left err)
+        Right (mSysPrompt, mAgreement, did, wt) -> do
             let branch = dispatchBranchName did
                 logDir = ".icarium" </> "logs"
                 logPath = logDir </> T.unpack did <> ".jsonl"
             createDirectoryIfMissing True logDir
+            absScratch <- resolveScratch wt dcfg
+            createDirectoryIfMissing True absScratch
 
-            mWt <- createDispatchWorktree "." dcfg did branch base
-            case mWt of
-                Left err -> pure (Left err)
-                Right wt -> do
-                    absScratch <- resolveScratch wt dcfg
-                    createDirectoryIfMissing True absScratch
+            RD.insertDispatch
+                conn
+                did
+                RD.NewDispatch
+                    { RD.ndTaskId = taskId task
+                    , RD.ndBranch = branch
+                    , RD.ndBaseBranch = base
+                    , RD.ndBaseSha = baseSha
+                    , RD.ndModel = model
+                    , RD.ndEffort = effort
+                    , RD.ndLogPath = Just logPath
+                    , RD.ndPid = Nothing
+                    }
+            Ev.emit dbPath "dispatch" (Ev.DispatchStarted did (taskId task) branch)
 
-                    RD.insertDispatch
-                        conn
-                        did
-                        RD.NewDispatch
-                            { RD.ndTaskId = taskId task
-                            , RD.ndBranch = branch
-                            , RD.ndBaseBranch = base
-                            , RD.ndBaseSha = baseSha
-                            , RD.ndModel = model
-                            , RD.ndEffort = effort
-                            , RD.ndLogPath = Just logPath
-                            , RD.ndPid = Nothing
-                            }
-                    Ev.emit dbPath "dispatch" (Ev.DispatchStarted did (taskId task) branch)
+            prompt <- buildPrompt conn task absScratch mAgreement mFindings
 
-                    prompt <- buildPrompt conn task absScratch mAgreement mFindings
-
-                    let dx =
-                            DispatchCtx
-                                { dxConn = conn
-                                , dxDbPath = dbPath
-                                , dxDid = did
-                                , dxBranch = branch
-                                , dxBase = base
-                                , dxWorkDir = wt
-                                }
-                        ctx =
-                            RunCtx
-                                { rcDbPath = dbPath
-                                , rcDid = did
-                                , rcTask = task
-                                , rcPrompt = prompt
-                                , rcModel = model
-                                , rcEffort = effort
-                                , rcLogPath = logPath
-                                , rcWorkDir = wt
-                                }
-                    -- Teardown must run on every exit, including exceptions;
-                    -- checkpointing of dirty state happens inside post-claude first.
-                    pcResult <-
-                        ( do
-                            exit <- runClaudeStreaming ctx dcfg
-                            handlePostClaudeWithReview dx cfg task baselineBody mSysPrompt (taskNoCommit task) exit baseSha logPath
-                        )
-                            `onException` teardownWorktree "." dcfg wt
-                    teardownWorktree "." dcfg wt
-                    case pcResult of
-                        PCDone dr -> do
-                            -- A no-commit success leaves an empty branch (sha ==
-                            -- baseSha, verified by the post-claude guard); delete it
-                            -- once the worktree no longer has it checked out. Force:
-                            -- `-d` checks merged-ness against HEAD, which may be an
-                            -- unrelated checkout.
-                            when (dresOutcome dr == OSuccess && taskNoCommit task) $
-                                void (Git.deleteBranchForce "." branch)
-                            pure (Right dr)
-                        PCRetry dr findings
-                            | attempt < maxAttempts -> do
-                                next <- doRealAttempt conn req (attempt + 1) (Just findings) (Just baselineBody)
-                                case next of
-                                    Right dr' -> pure (Right dr')
-                                    Left err -> do
-                                        -- The first attempt already recorded a failed
-                                        -- dispatch; report that rather than losing the
-                                        -- findings to a provisioning error.
-                                        hPutStrLn stderr $
-                                            "icarium: retry skipped: "
-                                                <> T.unpack (worktreeErrorText err)
-                                        pure (Right dr)
-                            | otherwise -> pure (Right dr)
+            let dx =
+                    DispatchCtx
+                        { dxConn = conn
+                        , dxDbPath = dbPath
+                        , dxDid = did
+                        , dxBranch = branch
+                        , dxBase = base
+                        , dxWorkDir = wt
+                        }
+                ctx =
+                    RunCtx
+                        { rcDbPath = dbPath
+                        , rcDid = did
+                        , rcTask = task
+                        , rcPrompt = prompt
+                        , rcModel = model
+                        , rcEffort = effort
+                        , rcLogPath = logPath
+                        , rcWorkDir = wt
+                        }
+            -- Teardown must run on every exit, including exceptions;
+            -- checkpointing of dirty state happens inside post-claude first.
+            pcResult <-
+                ( do
+                    exit <- runClaudeStreaming ctx dcfg
+                    handlePostClaudeWithReview dx cfg task baselineBody mSysPrompt (taskNoCommit task) exit baseSha logPath
+                )
+                    `onException` teardownWorktree "." dcfg wt
+            teardownWorktree "." dcfg wt
+            case pcResult of
+                PCDone dr -> do
+                    -- A no-commit success leaves an empty branch (sha ==
+                    -- baseSha, verified by the post-claude guard); delete it
+                    -- once the worktree no longer has it checked out. Force:
+                    -- `-d` checks merged-ness against HEAD, which may be an
+                    -- unrelated checkout.
+                    when (dresOutcome dr == OSuccess && taskNoCommit task) $
+                        void (Git.deleteBranchForce "." branch)
+                    pure (Right dr)
+                PCRetry dr findings
+                    | attempt < maxAttempts -> do
+                        next <- doRealAttempt conn req (attempt + 1) (Just findings) (Just baselineBody)
+                        case next of
+                            Right dr' -> pure (Right dr')
+                            Left err -> do
+                                -- The first attempt already recorded a failed
+                                -- dispatch; report that rather than losing the
+                                -- findings to a provisioning error.
+                                hPutStrLn stderr $
+                                    "icarium: retry skipped: "
+                                        <> T.unpack (worktreeErrorText err)
+                                pure (Right dr)
+                    | otherwise -> pure (Right dr)
 
 {- | @mAgreement@ is the loaded agreement_path content (Nothing = built-in),
 appended after the shared task content — see 'agreementSection'.

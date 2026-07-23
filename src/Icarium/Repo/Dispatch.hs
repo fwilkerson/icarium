@@ -259,7 +259,9 @@ caller knows when the token sums are incomplete.
 -}
 getDispatchStats :: Connection -> Maybe Text -> IO DispatchStats
 getDispatchStats conn mSince = do
-    rows <- case mSince of
+    -- An aggregate with no GROUP BY yields exactly one row, empty table
+    -- or not, so the zero-row case cannot arise.
+    [stats] <- case mSince of
         Nothing ->
             query_ conn (Query $ "SELECT " <> statsCols <> " FROM dispatches")
         Just since ->
@@ -267,9 +269,7 @@ getDispatchStats conn mSince = do
                 conn
                 (Query $ "SELECT " <> statsCols <> " FROM dispatches WHERE started_at >= ?")
                 (Only since)
-    pure $ case rows of
-        (s : _) -> s
-        [] -> DispatchStats 0 0 0 0 0 0 0 0 0
+    pure stats
 
 -- | Terminal update: outcome, ended_at, optional merge sha, optional notes.
 finishDispatch ::
