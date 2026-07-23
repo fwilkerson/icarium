@@ -27,7 +27,13 @@ library
                       Icarium.Config
                       Icarium.Events
                       Icarium.Render
+                      Icarium.Render.Context
+                      Icarium.Render.Dispatch
+                      Icarium.Render.Graph
+                      Icarium.Render.Internal
                       Icarium.Render.Json
+                      Icarium.Render.Search
+                      Icarium.Render.Task
                       Icarium.Git
                       Icarium.Dispatch
                       Icarium.Dispatch.Internal

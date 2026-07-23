@@ -22,7 +22,9 @@ import Data.Aeson.Encoding qualified as E
 import Data.ByteString.Lazy qualified as BL
 import Data.Text (Text)
 
-import Icarium.Render (ContextRow (..), CurationQueueRow (..), SearchHitRow (..), TaskRow (..), isRetired)
+import Icarium.Render.Context (ContextRow (..), CurationQueueRow (..), isRetired)
+import Icarium.Render.Search (SearchHitRow (..))
+import Icarium.Render.Task (TaskRow (..))
 import Icarium.Repo.Search (SearchHit (..))
 import Icarium.Types
 
