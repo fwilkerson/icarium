@@ -446,6 +446,7 @@ runCat db o = withDb db $ \c -> do
 data ChildrenOpts = ChildrenOpts
     { chId :: Text
     , chKind :: Maybe EdgeKind
+    , chJson :: Bool
     }
 
 childrenP :: Parser ChildrenOpts
@@ -460,66 +461,55 @@ childrenP =
                     <> help "Filter by edge kind (derived-from | references | supersedes)"
                 )
             )
+        <*> jsonFlag
 
 runChildren :: FilePath -> ChildrenOpts -> IO ()
 runChildren db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (chId o))
-    edges <- RE.ctxChildEdges c cxid (chKind o)
-    case edges of
-        [] -> TIO.putStrLn "(no children)"
-        _ -> do
-            let kindW = maximum (map (T.length . edgeKindDisplay . edgeKind) edges)
-            forM_ edges $ \e -> do
-                let childId = edgeSrcId e
-                mcx <- RCx.getContext c childId
-                case mcx of
-                    Nothing -> pure ()
-                    Just cx ->
-                        TIO.putStrLn $
-                            padr kindW (edgeKindDisplay (edgeKind e))
-                                <> "  "
-                                <> T.take 10 childId
-                                <> "  "
-                                <> contextTitle cx
+    children <- RE.ctxChildContexts c cxid (chKind o)
+    let rows = [Render.ContextChildRow{Render.ccKind = k, Render.ccContext = cx} | (k, cx) <- children]
+    if chJson o
+        then BLC.putStrLn (Json.renderContextChildrenJson rows)
+        else TIO.putStr (Render.renderContextChildren rows)
 
 -- =============================================================
 -- tree
 -- =============================================================
 
-newtype TreeOpts = TreeOpts {tId :: Text}
+data TreeOpts = TreeOpts
+    { tId :: Text
+    , tJson :: Bool
+    }
 
 treeP :: Parser TreeOpts
-treeP = TreeOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
+treeP =
+    TreeOpts . T.pack
+        <$> strArgument (metavar "CONTEXT_ID")
+        <*> jsonFlag
 
 runTree :: FilePath -> TreeOpts -> IO ()
 runTree db o = withDb db $ \c -> do
     cxid <- resolveOrFatal (RCx.resolveContextId c (tId o))
     mcx <- RCx.getContext c cxid
     cx <- maybe (fatal 1 ("context not found: " <> T.unpack cxid)) pure mcx
-    TIO.putStrLn (T.take 10 cxid <> "  " <> contextTitle cx)
-    printBranch c [cxid] cxid 1
+    root <- buildNode c [cxid] cx
+    if tJson o
+        then BLC.putStrLn (Json.renderContextTreeJson root)
+        else TIO.putStr (Render.renderContextTree root)
   where
-    printBranch c visited parentId depth = do
-        edges <- RE.ctxChildEdges c parentId Nothing
-        forM_ edges $ \e -> do
-            let childId = edgeSrcId e
-                indent = T.replicate (depth * 2) " "
-                kindStr = edgeKindDisplay (edgeKind e)
-            if childId `elem` visited
-                then TIO.putStrLn (indent <> "[cycle: " <> T.take 10 childId <> "]")
+    -- @visited@ is the path from the root, not every node seen: a diamond
+    -- still renders both ways in, only a true back-edge is cut.
+    buildNode c visited cx = do
+        children <- RE.ctxChildContexts c (contextId cx) Nothing
+        kids <- forM children $ \(kind, child) ->
+            if contextId child `elem` visited
+                then pure (kind, cycleNode child)
                 else do
-                    mcx <- RCx.getContext c childId
-                    case mcx of
-                        Nothing -> pure ()
-                        Just cx -> do
-                            TIO.putStrLn $
-                                indent
-                                    <> kindStr
-                                    <> "  "
-                                    <> T.take 10 childId
-                                    <> "  "
-                                    <> contextTitle cx
-                            printBranch c (childId : visited) childId (depth + 1)
+                    node <- buildNode c (contextId child : visited) child
+                    pure (kind, node)
+        pure Render.ContextTreeNode{Render.ctnContext = cx, Render.ctnCycle = False, Render.ctnChildren = kids}
+    cycleNode child =
+        Render.ContextTreeNode{Render.ctnContext = child, Render.ctnCycle = True, Render.ctnChildren = []}
 
 -- =============================================================
 -- exists
@@ -551,6 +541,3 @@ runExists db o = withDb db $ \c -> do
                     <> show (length cxs)
                     <> " contexts"
             exitWith (ExitFailure 2)
-
-padr :: Int -> Text -> Text
-padr n s = s <> T.replicate (max 0 (n - T.length s)) " "

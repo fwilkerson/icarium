@@ -6,6 +6,10 @@ module Icarium.Render.Context (
     CurationQueueRow (..),
     renderCurationQueue,
     formatLinkedCount,
+    ContextChildRow (..),
+    renderContextChildren,
+    ContextTreeNode (..),
+    renderContextTree,
 ) where
 
 import Data.Text (Text)
@@ -77,6 +81,51 @@ renderContextList utf8 rows = T.unlines $ map row rows
             linkedPart = if T.null linked then "" else "  " <> linked
             retiredPart = if crRetired cr then "  [retired]" else ""
          in idPart <> "  " <> titPart <> "  " <> catPart <> linkedPart <> retiredPart
+
+-- =============================================================
+-- Context graph traversal rendering
+-- =============================================================
+
+data ContextChildRow = ContextChildRow
+    { ccKind :: EdgeKind
+    , ccContext :: Context
+    }
+
+renderContextChildren :: [ContextChildRow] -> Text
+renderContextChildren [] = "(no children)\n"
+renderContextChildren rows = T.unlines (map row rows)
+  where
+    kindWidth = maxLen 0 (map (T.length . edgeKindDisplay . ccKind) rows)
+    row r =
+        padr kindWidth (edgeKindDisplay (ccKind r))
+            <> "  "
+            <> T.take 10 (contextId (ccContext r))
+            <> "  "
+            <> contextTitle (ccContext r)
+
+{- | A context and its descendants. @ctnCycle@ marks a node already on the
+path from the root: it is reported once and not expanded, which is what
+keeps a cyclic graph terminating.
+-}
+data ContextTreeNode = ContextTreeNode
+    { ctnContext :: Context
+    , ctnCycle :: Bool
+    , ctnChildren :: [(EdgeKind, ContextTreeNode)]
+    }
+
+renderContextTree :: ContextTreeNode -> Text
+renderContextTree root =
+    T.unlines $
+        (T.take 10 (contextId (ctnContext root)) <> "  " <> contextTitle (ctnContext root))
+            : concatMap (branch 1) (ctnChildren root)
+  where
+    branch depth (kind, n) =
+        let indent = T.replicate (depth * 2) " "
+            idPart = T.take 10 (contextId (ctnContext n))
+            line
+                | ctnCycle n = indent <> edgeKindDisplay kind <> "  [cycle: " <> idPart <> "]"
+                | otherwise = indent <> edgeKindDisplay kind <> "  " <> idPart <> "  " <> contextTitle (ctnContext n)
+         in line : concatMap (branch (depth + 1)) (ctnChildren n)
 
 -- =============================================================
 -- Curation queue rendering

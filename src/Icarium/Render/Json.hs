@@ -14,6 +14,8 @@ module Icarium.Render.Json (
     renderContextListJson,
     renderContextShowJson,
     renderCurationQueueJson,
+    renderContextChildrenJson,
+    renderContextTreeJson,
     renderSearchJson,
 ) where
 
@@ -22,7 +24,13 @@ import Data.Aeson.Encoding qualified as E
 import Data.ByteString.Lazy qualified as BL
 import Data.Text (Text)
 
-import Icarium.Render.Context (ContextRow (..), CurationQueueRow (..), isRetired)
+import Icarium.Render.Context (
+    ContextChildRow (..),
+    ContextRow (..),
+    ContextTreeNode (..),
+    CurationQueueRow (..),
+    isRetired,
+ )
 import Icarium.Render.Search (SearchHitRow (..))
 import Icarium.Render.Task (TaskRow (..))
 import Icarium.Repo.Search (SearchHit (..))
@@ -117,6 +125,35 @@ renderCurationQueueJson = enc . E.list queueRowEnc
                 <> catsSeries (cqCats r)
                 <> E.pair "last_curation" (maybe E.null_ curationEnc (cqLastEvent r))
 
+-- | Direct children, in edge-creation order; @kind@ is the edge that links them.
+renderContextChildrenJson :: [ContextChildRow] -> BL.ByteString
+renderContextChildrenJson = enc . E.list childRowEnc
+  where
+    childRowEnc r =
+        E.pairs $
+            E.pair "kind" (E.text (edgeKindDisplay (ccKind r)))
+                <> contextLinkCore (ccContext r)
+
+{- | The descendant tree as nested objects. The root carries no @kind@ (no
+edge led to it); every other node does. @cycle@ marks a node already on
+the path from the root — its @children@ are empty because it is not
+re-expanded.
+-}
+renderContextTreeJson :: ContextTreeNode -> BL.ByteString
+renderContextTreeJson root = enc . E.pairs $ nodeSeries root
+  where
+    nodeSeries n =
+        contextLinkCore (ctnContext n)
+            <> E.pair "cycle" (E.bool (ctnCycle n))
+            <> E.pair "children" (E.list childEnc (ctnChildren n))
+    childEnc (kind, n) =
+        E.pairs $ E.pair "kind" (E.text (edgeKindDisplay kind)) <> nodeSeries n
+
+contextLinkCore :: Context -> Series
+contextLinkCore cx =
+    E.pair "id" (E.text (contextId cx))
+        <> E.pair "title" (E.text (contextTitle cx))
+
 contextCore :: Context -> Series
 contextCore cx =
     E.pair "id" (E.text (contextId cx))
@@ -127,8 +164,7 @@ contextCore cx =
 contextLinkEnc :: [Text] -> Context -> Encoding
 contextLinkEnc retiredIds cx =
     E.pairs $
-        E.pair "id" (E.text (contextId cx))
-            <> E.pair "title" (E.text (contextTitle cx))
+        contextLinkCore cx
             <> E.pair "retired" (E.bool (contextId cx `elem` retiredIds))
 
 -- =============================================================

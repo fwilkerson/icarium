@@ -2,9 +2,10 @@
 module CliCtxSpec (tests) where
 
 import Control.Monad (when)
-import Data.Aeson (Object, Value (..), decode)
+import Data.Aeson (Key, Object, Value (..), decode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
+import Data.Foldable (toList)
 import Data.List (isInfixOf)
 import System.Exit (ExitCode (..))
 import Test.Tasty (TestTree, testGroup)
@@ -29,6 +30,8 @@ tests =
         , testCase "link add task derived-from task records a follow-up" testLinkAddTaskDerivedFromTask
         , testCase "ctx children lists direct children by edge kind" testCtxChildren
         , testCase "ctx tree recurses and detects cycles" testCtxTree
+        , testCase "ctx children --json: kind, id, title per row" testCtxChildrenJson
+        , testCase "ctx tree --json: nested children, cycle flag" testCtxTreeJson
         , testCase "ctx exists: found exits 0, not-found exits 1, ambiguous exits 2" testCtxExists
         , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
         , testCase "ctx list/show --json: valid JSON, ids, body_path not body" testCtxJson
@@ -231,6 +234,85 @@ testCtxTree = withTempDb $ \db -> do
     assertBool "cycle detected and noted" ("[cycle:" `isInfixOf` cycOut)
 
     pure ()
+
+testCtxChildrenJson :: IO ()
+testCtxChildrenJson = withTempDb $ \db -> do
+    (_, pOut, _) <- runIcarium db ["ctx", "add", "Parent context"]
+    let pId = head (words pOut)
+    (_, cOut, _) <- runIcarium db ["ctx", "add", "Child context A"]
+    let cId = head (words cOut)
+    (_, dOut, _) <- runIcarium db ["ctx", "add", "Child context B"]
+    let dId = head (words dOut)
+
+    _ <- runIcarium db ["link", "add", cId, "derived-from", pId]
+    _ <- runIcarium db ["link", "add", dId, "references", pId]
+
+    (code, out, _) <- runIcarium db ["ctx", "children", pId, "--json"]
+    code @?= ExitSuccess
+    jsonIds out @?= [cId, dId]
+    let rows = map expectObject (jsonArray out)
+    map (expectField "kind") rows @?= ["derived-from", "references"]
+    map (expectField "title") rows @?= ["Child context A", "Child context B"]
+
+    (fCode, fOut, _) <- runIcarium db ["ctx", "children", pId, "--kind", "references", "--json"]
+    fCode @?= ExitSuccess
+    jsonIds fOut @?= [dId]
+
+    -- a leaf is an empty array, not prose
+    (eCode, eOut, _) <- runIcarium db ["ctx", "children", cId, "--json"]
+    eCode @?= ExitSuccess
+    jsonIds eOut @?= []
+
+testCtxTreeJson :: IO ()
+testCtxTreeJson = withTempDb $ \db -> do
+    (_, rOut, _) <- runIcarium db ["ctx", "add", "Root"]
+    let rId = head (words rOut)
+    (_, cOut, _) <- runIcarium db ["ctx", "add", "Child"]
+    let cId = head (words cOut)
+    (_, gOut, _) <- runIcarium db ["ctx", "add", "Grandchild"]
+    let gId = head (words gOut)
+
+    _ <- runIcarium db ["link", "add", cId, "derived-from", rId]
+    _ <- runIcarium db ["link", "add", gId, "derived-from", cId]
+
+    (code, out, _) <- runIcarium db ["ctx", "tree", rId, "--json"]
+    code @?= ExitSuccess
+    let root = expectObject (decodeOut out)
+    expectField "id" root @?= rId
+    expectField "title" root @?= "Root"
+    let [child] = map expectObject (childrenOf root)
+    expectField "id" child @?= cId
+    expectField "kind" child @?= "derived-from"
+    let [grandchild] = map expectObject (childrenOf child)
+    expectField "id" grandchild @?= gId
+    childrenOf grandchild @?= []
+    boolField "cycle" grandchild @?= False
+
+    -- cycle: grandchild references root, so root reappears and stops there
+    _ <- runIcarium db ["link", "add", rId, "references", gId]
+    (cycCode, cycOut, _) <- runIcarium db ["ctx", "tree", rId, "--json"]
+    cycCode @?= ExitSuccess
+    -- root → Child → Grandchild → root again, where the walk stops
+    let firstChild = expectObject . head . childrenOf
+        repeated = firstChild (firstChild (firstChild (expectObject (decodeOut cycOut))))
+    expectField "id" repeated @?= rId
+    boolField "cycle" repeated @?= True
+    childrenOf repeated @?= []
+
+jsonArray :: String -> [Value]
+jsonArray out = case decodeOut out of
+    Array vs -> toList vs
+    v -> error ("expected a JSON array, got: " <> show v)
+
+childrenOf :: Object -> [Value]
+childrenOf o = case KM.lookup "children" o of
+    Just (Array vs) -> toList vs
+    other -> error ("expected a children array, got: " <> show other)
+
+boolField :: Key -> Object -> Bool
+boolField k o = case KM.lookup k o of
+    Just (Bool b) -> b
+    other -> error ("expected bool field " <> show k <> ", got: " <> show other)
 
 testCtxExists :: IO ()
 testCtxExists = withTempDb $ \db -> do

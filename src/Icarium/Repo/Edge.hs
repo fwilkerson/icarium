@@ -9,7 +9,7 @@ module Icarium.Repo.Edge (
     derivedFromTasks,
     taskEdgeCounts,
     contextInboundCounts,
-    ctxChildEdges,
+    ctxChildContexts,
 ) where
 
 import Data.Maybe (catMaybes, fromMaybe)
@@ -22,6 +22,7 @@ import Database.SQLite.Simple (
     SQLData (..),
     execute,
     query,
+    (:.) (..),
  )
 
 import Icarium.Id (newId)
@@ -206,25 +207,26 @@ contextInboundCounts conn ids =
                \GROUP BY dst_id"
     params = map SQLText ids
 
-{- | Context→context edges where the given context is the destination.
-These represent the "children" of the given context — entries that
-derived-from, reference, or supersede it.
+{- | The "children" of a context: entries on the source side of a
+context→context edge pointing at it — they derive from, reference, or
+supersede it. Paired with the edge kind that got them there.
 -}
-ctxChildEdges :: Connection -> Text -> Maybe EdgeKind -> IO [Edge]
-ctxChildEdges conn dstId mKind =
-    query conn q params
+ctxChildContexts :: Connection -> Text -> Maybe EdgeKind -> IO [(EdgeKind, Context)]
+ctxChildContexts conn dstId mKind = do
+    rows <- query conn q params
+    pure [(k, cx) | Only k :. cx <- rows]
   where
     kindClause = case mKind of
         Nothing -> ""
-        Just _ -> " AND kind = ?"
+        Just _ -> " AND e.kind = ?"
     q =
         Query $
-            "SELECT "
-                <> edgeCols
-                <> " FROM edges"
-                <> " WHERE dst_id = ? AND dst_kind = 'context' AND src_kind = 'context'"
+            "SELECT e.kind, cx.id, cx.title, cx.body, cx.created_at, cx.updated_at \
+            \FROM edges e \
+            \JOIN context cx ON cx.id = e.src_id \
+            \WHERE e.dst_id = ? AND e.dst_kind = 'context' AND e.src_kind = 'context'"
                 <> kindClause
-                <> " ORDER BY created_at ASC"
+                <> " ORDER BY e.created_at ASC"
     params = case mKind of
         Nothing -> [SQLText dstId]
         Just k -> [SQLText dstId, SQLText (edgeKindDbText k)]

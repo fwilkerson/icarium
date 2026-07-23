@@ -20,6 +20,10 @@ module Icarium.Render (
     CurationQueueRow (..),
     renderCurationQueue,
     formatLinkedCount,
+    ContextChildRow (..),
+    renderContextChildren,
+    ContextTreeNode (..),
+    renderContextTree,
 
     -- * Graph
     renderEdgeLine,
