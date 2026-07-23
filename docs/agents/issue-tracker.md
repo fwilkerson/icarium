@@ -15,8 +15,10 @@ All three must be registered (`icarium category list`; register with
 `icarium category add --axis <axis> <name>`). `--domain`/`--discipline` are the
 retrieval axes — they decide which ctx entries a dispatch prompt pulls in, so
 fill them. `--kind` (`bug`, `enhancement`, `chore`, …) records the shape of the
-work; it is task-only and never affects the pull. New tasks
-start in state `idea`. Specs/PRDs are ctx entries (`icarium ctx add`), linked via
+work; it is task-only and never affects the pull. New tasks start in state
+`planned`; pass `--state` to file one straight into triage (`idea`) or onto the
+dispatch queue (`ready-headless`) — see [triage labels](triage-labels.md).
+Specs/PRDs are ctx entries (`icarium ctx add`), linked via
 `icarium link add <task> references <ctx>`.
 
 ## When a skill says "fetch the relevant ticket"
