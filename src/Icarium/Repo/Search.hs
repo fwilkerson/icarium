@@ -14,7 +14,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), query, (:.) (..))
 
-import Icarium.Repo.Internal (taskCols)
+import Icarium.Repo.Internal (inClause, taskCols)
 import Icarium.Types
 
 data SearchHit = SearchHit
@@ -190,7 +190,7 @@ buildCatClauses jt fkCol inclDomains inclDiscs exclDomains exclDiscs =
   where
     one _ [] _ = []
     one axis names include =
-        let ph = "(" <> T.intercalate "," (replicate (length names) "?") <> ")"
+        let ph = inClause names
             subq =
                 "id IN (SELECT "
                     <> fkCol

@@ -60,6 +60,7 @@ import Icarium.Config (CommandsConfig (..), DispatchConfig (..))
 import Icarium.Db (openDb)
 import Icarium.Dispatch.Claude (killGroupAfter, raceTimeout)
 import Icarium.Repo.Dispatch qualified as RD
+import Icarium.Text (tshow)
 
 -- | Where a gate runs, how long it may take, and what it reports to.
 data GateEnv = GateEnv
@@ -229,6 +230,3 @@ fmtBudget usecs
 
 quietly :: IO () -> IO ()
 quietly = handle (\(_ :: SomeException) -> pure ())
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show

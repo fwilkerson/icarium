@@ -26,7 +26,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Internal (prefixLookup, resolveByPrefix, taskCols)
+import Icarium.Repo.Internal (inClause, prefixLookup, resolveByPrefix, taskCols)
 import Icarium.Types (
     Context,
     Edge (..),
@@ -179,7 +179,7 @@ taskEdgeCounts conn ids = do
         | tid <- ids
         ]
   where
-    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
+    ph = inClause ids
     countQ k =
         "SELECT src_id, COUNT(*) FROM edges \
         \WHERE kind = '"
@@ -198,7 +198,7 @@ contextInboundCounts _ [] = pure []
 contextInboundCounts conn ids =
     query conn (Query q) params :: IO [(Text, Int)]
   where
-    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
+    ph = inClause ids
     q =
         "SELECT dst_id, COUNT(*) FROM edges \
         \WHERE dst_kind = 'context' AND dst_id IN "

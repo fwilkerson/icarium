@@ -48,7 +48,7 @@ import GHC.Clock (getMonotonicTime)
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix, taskCols)
+import Icarium.Repo.Internal (axisFilters, inClause, prefixLookup, resolveByPrefix, taskCols)
 import Icarium.Types (CategoryAxis, NodeKind (..), Routing, Task (..), TaskState (..), readyStates, taskStateText)
 
 data NewTask = NewTask
@@ -110,10 +110,8 @@ getTasksByIds _ [] = pure []
 getTasksByIds conn ids =
     query
         conn
-        (Query $ "SELECT " <> taskCols "" <> " FROM tasks WHERE id IN " <> ph)
+        (Query $ "SELECT " <> taskCols "" <> " FROM tasks WHERE id IN " <> inClause ids)
         (map SQLText ids)
-  where
-    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
 
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]
@@ -218,7 +216,7 @@ claimNextTask conn states owner = withClaimLock conn $ do
             conn
             ( Query $
                 "SELECT id FROM ready_tasks WHERE state IN "
-                    <> statePlaceholders states
+                    <> inClause states
                     <> " ORDER BY "
                     <> readyOrder
                     <> " LIMIT 1"
@@ -241,16 +239,13 @@ claimReadyTask conn tid owner = withClaimLock conn $ do
     rows <-
         query
             conn
-            (Query $ "SELECT id FROM tasks WHERE id = ? AND state IN " <> statePlaceholders readyStates)
+            (Query $ "SELECT id FROM tasks WHERE id = ? AND state IN " <> inClause readyStates)
             (SQLText tid : map (SQLText . taskStateText) readyStates)
     case rows :: [Only Text] of
         [] -> pure Nothing
         _ -> do
             stampClaim conn tid owner
             getTask conn tid
-
-statePlaceholders :: [TaskState] -> Text
-statePlaceholders ss = "(" <> T.intercalate "," (replicate (length ss) "?") <> ")"
 
 {- | Claim a named task regardless of queue position or state. @dispatch
 run TASK_ID@ re-runs tasks that are blocked or already in progress, so a

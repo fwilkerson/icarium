@@ -25,6 +25,7 @@ import Icarium.Config (
  )
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Edge qualified as RE
+import Icarium.Repo.Internal (inClause)
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
@@ -45,6 +46,9 @@ tests =
             parseTaskState "ready" @?= Nothing
             parseTaskStateDb "ready" @?= Nothing
         , testCase "loadConfig succeeds on default template" loadConfigTest
+        , testCase "inClause brings its own parens" $ do
+            inClause [() | _ <- [1 :: Int .. 3]] @?= "(?,?,?)"
+            inClause [()] @?= "(?)"
         , testGroup
             "listEdges filtering"
             [ testCase "src + kind filter returns only matching rows" testListEdgesSrcKindFilter

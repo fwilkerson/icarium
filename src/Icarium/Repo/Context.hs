@@ -35,7 +35,7 @@ import Database.SQLite.Simple (
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix)
+import Icarium.Repo.Internal (axisFilters, inClause, prefixLookup, resolveByPrefix)
 import Icarium.Types (
     Category (..),
     CategoryAxis,
@@ -215,14 +215,13 @@ categoryMatchedContexts conn cats cap
     namesOn axis = [categoryName c | c <- cats, categoryAxis c == axis]
     matching = [(axis, ns) | axis <- retrievalAxes, let ns = namesOn axis, not (null ns)]
     axisClause axis names =
-        let ph = T.intercalate "," (replicate (length names) "?")
-         in "id IN (SELECT context_id FROM context_categories cc \
-            \JOIN categories c ON c.id = cc.category_id \
-            \WHERE c.axis = '"
-                <> categoryAxisText axis
-                <> "' AND c.name IN ("
-                <> ph
-                <> "))"
+        "id IN (SELECT context_id FROM context_categories cc \
+        \JOIN categories c ON c.id = cc.category_id \
+        \WHERE c.axis = '"
+            <> categoryAxisText axis
+            <> "' AND c.name IN "
+            <> inClause names
+            <> ")"
     clauses = map (uncurry axisClause) matching
     q =
         Query $

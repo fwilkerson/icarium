@@ -43,6 +43,7 @@ import Icarium.Render qualified as Render
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Task qualified as RT
+import Icarium.Text (tshow)
 import Icarium.Types
 
 data Command
@@ -732,7 +733,6 @@ mergeAll cfg c = do
         MergeLanded sha -> landedLine d sha
         MergeBlocked _ note -> "blocked " <> T.take 10 (dispatchId d) <> ": " <> note
         MergeStopped note -> "stopped " <> T.take 10 (dispatchId d) <> ": " <> note
-    tshow = T.pack . show
 
 landedLine :: Dispatch -> Text -> Text
 landedLine d sha =

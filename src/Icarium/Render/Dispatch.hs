@@ -12,6 +12,7 @@ import Data.Text qualified as T
 
 import Icarium.Render.Internal
 import Icarium.Repo.Dispatch (DispatchStats (..))
+import Icarium.Text (tshow)
 import Icarium.Types
 
 renderDispatch :: Dispatch -> Maybe Task -> [Context] -> Maybe Text -> Text
@@ -127,7 +128,6 @@ renderDispatchStats mSince s =
         ]
   where
     field k v = padr 18 (k <> ":") <> " " <> v
-    tshow = T.pack . show
 
 fmtSecs :: Int -> Text
 fmtSecs s

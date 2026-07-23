@@ -579,17 +579,5 @@ existsP =
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
 
 runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDb db $ \c -> do
-    ts <- RT.getTasksByPrefix c (exId o)
-    case ts of
-        [t] -> do
-            when (exVerbose o) $ TIO.putStrLn (taskId t)
-        [] -> exitWith (ExitFailure 1)
-        _ -> do
-            hPutStrLn stderr $
-                "ambiguous: "
-                    <> T.unpack (exId o)
-                    <> " matches "
-                    <> show (length ts)
-                    <> " tasks"
-            exitWith (ExitFailure 2)
+runExists db o = withDb db $ \c ->
+    reportExists (RT.getTasksByPrefix c) taskId "tasks" (exVerbose o) (exId o)

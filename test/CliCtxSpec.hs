@@ -11,7 +11,7 @@ import System.Exit (ExitCode (..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import CliHelpers (decodeOut, expectField, expectObject, jsonIds, runIcarium, withTempDb)
+import CliHelpers (commonPrefix, decodeOut, expectField, expectObject, jsonIds, runIcarium, withTempDb)
 
 tests :: TestTree
 tests =
@@ -337,14 +337,14 @@ testCtxExists = withTempDb $ \db -> do
     (missCode, _, _) <- runIcarium db ["ctx", "exists", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
     missCode @?= ExitFailure 1
 
-    -- ambiguous: add a second context and use a shared prefix
+    -- ambiguous: add a second context and use the prefix the two ids share
     (_, addOut2, _) <- runIcarium db ["ctx", "add", "Exists context 2"]
     let cxid2 = head (words addOut2)
-    let sharedPrefix = take 5 cxid
-    when (sharedPrefix == take 5 cxid2) $ do
-        (ambCode, _, ambErr) <- runIcarium db ["ctx", "exists", sharedPrefix]
-        ambCode @?= ExitFailure 2
-        assertBool "stderr mentions ambiguous" ("ambiguous" `isInfixOf` ambErr)
+    let sharedPrefix = commonPrefix cxid cxid2
+    assertBool "ULIDs from one DB share a leading prefix" (not (null sharedPrefix))
+    (ambCode, _, ambErr) <- runIcarium db ["ctx", "exists", sharedPrefix]
+    ambCode @?= ExitFailure 2
+    ambErr @?= "ambiguous: " <> sharedPrefix <> " matches 2 contexts\n"
 
 testCtxExistsVerbose :: IO ()
 testCtxExistsVerbose = withTempDb $ \db -> do

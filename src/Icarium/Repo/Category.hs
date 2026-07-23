@@ -16,7 +16,6 @@ module Icarium.Repo.Category (
 
 import Data.List.NonEmpty qualified as NE
 import Data.Text (Text)
-import Data.Text qualified as T
 import Database.SQLite.Simple (
     Connection,
     Only (..),
@@ -28,6 +27,7 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
+import Icarium.Repo.Internal (inClause)
 import Icarium.Types (Category (..), CategoryAxis (..), isRetrievalAxis)
 
 insertCategory :: Connection -> CategoryAxis -> Text -> IO Text
@@ -185,7 +185,7 @@ categoriesBatchBy conn joinTable fkCol ids = do
         grouped = NE.groupAllWith fst pairs
     pure $ map (\grp -> (fst (NE.head grp), map snd (NE.toList grp))) grouped
   where
-    ph = "(" <> T.intercalate "," (replicate (length ids) "?") <> ")"
+    ph = inClause ids
     q =
         "SELECT jt."
             <> fkCol

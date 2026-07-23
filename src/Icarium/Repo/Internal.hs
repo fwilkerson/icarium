@@ -4,6 +4,7 @@ module Icarium.Repo.Internal (
     resolveByPrefix,
     taskCols,
     axisFilters,
+    inClause,
 ) where
 
 import Data.Text (Text)
@@ -55,6 +56,14 @@ axisFilters joinTable idCol filters =
             <> " WHERE c.axis = '"
             <> categoryAxisText axis
             <> "' AND c.name = ?)"
+
+{- | The parenthesised placeholder list for an @IN@ clause, one @?@ per
+element: @IN " <> inClause xs@. The parens belong here, not at the call
+site — half the copies of this used to omit them, and the two spellings
+are indistinguishable until SQLite rejects the query.
+-}
+inClause :: [a] -> Text
+inClause xs = "(" <> T.intercalate "," (replicate (length xs) "?") <> ")"
 
 -- | Escape LIKE special characters so they match literally.
 escapeLike :: Text -> Text

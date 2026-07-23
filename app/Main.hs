@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Data.List (isPrefixOf)
 import Data.Version (showVersion)
 import Icarium.Commands.Agents qualified as Agents
 import Icarium.Commands.Category qualified as Category
@@ -74,7 +75,6 @@ helpForBareNoun args
     lastPrecededByFlag xs = case reverse xs of
         (_ : prev : _) -> "--" `isPrefixOf` prev
         _ -> False
-    isPrefixOf pfx s = take (length pfx) s == pfx
 
 runCmd :: FilePath -> Command -> IO ()
 runCmd db (CmdInit o) = Init.run db o

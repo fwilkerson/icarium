@@ -14,6 +14,7 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertEqual, testCase, (@?=))
 
 import CliHelpers (
+    commonPrefix,
     decodeOut,
     expectField,
     expectObject,
@@ -632,15 +633,14 @@ testTaskExists = withTempDb $ \db -> do
     (missCode, _, _) <- runIcarium db ["task", "exists", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
     missCode @?= ExitFailure 1
 
-    -- ambiguous: add a second task and use a shared prefix
+    -- ambiguous: add a second task and use the prefix the two ids share
     (_, addOut2, _) <- runIcarium db ["task", "add", "Exists task 2"]
     let tid2 = head (words addOut2)
-    let sharedPrefix = take 5 tid
-    -- only proceed with ambiguity test if the two ids actually share the prefix
-    when (sharedPrefix == take 5 tid2) $ do
-        (ambCode, _, ambErr) <- runIcarium db ["task", "exists", sharedPrefix]
-        ambCode @?= ExitFailure 2
-        assertBool "stderr mentions ambiguous" ("ambiguous" `isInfixOf` ambErr)
+    let sharedPrefix = commonPrefix tid tid2
+    assertBool "ULIDs from one DB share a leading prefix" (not (null sharedPrefix))
+    (ambCode, _, ambErr) <- runIcarium db ["task", "exists", sharedPrefix]
+    ambCode @?= ExitFailure 2
+    ambErr @?= "ambiguous: " <> sharedPrefix <> " matches 2 tasks\n"
 
 testTaskExistsVerbose :: IO ()
 testTaskExistsVerbose = withTempDb $ \db -> do

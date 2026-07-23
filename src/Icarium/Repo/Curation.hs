@@ -19,6 +19,7 @@ import Database.SQLite.Simple (
 
 import Icarium.Id (newId)
 import Icarium.Repo.Context (contextCols)
+import Icarium.Repo.Internal (inClause)
 import Icarium.Types (Context (..), CurationEvent (..), Disposition)
 
 curationCols :: Text
@@ -61,11 +62,9 @@ retiredContextIds conn ids =
         <$> query
             conn
             ( Query $
-                "SELECT context_id FROM retired_context WHERE context_id IN (" <> ph <> ")"
+                "SELECT context_id FROM retired_context WHERE context_id IN " <> inClause ids
             )
             (map SQLText ids)
-  where
-    ph = T.intercalate "," (replicate (length ids) "?")
 
 {- | Entries awaiting curation, oldest first, paired with their latest
 event. Always includes never-curated entries (event = Nothing);

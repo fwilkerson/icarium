@@ -10,7 +10,6 @@ import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
-import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies (bodiesDir, ctxBodyPath, readBody)
@@ -527,17 +526,5 @@ existsP =
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
 
 runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDb db $ \c -> do
-    cxs <- RCx.getContextsByPrefix c (exId o)
-    case cxs of
-        [cx] -> do
-            when (exVerbose o) $ TIO.putStrLn (contextId cx)
-        [] -> exitWith (ExitFailure 1)
-        _ -> do
-            hPutStrLn stderr $
-                "ambiguous: "
-                    <> T.unpack (exId o)
-                    <> " matches "
-                    <> show (length cxs)
-                    <> " contexts"
-            exitWith (ExitFailure 2)
+runExists db o = withDb db $ \c ->
+    reportExists (RCx.getContextsByPrefix c) contextId "contexts" (exVerbose o) (exId o)

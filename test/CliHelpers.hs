@@ -11,6 +11,7 @@ module CliHelpers (
     runIcariumBare,
     withTempDb,
     minimalIcariumToml,
+    commonPrefix,
     jsonIds,
     decodeOut,
     expectObject,
@@ -107,6 +108,13 @@ minimalIcariumToml =
         , "domains     = [\"core\"]"
         , "disciplines = [\"development\"]"
         ]
+
+{- | The longest prefix two ids share — a deterministic way to hand a
+resolver something ambiguous, where a fixed @take n@ only sometimes
+collides.
+-}
+commonPrefix :: String -> String -> String
+commonPrefix a b = map fst (takeWhile (uncurry (==)) (zip a b))
 
 -- | Decode stdout as a JSON array of objects and pull each element's id.
 jsonIds :: String -> [String]

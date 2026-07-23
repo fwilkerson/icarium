@@ -21,6 +21,7 @@ module Icarium.Commands.Util (
     requireTask,
     requireContext,
     resolveNode,
+    reportExists,
 
     -- * Body input handling
     BodyInput (..),
@@ -37,6 +38,7 @@ module Icarium.Commands.Util (
 ) where
 
 import Control.Exception (SomeException, catch)
+import Control.Monad (when)
 import Data.Char (isSpace, toUpper)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
@@ -270,6 +272,27 @@ resolveNode c input = do
         ([], [cx]) -> pure (ContextNode, contextId cx)
         ([], []) -> fatal 2 ("unknown node: " <> T.unpack input)
         _ -> fatal 2 ("ambiguous id: " <> T.unpack input)
+
+{- | The @exists@ contract, shared by @task@ and @ctx@: exit 0 on a unique
+prefix match (printing the full id when @verbose@), 1 on no match, 2 on
+ambiguity. Callers only script the exit code, so the codes are the
+interface. @plural@ names the entities in the ambiguity message.
+-}
+reportExists :: (Text -> IO [a]) -> (a -> Text) -> Text -> Bool -> Text -> IO ()
+reportExists lookupFn projectId plural verbose input = do
+    xs <- lookupFn input
+    case xs of
+        [x] -> when verbose $ TIO.putStrLn (projectId x)
+        [] -> exitWith (ExitFailure 1)
+        _ -> do
+            hPutStrLn stderr $
+                "ambiguous: "
+                    <> T.unpack input
+                    <> " matches "
+                    <> show (length xs)
+                    <> " "
+                    <> T.unpack plural
+            exitWith (ExitFailure 2)
 
 requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
 requireCategory c axis name = do

@@ -27,6 +27,7 @@ library
                       Icarium.Db
                       Icarium.Config
                       Icarium.Events
+                      Icarium.Text
                       Icarium.Render
                       Icarium.Render.Context
                       Icarium.Render.Dispatch
