@@ -280,10 +280,10 @@ testCtxTreeJson = withTempDb $ \db -> do
     let root = expectObject (decodeOut out)
     expectField "id" root @?= rId
     expectField "title" root @?= "Root"
-    let [child] = map expectObject (childrenOf root)
+    let child = onlyChild root
     expectField "id" child @?= cId
     expectField "kind" child @?= "derived-from"
-    let [grandchild] = map expectObject (childrenOf child)
+    let grandchild = onlyChild child
     expectField "id" grandchild @?= gId
     childrenOf grandchild @?= []
     boolField "cycle" grandchild @?= False
@@ -303,6 +303,11 @@ jsonArray :: String -> [Value]
 jsonArray out = case decodeOut out of
     Array vs -> toList vs
     v -> error ("expected a JSON array, got: " <> show v)
+
+onlyChild :: Object -> Object
+onlyChild o = case childrenOf o of
+    [v] -> expectObject v
+    other -> error ("expected exactly one child, got: " <> show other)
 
 childrenOf :: Object -> [Value]
 childrenOf o = case KM.lookup "children" o of

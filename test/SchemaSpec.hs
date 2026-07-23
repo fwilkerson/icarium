@@ -20,7 +20,8 @@ import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Db (dbSchemaVersion, migrateDb)
-import Icarium.Migrations (Migration (..), migrations, mkSqlMigration)
+import Icarium.Migrations (Migration (..), migrations)
+import Icarium.Migrations.Internal (mkSqlMigration)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT

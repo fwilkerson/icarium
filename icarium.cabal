@@ -23,6 +23,7 @@ library
                       Icarium.Id
                       Icarium.Schema
                       Icarium.Migrations
+                      Icarium.Migrations.Internal
                       Icarium.Db
                       Icarium.Config
                       Icarium.Events
