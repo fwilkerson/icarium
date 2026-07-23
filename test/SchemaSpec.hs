@@ -37,6 +37,7 @@ tests =
             "base schema"
             [ testCase "applying embedded schema produces user_version = schemaVersion with expected tables" testInitialSchema
             , testCase "deleting a context entry cascades to context_categories rows" testContextCategoriesCascade
+            , testCase "no task_status view: listTasks is the one source of effective state" testNoTaskStatusView
             ]
         , testGroup
             "migrateDb"
@@ -56,6 +57,7 @@ tests =
             , testCase "migration 17 adds the column to a pre-17 context table" testMigration17AddsProvenance
             , testCase "migration 18 rebuild preserves existing edges" testMigration18PreservesEdges
             , testCase "migration 19 adds routing columns to a pre-19 tasks table" testMigration19AddsRouting
+            , testCase "migration 20 drops the task_status view, present or not" testMigration20DropsTaskStatus
             ]
         ]
 
@@ -97,6 +99,11 @@ testContextCategoriesCascade = withTestDb $ \conn -> do
     execute conn (Query "DELETE FROM context WHERE id = ?") (Only kid)
     post <- query_ conn "SELECT context_id FROM context_categories" :: IO [Only Text]
     length post @?= 0
+
+testNoTaskStatusView :: IO ()
+testNoTaskStatusView = withBaseTestDb $ \conn -> do
+    views <- query_ conn "SELECT name FROM sqlite_master WHERE type='view'" :: IO [Only Text]
+    assertBool "task_status view is gone" (Only ("task_status" :: Text) `notElem` views)
 
 -- =============================================================
 -- migrateDb
@@ -461,3 +468,19 @@ testMigration19AddsRouting = withBaseTestDb $ \conn -> do
         try (execute_ conn "UPDATE tasks SET effort = 'turbo' WHERE id = '01PRE19'") ::
             IO (Either SomeException ())
     assertBool "effort CHECK rejects a value outside the enum" (isLeft bad)
+
+{- | Upgrading DBs carry the dead view; DBs created after it left the base
+schema do not. Both must land in the same place.
+-}
+testMigration20DropsTaskStatus :: IO ()
+testMigration20DropsTaskStatus = withBaseTestDb $ \conn -> do
+    execute_ conn "CREATE VIEW task_status AS SELECT id, state FROM tasks"
+    migrationUp (migration 20) conn
+    assertNoTaskStatus conn
+    -- Already-absent is the common case: a rerun must not throw.
+    migrationUp (migration 20) conn
+    assertNoTaskStatus conn
+  where
+    assertNoTaskStatus conn = do
+        views <- query_ conn "SELECT name FROM sqlite_master WHERE type='view'" :: IO [Only Text]
+        assertBool "task_status view dropped" (Only ("task_status" :: Text) `notElem` views)
