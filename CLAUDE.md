@@ -17,6 +17,10 @@ Tests should cover the **interface and larger functional units**. Get nuanced on
 
 If a function is hard to test, that's usually a design signal — extract the pure core, then the test is easy. Don't reach for mocks first.
 
+**Build tasks with `TestHelpers.mkTaskIn` / `mkTaskRow`,** not an inline `RT.NewTask` record — the record grows, and every literal has to be touched when it does. Spell it out only for a non-default field.
+
+**Filter with a single bare word: `--test-options="-p /branches/"`.** Tasty splits `-p` on commas, and a pattern containing `.` can match zero tests while still reporting `All 0 tests passed`. A green run with a suspiciously low count means the filter missed, not that the code is fine.
+
 **Run `make install` before the CLI tests.** The `test/Cli*Spec.hs` modules shell out to `bin/icarium`, which `cabal build` does not produce. Skipping it fails with `posix_spawnp: does not exist` — a stale-binary problem wearing a flake's clothes. Worse, after a source change `bin/icarium` is the *previous* build until you reinstall, so a green run can be testing code you already replaced.
 
 ## Code style
