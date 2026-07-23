@@ -4,7 +4,7 @@ import Control.Monad (filterM)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (getCurrentTime)
 import Options.Applicative
 import System.Directory (doesFileExist, findExecutable)
 import System.Exit (ExitCode (..), exitWith)
@@ -17,7 +17,7 @@ import Icarium.Config (
     loadConfig,
  )
 import Icarium.Db (dbSchemaVersion, withDb)
-import Icarium.Heartbeat (heartbeatStale, pidAlive)
+import Icarium.Heartbeat (dispatchIsInterrupted)
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Task qualified as RT
@@ -121,7 +121,7 @@ checkOrphanedDispatches dbPath = do
                     now <- getCurrentTime
                     withDb dbPath $ \conn -> do
                         open <- RD.listOpenDispatches conn
-                        orphans <- filterM (isOrphanedDispatch now staleSec) open
+                        orphans <- filterM (dispatchIsInterrupted now staleSec) open
                         pure $
                             if null orphans
                                 then [Check "dispatches" (OK "no orphaned dispatches")]
@@ -176,12 +176,6 @@ checkBodies dbPath = do
             [ Check "body" (FAIL (kind <> " " <> T.unpack (T.take 10 nid) <> ": " <> msg <> " — Write markdown to $(icarium " <> kind <> " path " <> T.unpack (T.take 10 nid) <> ")"))
             | Just msg <- [problem]
             ]
-
-isOrphanedDispatch :: UTCTime -> Int -> Dispatch -> IO Bool
-isOrphanedDispatch now staleSec d = do
-    alive <- maybe (pure False) pidAlive (dispatchPid d)
-    let stale = heartbeatStale now staleSec (dispatchHeartbeat d)
-    pure (not alive || stale)
 
 printCheck :: Check -> IO ()
 printCheck c = case checkResult c of

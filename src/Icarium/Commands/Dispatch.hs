@@ -38,7 +38,7 @@ import Icarium.Dispatch.Worktree (
     worktreePath,
  )
 import Icarium.Events qualified as Ev
-import Icarium.Heartbeat (heartbeatStale, pidAlive)
+import Icarium.Heartbeat (DispatchHealth (..), dispatchHealth, healthInterrupted)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
@@ -608,9 +608,8 @@ runRecover db o = do
 
 reconcileDispatch :: FilePath -> Connection -> DispatchConfig -> UTCTime -> Int -> Dispatch -> IO ()
 reconcileDispatch db c dcfg now staleSec d = do
-    alive <- maybe (pure False) pidAlive (dispatchPid d)
-    let stale = heartbeatStale now staleSec (dispatchHeartbeat d)
-    if alive && not stale
+    health <- dispatchHealth now staleSec d
+    if not (healthInterrupted health)
         then pure ()
         else do
             -- If the dispatch worktree survived the crash, preserve any
@@ -630,8 +629,8 @@ reconcileDispatch db c dcfg now staleSec d = do
             let notes =
                     T.intercalate "; " $
                         [ "interrupted"
-                        , "alive=" <> boolText alive
-                        , "stale=" <> boolText stale
+                        , "alive=" <> boolText (dhAlive health)
+                        , "stale=" <> boolText (dhStale health)
                         ]
                             <> wtNotes
                             <> ["last_commit=" <> lastCommit]
