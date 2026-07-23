@@ -17,6 +17,7 @@ import LogResultSpec qualified
 import NodeSpec qualified
 import PayloadSpec qualified
 import PostClaudeSpec qualified
+import PromptSpec qualified
 import QueueSpec qualified
 import RenderSpec qualified
 import RepoSpec qualified
@@ -46,6 +47,7 @@ main =
             , NodeSpec.tests
             , PayloadSpec.tests
             , PostClaudeSpec.tests
+            , PromptSpec.tests
             , RenderSpec.tests
             , RepoSpec.tests
             , RoutingSpec.tests

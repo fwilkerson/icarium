@@ -52,6 +52,7 @@ library
                       Icarium.Dispatch.Worktree
                       Icarium.Heartbeat
                       Icarium.Node
+                      Icarium.Prompt
                       Icarium.Repo.Internal
                       Icarium.Repo.Task
                       Icarium.Repo.Context
@@ -132,6 +133,7 @@ test-suite icarium-test
                       NodeSpec
                       PayloadSpec
                       PostClaudeSpec
+                      PromptSpec
                       QueueSpec
                       RenderSpec
                       RepoSpec

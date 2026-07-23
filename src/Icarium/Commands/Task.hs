@@ -18,10 +18,10 @@ import Icarium.Commands.Util
 import Icarium.Db (withDb, withDbSync)
 import Icarium.Events qualified as Ev
 import Icarium.Node (createTaskWithBody)
+import Icarium.Prompt (taskPromptBody)
 import Icarium.Render qualified as Render
 import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Curation qualified as RCur
 import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
@@ -314,20 +314,14 @@ runShow db o = do
         tid <- resolveOrFatal (RT.resolveTaskId c (sId o))
         mt <- RT.getTask c tid
         t <- maybe (fatal 1 ("task not found: " <> T.unpack tid)) pure mt
-        (refs, deps, cats) <- loadShowLinks c (taskId t)
         if sPrompt o
             then do
                 bodyFromFile <- readBody (taskBodyPath (bodiesDir db) tid)
-                let t' = t{taskBody = bodyFromFile}
-                catMatch <- RCx.categoryMatchedContexts c cats 5
-                let refIds = map contextId refs
-                    dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-                -- stdout stays pure prompt text; the warning goes to stderr so
-                -- callers piping the prompt still see it.
-                unless (hasRetrievalAxis cats) $
-                    mapM_ (TIO.hPutStrLn stderr) (Render.untaggedPromptWarning (taskId t'))
-                TIO.putStr (Render.renderTaskPrompt t' refs dedupedCat deps)
+                TIO.putStr =<< taskPromptBody c t{taskBody = bodyFromFile}
             else do
+                refs <- RE.referencedContexts c (taskId t)
+                deps <- RE.dependencyTasks c (taskId t)
+                cats <- RC.taskCategoriesFor c (taskId t)
                 derived <- RE.derivedFromTasks c (taskId t)
                 retiredIds <- RCur.retiredContextIds c (map contextId refs)
                 let bodyPath = T.pack (taskBodyPath (bodiesDir db) tid)
@@ -338,16 +332,6 @@ runShow db o = do
                         TIO.putStr (Render.renderTaskHuman utf8 t bodyPath refs deps derived cats retiredIds)
   where
     openDb = if sPrompt o then withDbSync else withDb
-
-{- | The link sets every @task show@ branch needs. One fetch site so adding a
-fourth can't land in the prompt render and miss the human one.
--}
-loadShowLinks :: Connection -> Text -> IO ([Context], [Task], [Category])
-loadShowLinks c tid =
-    (,,)
-        <$> RE.referencedContexts c tid
-        <*> RE.dependencyTasks c tid
-        <*> RC.taskCategoriesFor c tid
 
 -- =============================================================
 -- update

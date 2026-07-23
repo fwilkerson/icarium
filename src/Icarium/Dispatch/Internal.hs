@@ -3,12 +3,13 @@ module Icarium.Dispatch.Internal (
     DispatchResult (..),
     DispatchCtx (..),
     dispatch,
+    buildPrompt,
     dispatchBranchName,
     applyOutcomeToTask,
 ) where
 
 import Control.Exception (onException)
-import Control.Monad (unless, void, when)
+import Control.Monad (void, when)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except (ExceptT (..), runExceptT, withExceptT)
 import Data.Maybe (fromMaybe)
@@ -46,11 +47,8 @@ import Icarium.Dispatch.Worktree (
 import Icarium.Events qualified as Ev
 import Icarium.Git qualified as Git
 import Icarium.Id (newId)
-import Icarium.Render (renderTaskPrompt, untaggedPromptWarning)
-import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Context qualified as RCx
+import Icarium.Prompt (taskPromptBody)
 import Icarium.Repo.Dispatch qualified as RD
-import Icarium.Repo.Edge qualified as RE
 import Icarium.Types
 
 -- =============================================================
@@ -322,16 +320,9 @@ prompt names the path, never an env var (see 'scratchSection').
 -}
 buildPrompt :: Connection -> Task -> FilePath -> Maybe Text -> Maybe Text -> IO Text
 buildPrompt conn t absScratch mAgreement mFindings = do
-    refs <- RE.referencedContexts conn (taskId t)
-    cats <- RC.taskCategoriesFor conn (taskId t)
-    catMatch <- RCx.categoryMatchedContexts conn cats 5
-    deps <- RE.dependencyTasks conn (taskId t)
-    unless (hasRetrievalAxis cats) $
-        mapM_ (TIO.hPutStrLn stderr) (untaggedPromptWarning (taskId t))
-    let refIds = map contextId refs
-        dedupedCat = filter (\cx -> contextId cx `notElem` refIds) catMatch
-        base =
-            renderTaskPrompt t refs dedupedCat deps
+    body <- taskPromptBody conn t
+    let base =
+            body
                 <> agreementSection mAgreement
                 <> "\n"
                 <> scratchSection absScratch
