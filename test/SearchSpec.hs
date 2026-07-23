@@ -85,8 +85,7 @@ testSearchCrossKindRank = withTestDb $ \c -> do
                 , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
-                , RT.ntModel = Nothing
-                , RT.ntEffort = Nothing
+                , RT.ntRouting = mempty
                 }
     kid <- mkContext c "title has xyzzy" "body"
     (_, results) <- RS.searchEntries c "xyzzy" RS.noFilters 10

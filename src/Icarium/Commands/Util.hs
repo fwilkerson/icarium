@@ -10,9 +10,7 @@ module Icarium.Commands.Util (
     stateChoices,
     edgeKindReader,
     axisReader,
-    effortChoices,
-    effortReader,
-    clearableEffortReader,
+    routingP,
 
     -- * Category validation
     requireCategory,
@@ -140,23 +138,53 @@ axisReader = eitherReader $ \s ->
 effortChoices :: String
 effortChoices = T.unpack (T.intercalate " | " (map effortText allEfforts))
 
-effortReader :: ReadM Effort
-effortReader = eitherReader $ \s ->
-    case parseEffort (T.pack s) of
-        Just e -> Right e
-        Nothing -> Left ("invalid effort: " <> s)
-
 {- | @--effort@ where the empty string clears the value, matching the
 category-axis flags. One flag sets and unsets, so there is no second
 @--no-effort@ spelling to remember.
 -}
-clearableEffortReader :: ReadM (Maybe Effort)
-clearableEffortReader = eitherReader $ \s ->
+effortReader :: ReadM (Maybe Effort)
+effortReader = eitherReader $ \s ->
     if null s
         then Right Nothing
         else case parseEffort (T.pack s) of
             Just e -> Right (Just e)
             Nothing -> Left ("invalid effort: " <> s)
+
+{- | The routing flags, as a patch over an existing 'Routing'. A flag that
+isn't given leaves its field alone, so the same parser serves @task add@
+(patching 'mempty'), @task update@ (patching the stored routing) and
+@dispatch run@ (patching the empty flag-level routing). @subject@ names
+what is being routed, e.g. @\"this task\"@.
+
+A new routing knob is one more flag here and one more field in 'Routing';
+no call site changes.
+-}
+routingP :: String -> Parser (Routing -> Routing)
+routingP subject = patch <$> modelFlag <*> effortFlag
+  where
+    patch mm me r =
+        r
+            { rtModel = fromMaybe (rtModel r) mm
+            , rtEffort = fromMaybe (rtEffort r) me
+            }
+    modelFlag =
+        fmap blank
+            <$> optional
+                ( textOption
+                    "model"
+                    "NAME"
+                    ("Use this model for " <> subject <> " instead of the [dispatch] default; empty string clears")
+                )
+    blank t = if T.null (T.strip t) then Nothing else Just t
+    effortFlag =
+        optional
+            ( option
+                effortReader
+                ( long "effort"
+                    <> metavar "LEVEL"
+                    <> help ("Use this effort for " <> subject <> " instead of the [dispatch] default (" <> effortChoices <> "); empty string clears")
+                )
+            )
 
 data BodyInput = BodyInline Text | BodyStdin | BodyNone
 

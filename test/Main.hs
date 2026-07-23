@@ -21,6 +21,7 @@ import QueueSpec qualified
 import RenderSpec qualified
 import RepoSpec qualified
 import ResolverSpec qualified
+import RoutingSpec qualified
 import SchemaSpec qualified
 import SearchSpec qualified
 import TickSpec qualified
@@ -47,6 +48,7 @@ main =
             , PostClaudeSpec.tests
             , RenderSpec.tests
             , RepoSpec.tests
+            , RoutingSpec.tests
             , SchemaSpec.tests
             , ResolverSpec.tests
             , SearchSpec.tests

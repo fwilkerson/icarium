@@ -85,8 +85,7 @@ testTimeoutOutcome = withTestRepo $ \dir -> withOutOfTreeDb $ \dbPath -> withTes
                 , RT.ntState = ReadyHeadless
                 , RT.ntPriority = Nothing
                 , RT.ntNoCommit = False
-                , RT.ntModel = Nothing
-                , RT.ntEffort = Nothing
+                , RT.ntRouting = mempty
                 }
     let did = "01DISPATCH00000000000000000"
     RD.insertDispatch

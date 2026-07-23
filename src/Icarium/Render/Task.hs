@@ -77,8 +77,8 @@ noCommitLine t
 -}
 routingLines :: Task -> [Text]
 routingLines t =
-    ["model:     " <> m | m <- maybeToList (taskModel t)]
-        <> ["effort:    " <> effortText e | e <- maybeToList (taskEffort t)]
+    ["model:     " <> m | m <- maybeToList (rtModel (taskRouting t))]
+        <> ["effort:    " <> effortText e | e <- maybeToList (rtEffort (taskRouting t))]
 
 -- | Set by `task claim`; absent for tasks nobody claimed.
 claimLines :: Task -> [Text]

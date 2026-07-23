@@ -37,6 +37,7 @@ module Icarium.Types (
     dispositionRetires,
 
     -- * Records
+    Routing (..),
     Task (..),
     Context (..),
     Edge (..),
@@ -45,10 +46,11 @@ module Icarium.Types (
     CurationEvent (..),
 ) where
 
+import Control.Applicative ((<|>))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Typeable (Typeable)
-import Database.SQLite.Simple (FromRow (..), field)
+import Database.SQLite.Simple (FromRow (..), ToRow (..), field)
 import Database.SQLite.Simple.FromField (
     Field,
     FromField (..),
@@ -280,6 +282,37 @@ instance ToField CategoryAxis where toField = toField . categoryAxisText
 -- Records (FromRow column order matches SELECT ordering used in Repo)
 -- =============================================================
 
+{- | Which agent a dispatch runs as. 'Nothing' in a field = inherit the
+next source down (task, then the @[dispatch]@ config defaults), so the
+'Semigroup' is per-field left-biased choice and folding
+@flag \<\> task@ is the whole precedence rule.
+
+One record so a new routing knob is a field here, an entry in 'ToRow' /
+'FromRow', and a flag in the parser — not an edit at every call site.
+-}
+data Routing = Routing
+    { rtModel :: Maybe Text
+    , rtEffort :: Maybe Effort
+    }
+    deriving (Show, Eq)
+
+instance Semigroup Routing where
+    a <> b =
+        Routing
+            { rtModel = rtModel a <|> rtModel b
+            , rtEffort = rtEffort a <|> rtEffort b
+            }
+
+instance Monoid Routing where
+    mempty = Routing{rtModel = Nothing, rtEffort = Nothing}
+
+-- Column order matches the tail of 'Icarium.Repo.Internal.taskCols'.
+instance FromRow Routing where
+    fromRow = Routing <$> field <*> field
+
+instance ToRow Routing where
+    toRow Routing{..} = [toField rtModel, toField rtEffort]
+
 data Task = Task
     { taskId :: Text
     , taskTitle :: Text
@@ -292,9 +325,7 @@ data Task = Task
     , taskNoCommit :: Bool
     , taskClaimedBy :: Maybe Text
     , taskClaimedAt :: Maybe Text
-    , -- Nothing = inherit the [dispatch] defaults from icarium.toml.
-      taskModel :: Maybe Text
-    , taskEffort :: Maybe Effort
+    , taskRouting :: Routing
     }
     deriving (Show)
 
@@ -312,8 +343,7 @@ instance FromRow Task where
             <*> field
             <*> field
             <*> field
-            <*> field
-            <*> field
+            <*> fromRow
 
 data Context = Context
     { contextId :: Text

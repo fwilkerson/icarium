@@ -247,8 +247,7 @@ mkNoCommitTask c title =
             , RT.ntState = ReadyHeadless
             , RT.ntPriority = Nothing
             , RT.ntNoCommit = True
-            , RT.ntModel = Nothing
-            , RT.ntEffort = Nothing
+            , RT.ntRouting = mempty
             }
 
 testNoCommitInsert :: IO ()

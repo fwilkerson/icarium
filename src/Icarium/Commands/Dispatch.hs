@@ -95,8 +95,7 @@ run db = \case
 data RunOpts = RunOpts
     { rTaskId :: Maybe Text
     , rMax :: Maybe Int
-    , rModel :: Maybe Text
-    , rEffort :: Maybe Effort
+    , rRouting :: Routing
     , rBase :: Maybe Text
     , rDryRun :: Bool
     }
@@ -113,15 +112,7 @@ runP =
                     <> help "Cap dispatches in queue mode (ignored with TASK_ID)"
                 )
             )
-        <*> optional (textOption "model" "MODEL" "Override the model for this dispatch")
-        <*> optional
-            ( option
-                effortReader
-                ( long "effort"
-                    <> metavar "LEVEL"
-                    <> help ("Override the effort for this dispatch (" <> effortChoices <> ")")
-                )
-            )
+        <*> (($ mempty) <$> routingP "this dispatch")
         <*> optional (textOption "base-branch" "NAME" "Override the base branch for git operations")
         <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
@@ -161,8 +152,7 @@ runRun db o = do
                                     , D.drConfig = cfg
                                     , D.drDbPath = db
                                     , D.drDryRun = rDryRun o
-                                    , D.drModelOverride = rModel o
-                                    , D.drEffortOverride = rEffort o
+                                    , D.drRouting = rRouting o
                                     , D.drBaseOverride = rBase o
                                     }
                         case eres of
@@ -252,8 +242,7 @@ drainLoop ctx !i
                             , D.drConfig = cfg
                             , D.drDbPath = db
                             , D.drDryRun = rDryRun opts
-                            , D.drModelOverride = rModel opts
-                            , D.drEffortOverride = rEffort opts
+                            , D.drRouting = rRouting opts
                             , D.drBaseOverride = rBase opts
                             }
                 case eres of

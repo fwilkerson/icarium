@@ -7,7 +7,6 @@ module Icarium.Dispatch.Internal (
     applyOutcomeToTask,
 ) where
 
-import Control.Applicative ((<|>))
 import Control.Exception (onException)
 import Control.Monad (unless, void, when)
 import Control.Monad.Trans.Class (lift)
@@ -63,8 +62,7 @@ data DispatchRequest = DispatchRequest
     , drConfig :: Config
     , drDbPath :: FilePath
     , drDryRun :: Bool
-    , drModelOverride :: Maybe Text
-    , drEffortOverride :: Maybe Effort
+    , drRouting :: Routing
     , drBaseOverride :: Maybe Text
     }
 
@@ -92,14 +90,13 @@ outranks the task's standing routing choice.
 resolveDispatchOpts :: DispatchRequest -> ResolvedOpts
 resolveDispatchOpts req =
     ResolvedOpts
-        { roModel =
-            fromMaybe (dcModel (cfgDispatch (drConfig req))) $
-                drModelOverride req <|> taskModel (drTask req)
-        , roEffort =
-            fromMaybe (dcEffort (cfgDispatch (drConfig req))) $
-                drEffortOverride req <|> taskEffort (drTask req)
+        { roModel = fromMaybe (dcModel dcfg) (rtModel routing)
+        , roEffort = fromMaybe (dcEffort dcfg) (rtEffort routing)
         , roBase = fromMaybe (pcIntegrationBranch (cfgProject (drConfig req))) (drBaseOverride req)
         }
+  where
+    dcfg = cfgDispatch (drConfig req)
+    routing = drRouting req <> taskRouting (drTask req)
 
 -- =============================================================
 -- Entry

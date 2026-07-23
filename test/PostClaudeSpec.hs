@@ -98,8 +98,7 @@ withIngestTask act =
                         , RT.ntState = InProgress
                         , RT.ntPriority = Nothing
                         , RT.ntNoCommit = False
-                        , RT.ntModel = Nothing
-                        , RT.ntEffort = Nothing
+                        , RT.ntRouting = mempty
                         }
             mapM_
                 (\(axis, name) -> mkCat c axis name >>= RC.attachTaskCategory c tid . categoryId)
@@ -203,8 +202,7 @@ testWorkerBlockedIsFailure =
                         , RT.ntState = ReadyHeadless
                         , RT.ntPriority = Nothing
                         , RT.ntNoCommit = False
-                        , RT.ntModel = Nothing
-                        , RT.ntEffort = Nothing
+                        , RT.ntRouting = mempty
                         }
             RD.insertDispatch
                 conn
@@ -262,8 +260,7 @@ testWarnEntryLinksTask =
                         , RT.ntState = ReadyHeadless
                         , RT.ntPriority = Nothing
                         , RT.ntNoCommit = False
-                        , RT.ntModel = Nothing
-                        , RT.ntEffort = Nothing
+                        , RT.ntRouting = mempty
                         }
             cat <- mkCat c Domain "cli"
             let did = "01WARNDISPATCH00000000000A"
@@ -369,8 +366,7 @@ testHandlePostClaudeFailureCheckpoints =
                             , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = False
-                            , RT.ntModel = Nothing
-                            , RT.ntEffort = Nothing
+                            , RT.ntRouting = mempty
                             }
                 RD.insertDispatch
                     conn
@@ -431,8 +427,7 @@ testGateFailureNoteRecorded =
                             , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = False
-                            , RT.ntModel = Nothing
-                            , RT.ntEffort = Nothing
+                            , RT.ntRouting = mempty
                             }
                 RD.insertDispatch
                     conn
@@ -491,8 +486,7 @@ testFinishWithWipCheckpoint =
                             , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = False
-                            , RT.ntModel = Nothing
-                            , RT.ntEffort = Nothing
+                            , RT.ntRouting = mempty
                             }
                 RD.insertDispatch
                     conn
@@ -554,8 +548,7 @@ testNoCommitAgentCommittedAnyway =
                             , RT.ntState = ReadyHeadless
                             , RT.ntPriority = Nothing
                             , RT.ntNoCommit = True
-                            , RT.ntModel = Nothing
-                            , RT.ntEffort = Nothing
+                            , RT.ntRouting = mempty
                             }
                 RD.insertDispatch
                     conn

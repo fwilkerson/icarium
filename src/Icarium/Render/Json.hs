@@ -70,8 +70,8 @@ taskCore t =
         <> E.pair "priority" (maybe E.null_ E.int (taskPriority t))
         <> E.pair "block_reason" (maybeText (taskBlockReason t))
         <> E.pair "no_commit" (E.bool (taskNoCommit t))
-        <> E.pair "model" (maybeText (taskModel t))
-        <> E.pair "effort" (maybeText (effortText <$> taskEffort t))
+        <> E.pair "model" (maybeText (rtModel (taskRouting t)))
+        <> E.pair "effort" (maybeText (effortText <$> rtEffort (taskRouting t)))
         <> E.pair "created_at" (E.text (taskCreatedAt t))
         <> E.pair "updated_at" (E.text (taskUpdatedAt t))
 

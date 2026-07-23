@@ -35,19 +35,21 @@ import Database.SQLite.Simple (
     Query (..),
     SQLData (..),
     SQLError (..),
+    ToRow (..),
     execute,
     execute_,
     query,
     query_,
     withImmediateTransaction,
  )
+import Database.SQLite.Simple.ToField (toField)
 import Database.SQLite3 (Error (..))
 import GHC.Clock (getMonotonicTime)
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Internal (axisFilters, prefixLookup, resolveByPrefix, taskCols)
-import Icarium.Types (CategoryAxis, Effort, NodeKind (..), Task (..), TaskState (..), readyStates, taskStateText)
+import Icarium.Types (CategoryAxis, NodeKind (..), Routing, Task (..), TaskState (..), readyStates, taskStateText)
 
 data NewTask = NewTask
     { ntTitle :: Text
@@ -55,8 +57,7 @@ data NewTask = NewTask
     , ntState :: TaskState
     , ntPriority :: Maybe Int
     , ntNoCommit :: Bool
-    , ntModel :: Maybe Text
-    , ntEffort :: Maybe Effort
+    , ntRouting :: Routing
     }
 
 data TaskUpdate = TaskUpdate
@@ -65,12 +66,13 @@ data TaskUpdate = TaskUpdate
     , tuPriority :: Maybe (Maybe Int)
     , tuBlockReason :: Maybe (Maybe Text)
     , tuNoCommit :: Maybe Bool
-    , tuModel :: Maybe (Maybe Text)
-    , tuEffort :: Maybe (Maybe Effort)
+    , -- A patch, not a value: it must leave the fields it doesn't name alone,
+      -- which a @Maybe Routing@ could not express.
+      tuRouting :: Routing -> Routing
     }
 
 emptyUpdate :: TaskUpdate
-emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+emptyUpdate = TaskUpdate Nothing Nothing Nothing Nothing Nothing id
 
 {- | Queue ordering, shared by @queueTasks@ and @claimNextTask@ so
 `task queue` and `task claim` cannot drift apart.
@@ -87,7 +89,7 @@ insertTask conn NewTask{..} = do
             "INSERT INTO tasks (id, title, body, state, priority, no_commit, model, effort) \
             \VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
-        (tid, ntTitle, ntBody, ntState, ntPriority, ntNoCommit, ntModel, ntEffort)
+        (toRow (tid, ntTitle, ntBody, ntState, ntPriority, ntNoCommit) <> toRow ntRouting)
     Fts.indexEntry conn tid TaskNode ntTitle ntBody
     pure tid
 
@@ -297,8 +299,7 @@ updateTask conn tid TaskUpdate{..} = do
                         then fromMaybe (taskBlockReason t) tuBlockReason
                         else Nothing
                 newNoCommit = fromMaybe (taskNoCommit t) tuNoCommit
-                newModel = fromMaybe (taskModel t) tuModel
-                newEffort = fromMaybe (taskEffort t) tuEffort
+                newRouting = tuRouting (taskRouting t)
                 -- Claims live only while in_progress (spec/schema.sql).
                 (newClaimBy, newClaimAt)
                     | newState == InProgress = (taskClaimedBy t, taskClaimedAt t)
@@ -310,7 +311,10 @@ updateTask conn tid TaskUpdate{..} = do
                     \priority=?, block_reason=?, no_commit=?, \
                     \claimed_by=?, claimed_at=?, model=?, effort=? WHERE id=?"
                 )
-                (newTitle, newState, newPrio, newBlock, newNoCommit, newClaimBy, newClaimAt, newModel, newEffort, tid)
+                ( toRow (newTitle, newState, newPrio, newBlock, newNoCommit, newClaimBy, newClaimAt)
+                    <> toRow newRouting
+                    <> [toField tid]
+                )
             -- Keep FTS title in sync when title changes.
             when (isJust tuTitle) $
                 Fts.indexEntry conn tid TaskNode newTitle (taskBody t)
