@@ -2,17 +2,34 @@ module Icarium.Render.Dispatch (
     renderDispatch,
     DispatchRow (..),
     renderDispatchList,
+    renderDispatchDuration,
     renderDispatchStats,
+    renderRunSummary,
+    renderRunOutcome,
+    renderRecoveryNotes,
+    renderRecovered,
+    renderLanded,
+    renderStillParked,
+    renderMergeAttempt,
+    renderMergeTally,
     fmtSecs,
 ) where
 
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (UTCTime, diffUTCTime)
+import Text.Printf (printf)
 
+import Icarium.Dispatch.LogResult (LogResult (..), LogUsage (..), fmtMs)
+import Icarium.Dispatch.Merge (MergeOutcome (..))
+import Icarium.Dispatch.Outcome (DispatchResult (..))
+import Icarium.Dispatch.Payload (WorkerPayload (..), workerStatusText)
+import Icarium.Heartbeat (DispatchHealth (..))
 import Icarium.Render.Internal
 import Icarium.Repo.Dispatch (DispatchStats (..))
 import Icarium.Text (tshow)
+import Icarium.Time (parseDbTime)
 import Icarium.Types
 
 renderDispatch :: Dispatch -> Maybe Task -> [Context] -> Maybe Text -> Text
@@ -128,6 +145,143 @@ renderDispatchStats mSince s =
         ]
   where
     field k v = padr 18 (k <> ":") <> " " <> v
+
+renderDispatchDuration :: UTCTime -> Dispatch -> Text
+renderDispatchDuration now d =
+    case parseDbTime (dispatchStartedAt d) of
+        Nothing -> ""
+        Just start ->
+            let (diff, isOpen) = case dispatchEndedAt d >>= parseDbTime of
+                    Just end -> (diffUTCTime end start, False)
+                    Nothing -> (diffUTCTime now start, True)
+                secs = max 0 (round (toRational diff) :: Int)
+                body = fmtSecs secs
+             in if isOpen then body <> " (running)" else body
+
+{- | The post-run summary block for @dispatch run@. The caller supplies the
+log result and the changed-file list; the latter must be read before
+auto-merge deletes the dispatch branch.
+-}
+renderRunSummary :: DispatchResult -> Maybe LogResult -> [Text] -> Text
+renderRunSummary r mLog files =
+    T.unlines $
+        [ ""
+        , field "dispatch" (fromMaybe "(dry-run)" (dresDispatchId r))
+        , field "outcome" (dispatchOutcomeText (dresOutcome r))
+        , field "branch" (dresBranch r)
+        , field "notes" (dresNotes r)
+        ]
+            <> foldMap (\p -> [field "worker" (workerLine p)]) (dresPayload r)
+            <> foldMap logLines mLog
+            <> fileLines
+  where
+    field k v = padr 9 (k <> ":") <> " " <> v
+    pad = T.replicate 10 " "
+
+    workerLine p =
+        T.intercalate "; " $
+            [workerStatusText (wpStatus p) <> maybe "" (": " <>) (wpBlockReason p)]
+                <> [ tshow n <> " for future agents"
+                   | let n = length (wpForFutureAgents p)
+                   , n > 0
+                   ]
+
+    logLines lr =
+        [ field "turns" (maybe "-" tshow (lrNumTurns lr))
+        , field
+            "duration"
+            ( maybe "-" fmtMs (lrDurationMs lr)
+                <> maybe "" (\a -> " (api: " <> fmtMs a <> ")") (lrDurationApiMs lr)
+            )
+        , field "cost" (maybe "-" (T.pack . printf "$%.4f") (lrCostUsd lr))
+        , field "tokens" (fmtTokens (lrUsage lr))
+        ]
+
+    fmtTokens Nothing = "-"
+    fmtTokens (Just u) =
+        "in "
+            <> maybe "-" tshow (luInputTokens u)
+            <> " / out "
+            <> maybe "-" tshow (luOutputTokens u)
+            <> " / cache "
+            <> maybe "-" tshow (luCacheReads u)
+
+    fileLines = case files of
+        [] -> []
+        _ ->
+            let shown = take 10 files
+                extra = length files - length shown
+                items = shown <> [tshow extra <> " more" | extra > 0]
+             in [field "files" (T.intercalate ("\n" <> pad) items)]
+
+-- | One-line outcome for the drain loop's progress log.
+renderRunOutcome :: DispatchResult -> Text
+renderRunOutcome r =
+    dispatchOutcomeText (dresOutcome r) <> " \x2014 " <> dresNotes r
+
+{- | Structured recovery notes for an interrupted dispatch. Stored, not just
+printed: they land in @dispatches.notes@ and the task's @block_reason@.
+'Nothing' for the worktree means it did not survive the crash, so there is
+nothing to say about uncommitted state.
+-}
+renderRecoveryNotes :: DispatchHealth -> Maybe Bool -> Text -> Text
+renderRecoveryNotes health mDirty lastCommit =
+    T.intercalate "; " $
+        [ "interrupted"
+        , "alive=" <> boolText (dhAlive health)
+        , "stale=" <> boolText (dhStale health)
+        ]
+            <> foldMap (\dirty -> ["uncommitted=" <> boolText dirty, "worktree=removed"]) mDirty
+            <> ["last_commit=" <> lastCommit]
+  where
+    boolText b = if b then "yes" else "no"
+
+renderRecovered :: Dispatch -> Text -> Text
+renderRecovered d notes =
+    "dispatch:"
+        <> dispatchId d
+        <> "  task:"
+        <> dispatchTaskId d
+        <> "  branch:"
+        <> dispatchBranch d
+        <> "  "
+        <> notes
+
+renderLanded :: Dispatch -> Text -> Text
+renderLanded d sha =
+    "merged "
+        <> shortId d
+        <> ": "
+        <> dispatchBaseBranch d
+        <> " -> "
+        <> T.take 10 sha
+
+renderStillParked :: Dispatch -> Text -> Text
+renderStillParked d note =
+    "dispatch "
+        <> shortId d
+        <> " parked: "
+        <> note
+        <> "; fix and run `icarium dispatch merge "
+        <> shortId d
+        <> "`"
+
+-- | One line per attempt in @dispatch merge --all@.
+renderMergeAttempt :: Dispatch -> MergeOutcome -> Text
+renderMergeAttempt d = \case
+    MergeLanded sha -> renderLanded d sha
+    MergeBlocked _ note -> "blocked " <> shortId d <> ": " <> note
+    MergeStopped note -> "stopped " <> shortId d <> ": " <> note
+
+renderMergeTally :: Int -> Int -> Int -> Int -> Text
+renderMergeTally total landed blocked unattempted =
+    T.intercalate "; " $
+        [tshow landed <> " of " <> tshow total <> " landed"]
+            <> [tshow blocked <> " still parked" | blocked > 0]
+            <> [tshow unattempted <> " not attempted" | unattempted > 0]
+
+shortId :: Dispatch -> Text
+shortId = T.take 10 . dispatchId
 
 fmtSecs :: Int -> Text
 fmtSecs s

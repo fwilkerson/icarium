@@ -32,7 +32,16 @@ module Icarium.Render (
     renderDispatch,
     DispatchRow (..),
     renderDispatchList,
+    renderDispatchDuration,
     renderDispatchStats,
+    renderRunSummary,
+    renderRunOutcome,
+    renderRecoveryNotes,
+    renderRecovered,
+    renderLanded,
+    renderStillParked,
+    renderMergeAttempt,
+    renderMergeTally,
     fmtSecs,
 
     -- * Search

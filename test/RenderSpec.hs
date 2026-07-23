@@ -5,6 +5,11 @@ import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
+import Icarium.Dispatch.LogResult (LogResult (..), LogUsage (..))
+import Icarium.Dispatch.Merge (MergeOutcome (..))
+import Icarium.Dispatch.Outcome (DispatchResult (..))
+import Icarium.Dispatch.Payload (FutureNote (..), WorkerPayload (..), WorkerStatus (..))
+import Icarium.Heartbeat (DispatchHealth (..))
 import Icarium.Render (fmtSecs, renderTaskHuman, renderTaskList)
 import Icarium.Render qualified
 import Icarium.Types
@@ -28,6 +33,19 @@ tests =
         , testGroup
             "renderDispatchList"
             [ testCase "title, duration, outcome badge, ctx badge, no branch/header" testDispatchListFormat
+            ]
+        , testGroup
+            "renderRunSummary"
+            [ testCase "golden: full block with worker, log and files" testRunSummaryGolden
+            , testCase "no log result and no files omits those lines" testRunSummaryMinimal
+            , testCase "dry run has no dispatch id" testRunSummaryDryRun
+            , testCase "more than 10 files truncates with an N more line" testRunSummaryFileTruncation
+            ]
+        , testGroup
+            "dispatch line renderers"
+            [ testCase "recovery notes with a surviving worktree" testRecoveryNotesWorktree
+            , testCase "recovery notes without a worktree" testRecoveryNotesNoWorktree
+            , testCase "landed / parked / merge tally lines" testMergeLines
             ]
         , testGroup
             "task show links section"
@@ -243,6 +261,121 @@ testDispatchListFormat = do
     assertBool "no column header row" (not ("task_id" `T.isInfixOf` out))
     assertBool "duration shown" ("12m" `T.isInfixOf` out)
     assertBool "(running) suffix on open" ("(running)" `T.isInfixOf` out)
+
+-- =============================================================
+-- renderRunSummary tests
+-- =============================================================
+
+minResult :: DispatchResult
+minResult =
+    DispatchResult
+        { dresDispatchId = Just "01AAA0000000000000000000AA"
+        , dresOutcome = OSuccess
+        , dresBranch = "dispatch/01AAA0000000000000000000AA"
+        , dresNotes = "gates passed"
+        , dresLogPath = Nothing
+        , dresBaseSha = Just "abc123"
+        , dresPayload = Nothing
+        }
+
+fullLog :: LogResult
+fullLog =
+    LogResult
+        { lrNumTurns = Just 7
+        , lrDurationMs = Just 12500
+        , lrDurationApiMs = Just 9200
+        , lrCostUsd = Just 0.1234
+        , lrUsage = Just (LogUsage (Just 100) (Just 200) (Just 300))
+        , lrResultText = Nothing
+        }
+
+testRunSummaryGolden :: IO ()
+testRunSummaryGolden = do
+    let payload =
+            WorkerPayload
+                { wpStatus = WSubmitted
+                , wpBlockReason = Nothing
+                , wpForFutureAgents =
+                    [ FutureNote "one" "body"
+                    , FutureNote "two" "body"
+                    ]
+                }
+        out =
+            Icarium.Render.renderRunSummary
+                minResult{dresPayload = Just payload}
+                (Just fullLog)
+                ["src/A.hs", "src/B.hs"]
+    out
+        @?= T.unlines
+            [ ""
+            , "dispatch: 01AAA0000000000000000000AA"
+            , "outcome:  success"
+            , "branch:   dispatch/01AAA0000000000000000000AA"
+            , "notes:    gates passed"
+            , "worker:   submitted; 2 for future agents"
+            , "turns:    7"
+            , "duration: 12.5s (api: 9.2s)"
+            , "cost:     $0.1234"
+            , "tokens:   in 100 / out 200 / cache 300"
+            , "files:    src/A.hs"
+            , "          src/B.hs"
+            ]
+
+testRunSummaryMinimal :: IO ()
+testRunSummaryMinimal = do
+    let out = Icarium.Render.renderRunSummary minResult Nothing []
+    out
+        @?= T.unlines
+            [ ""
+            , "dispatch: 01AAA0000000000000000000AA"
+            , "outcome:  success"
+            , "branch:   dispatch/01AAA0000000000000000000AA"
+            , "notes:    gates passed"
+            ]
+
+testRunSummaryDryRun :: IO ()
+testRunSummaryDryRun = do
+    let out = Icarium.Render.renderRunSummary minResult{dresDispatchId = Nothing} Nothing []
+    assertBool "dry-run placeholder" ("dispatch: (dry-run)" `T.isInfixOf` out)
+
+testRunSummaryFileTruncation :: IO ()
+testRunSummaryFileTruncation = do
+    let files = ["src/F" <> T.pack (show n) <> ".hs" | n <- [1 :: Int .. 13]]
+        out = Icarium.Render.renderRunSummary minResult Nothing files
+        ls = T.lines out
+    assertBool "first file on the files: line" ("files:    src/F1.hs" `elem` ls)
+    assertBool "tenth file shown" ("          src/F10.hs" `elem` ls)
+    assertBool "eleventh file dropped" ("          src/F11.hs" `notElem` ls)
+    assertBool "remainder counted" ("          3 more" `elem` ls)
+
+-- =============================================================
+-- dispatch line renderer tests
+-- =============================================================
+
+testRecoveryNotesWorktree :: IO ()
+testRecoveryNotesWorktree =
+    Icarium.Render.renderRecoveryNotes (DispatchHealth False True) (Just True) "deadbee"
+        @?= "interrupted; alive=no; stale=yes; uncommitted=yes; worktree=removed; last_commit=deadbee"
+
+testRecoveryNotesNoWorktree :: IO ()
+testRecoveryNotesNoWorktree =
+    Icarium.Render.renderRecoveryNotes (DispatchHealth True False) Nothing ""
+        @?= "interrupted; alive=yes; stale=no; last_commit="
+
+testMergeLines :: IO ()
+testMergeLines = do
+    let d = minDispatch "01AAA0000000000000000000AA" "01TTT0000000000000000000AA" (Just OSuccess)
+    Icarium.Render.renderLanded d "def4567890abc"
+        @?= "merged 01AAA00000: main -> def4567890"
+    Icarium.Render.renderStillParked d "gates failed"
+        @?= "dispatch 01AAA00000 parked: gates failed; fix and run `icarium dispatch merge 01AAA00000`"
+    Icarium.Render.renderMergeAttempt d (MergeBlocked 1 "gates failed")
+        @?= "blocked 01AAA00000: gates failed"
+    Icarium.Render.renderMergeAttempt d (MergeStopped "no capacity")
+        @?= "stopped 01AAA00000: no capacity"
+    Icarium.Render.renderMergeTally 3 2 1 0 @?= "2 of 3 landed; 1 still parked"
+    Icarium.Render.renderMergeTally 3 3 0 0 @?= "3 of 3 landed"
+    Icarium.Render.renderMergeTally 4 1 1 2 @?= "1 of 4 landed; 1 still parked; 2 not attempted"
 
 -- =============================================================
 -- task show links section tests

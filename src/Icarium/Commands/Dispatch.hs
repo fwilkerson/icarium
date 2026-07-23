@@ -8,26 +8,19 @@ import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesDirectoryExist, doesFileExist)
 import System.IO (hPutStrLn, stderr)
 import System.Posix.Signals (Handler (..), installHandler, raiseSignal, sigINT)
-import Text.Printf (printf)
 
-import Icarium.Dispatch.LogResult (
-    LogResult (..),
-    LogUsage (..),
-    fmtMs,
-    readLogResult,
- )
-import Icarium.Dispatch.Payload (WorkerPayload (..), workerStatusText)
+import Icarium.Dispatch.LogResult (readLogResult)
 import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
 import Icarium.Config (Config, DispatchConfig (..), cfgDispatch)
-import Icarium.Db (parseDbTime, withDb, withDbSync)
+import Icarium.Db (withDb, withDbSync)
 import Icarium.Dispatch qualified as D
 import Icarium.Dispatch.Merge (MergeOutcome (..), mergeParked)
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree)
@@ -38,12 +31,11 @@ import Icarium.Dispatch.Worktree (
     worktreePath,
  )
 import Icarium.Events qualified as Ev
-import Icarium.Heartbeat (DispatchHealth (..), dispatchHealth, healthInterrupted)
+import Icarium.Heartbeat (dispatchHealth, healthInterrupted)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Task qualified as RT
-import Icarium.Text (tshow)
 import Icarium.Types
 
 data Command
@@ -259,20 +251,16 @@ drainLoop ctx !i
                         fatal 3 (T.unpack (worktreeErrorText err))
                     Right res -> do
                         D.applyOutcomeToTask conn db t res
-                        TIO.hPutStrLn stderr $
-                            "icarium: "
-                                <> dispatchOutcomeText (D.dresOutcome res)
-                                <> " \x2014 "
-                                <> D.dresNotes res
+                        TIO.hPutStrLn stderr ("icarium: " <> Render.renderRunOutcome res)
                         printSummary res
                         stopped <-
                             autoMerge cfg conn res >>= \case
                                 Nothing -> pure False
                                 Just (d, out) -> case out of
-                                    MergeLanded sha -> False <$ TIO.putStrLn (landedLine d sha)
+                                    MergeLanded sha -> False <$ TIO.putStrLn (Render.renderLanded d sha)
                                     MergeBlocked _ note -> do
                                         modifyIORef (dctxParkedCount ctx) (+ 1)
-                                        False <$ TIO.hPutStrLn stderr ("icarium: " <> stillParkedLine d note)
+                                        False <$ TIO.hPutStrLn stderr ("icarium: " <> Render.renderStillParked d note)
                                     -- Worktree back-pressure is machine-level: the next
                                     -- dispatch would hit the same wall, so stop the drain.
                                     MergeStopped note -> do
@@ -315,81 +303,21 @@ outcome — exit 3, naming the fixing command.
 -}
 reportSingleAutoMerge :: Dispatch -> MergeOutcome -> IO ()
 reportSingleAutoMerge d = \case
-    MergeLanded sha -> TIO.putStrLn (landedLine d sha)
+    MergeLanded sha -> TIO.putStrLn (Render.renderLanded d sha)
     MergeBlocked _ note -> stillParked note
     MergeStopped note -> stillParked note
   where
-    stillParked note = fatal 3 (T.unpack (stillParkedLine d note))
-
-stillParkedLine :: Dispatch -> Text -> Text
-stillParkedLine d note =
-    "dispatch "
-        <> T.take 10 (dispatchId d)
-        <> " parked: "
-        <> note
-        <> "; fix and run `icarium dispatch merge "
-        <> T.take 10 (dispatchId d)
-        <> "`"
+    stillParked note = fatal 3 (T.unpack (Render.renderStillParked d note))
 
 -- | Print the enriched summary block; does not exit on failure.
 printSummary :: D.DispatchResult -> IO ()
 printSummary r = do
-    let idPart = fromMaybe "(dry-run)" (D.dresDispatchId r)
-    TIO.putStrLn ""
-    TIO.putStrLn $ "dispatch: " <> idPart
-    TIO.putStrLn $ "outcome:  " <> dispatchOutcomeText (D.dresOutcome r)
-    TIO.putStrLn $ "branch:   " <> D.dresBranch r
-    TIO.putStrLn $ "notes:    " <> D.dresNotes r
-    forM_ (D.dresPayload r) $ \p -> TIO.putStrLn $ "worker:   " <> workerLine p
-    case D.dresLogPath r of
-        Nothing -> pure ()
-        Just lp -> do
-            mLR <- readLogResult lp
-            case mLR of
-                Nothing -> pure ()
-                Just lr -> do
-                    mapM_
-                        TIO.putStrLn
-                        [ "turns:    " <> maybe "-" (T.pack . show) (lrNumTurns lr)
-                        , "duration: "
-                            <> maybe "-" fmtMs (lrDurationMs lr)
-                            <> maybe "" (\a -> " (api: " <> fmtMs a <> ")") (lrDurationApiMs lr)
-                        , "cost:     " <> maybe "-" (T.pack . printf "$%.4f") (lrCostUsd lr)
-                        , "tokens:   " <> fmtTokens (lrUsage lr)
-                        ]
-    case D.dresBaseSha r of
-        Nothing -> pure ()
-        Just sha -> do
-            -- Diff against the dispatch branch, which still exists here:
-            -- the auto-merge (which deletes it) runs after this summary. The
-            -- branch may be gone for no-commit runs — changedFiles returns
-            -- [] then.
-            files <- Git.changedFiles "." sha (D.dresBranch r)
-            case files of
-                [] -> pure ()
-                _ -> do
-                    let shown = take 10 files
-                        extra = length files - length shown
-                        pad = T.replicate 10 " "
-                        extraLine = [T.pack (show extra) <> " more" | extra > 0]
-                        allItems = shown ++ extraLine
-                    TIO.putStrLn $ "files:    " <> T.intercalate ("\n" <> pad) allItems
-  where
-    workerLine p =
-        T.intercalate "; " $
-            [workerStatusText (wpStatus p) <> maybe "" (": " <>) (wpBlockReason p)]
-                <> [ T.pack (show n) <> " for future agents"
-                   | let n = length (wpForFutureAgents p)
-                   , n > 0
-                   ]
-    fmtTokens Nothing = "-"
-    fmtTokens (Just u) =
-        "in "
-            <> maybe "-" (T.pack . show) (luInputTokens u)
-            <> " / out "
-            <> maybe "-" (T.pack . show) (luOutputTokens u)
-            <> " / cache "
-            <> maybe "-" (T.pack . show) (luCacheReads u)
+    mLog <- maybe (pure Nothing) readLogResult (D.dresLogPath r)
+    -- Diff against the dispatch branch, which still exists here: the
+    -- auto-merge (which deletes it) runs after this summary. The branch may
+    -- be gone for no-commit runs — changedFiles returns [] then.
+    files <- maybe (pure []) (\sha -> Git.changedFiles "." sha (D.dresBranch r)) (D.dresBaseSha r)
+    TIO.putStr (Render.renderRunSummary r mLog files)
 
 summarize :: D.DispatchResult -> IO ()
 summarize r = do
@@ -401,18 +329,6 @@ summarize r = do
 -- =============================================================
 -- list
 -- =============================================================
-
-formatDispatchDuration :: UTCTime -> Dispatch -> Text
-formatDispatchDuration now d =
-    case parseDbTime (dispatchStartedAt d) of
-        Nothing -> ""
-        Just start ->
-            let (diff, isOpen) = case dispatchEndedAt d >>= parseDbTime of
-                    Just end -> (diffUTCTime end start, False)
-                    Nothing -> (diffUTCTime now start, True)
-                secs = max 0 (round (toRational diff) :: Int)
-                body = Render.fmtSecs secs
-             in if isOpen then body <> " (running)" else body
 
 data ListOpts = ListOpts
     { lTask :: Maybe Text
@@ -475,7 +391,7 @@ runList db o = withDb db $ \c -> do
                         { Render.drDispatch = d
                         , Render.drTaskTitle = fromMaybe "" (lookup (dispatchTaskId d) titleMap)
                         , Render.drCtxCount = kc
-                        , Render.drDuration = formatDispatchDuration now d
+                        , Render.drDuration = Render.renderDispatchDuration now d
                         }
                 )
                 filtered
@@ -608,22 +524,15 @@ reconcileDispatch db c dcfg now staleSec d = do
             -- checkout's dirtiness is not this dispatch's.
             let wt = worktreePath (dispatchId d)
             wtExists <- doesDirectoryExist wt
-            wtNotes <-
+            mDirty <-
                 if wtExists
                     then do
                         dirty <- checkpointDirtyTree wt (dispatchId d) "interrupted"
                         teardownWorktree "." dcfg wt
-                        pure ["uncommitted=" <> boolText dirty, "worktree=removed"]
-                    else pure []
+                        pure (Just dirty)
+                    else pure Nothing
             lastCommit <- fmap (fromRight "") (Git.revParse "." (dispatchBranch d))
-            let notes =
-                    T.intercalate "; " $
-                        [ "interrupted"
-                        , "alive=" <> boolText (dhAlive health)
-                        , "stale=" <> boolText (dhStale health)
-                        ]
-                            <> wtNotes
-                            <> ["last_commit=" <> lastCommit]
+            let notes = Render.renderRecoveryNotes health mDirty lastCommit
             RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
             Ev.emit db "dispatch recover" $
                 Ev.DispatchFinished (dispatchId d) (dispatchTaskId d) OInterrupted
@@ -639,19 +548,7 @@ reconcileDispatch db c dcfg now staleSec d = do
             forM_ mTask $ \t ->
                 Ev.emit db "dispatch recover" $
                     Ev.TaskUpdated (dispatchTaskId d) (taskState t) Blocked
-            TIO.putStrLn $
-                "dispatch:"
-                    <> dispatchId d
-                    <> "  task:"
-                    <> dispatchTaskId d
-                    <> "  branch:"
-                    <> dispatchBranch d
-                    <> "  "
-                    <> notes
-
-boolText :: Bool -> Text
-boolText True = "yes"
-boolText False = "no"
+            TIO.putStrLn (Render.renderRecovered d notes)
 
 -- =============================================================
 -- merge  (land parked dispatches on their base)
@@ -695,7 +592,7 @@ mergeOne cfg c raw = do
     forM_ (dispatchMergeSha d) $ \sha ->
         fatal 1 ("already merged: " <> T.unpack sha)
     mergeParked cfg c d >>= \case
-        MergeLanded sha -> TIO.putStrLn (landedLine d sha)
+        MergeLanded sha -> TIO.putStrLn (Render.renderLanded d sha)
         MergeBlocked code note -> fatal code (T.unpack note)
         MergeStopped note -> fatal 3 (T.unpack note)
 
@@ -714,34 +611,17 @@ mergeAll cfg c = do
             let landed = length [() | MergeLanded _ <- outcomes]
                 blocked = length [() | MergeBlocked _ _ <- outcomes]
                 unattempted = length parked - length outcomes
-            TIO.putStrLn $
-                T.intercalate "; " $
-                    [tshow landed <> " of " <> tshow (length parked) <> " landed"]
-                        <> [tshow blocked <> " still parked" | blocked > 0]
-                        <> [tshow unattempted <> " not attempted" | unattempted > 0]
+            TIO.putStrLn (Render.renderMergeTally (length parked) landed blocked unattempted)
             when (landed < length parked) $
                 fatal 3 "not all parked dispatches landed"
   where
     landInOrder [] = pure []
     landInOrder (d : ds) = do
         out <- mergeParked cfg c d
-        TIO.putStrLn (outcomeLine d out)
+        TIO.putStrLn (Render.renderMergeAttempt d out)
         case out of
             MergeStopped _ -> pure [out]
             _ -> (out :) <$> landInOrder ds
-    outcomeLine d = \case
-        MergeLanded sha -> landedLine d sha
-        MergeBlocked _ note -> "blocked " <> T.take 10 (dispatchId d) <> ": " <> note
-        MergeStopped note -> "stopped " <> T.take 10 (dispatchId d) <> ": " <> note
-
-landedLine :: Dispatch -> Text -> Text
-landedLine d sha =
-    "merged "
-        <> T.take 10 (dispatchId d)
-        <> ": "
-        <> dispatchBaseBranch d
-        <> " -> "
-        <> T.take 10 sha
 
 -- =============================================================
 -- stats  (spend/outcome summary for budget checks)
