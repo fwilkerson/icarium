@@ -14,7 +14,6 @@ rides its own section ('scratchSection'), outside the overridable body.
 -}
 module Icarium.Dispatch.Agreement (
     agreementSection,
-    builtInAgreement,
     loadAgreementFile,
     scratchSection,
 ) where

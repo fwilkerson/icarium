@@ -1,4 +1,4 @@
-module Icarium.Commands.Dispatch (Command, parser, run, printSummary) where
+module Icarium.Commands.Dispatch (Command, parser, run) where
 
 import Control.Monad (forM, forM_, unless, void, when)
 import Data.Either (fromRight)

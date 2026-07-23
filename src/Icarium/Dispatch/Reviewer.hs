@@ -1,12 +1,9 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Icarium.Dispatch.Reviewer (
     ReviewResult (..),
     rrVerdict,
     rrReport,
     runReviewer,
     loadReviewerPrompt,
-    defaultReviewerPrompt,
 ) where
 
 import Control.Concurrent (forkIO)

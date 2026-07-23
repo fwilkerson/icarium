@@ -1,5 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Icarium.Dispatch.Claude (
     RunCtx (..),
     claudeArgs,
@@ -9,7 +7,6 @@ module Icarium.Dispatch.Claude (
     killGroupAfter,
     runClaudeStreaming,
     withLogHandle,
-    teeAndHeartbeat,
 ) where
 
 import Control.Concurrent (forkIO, threadDelay)

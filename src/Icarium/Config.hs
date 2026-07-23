@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Icarium.Config (
     defaultConfigPath,
     defaultConfigText,

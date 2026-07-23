@@ -1,5 +1,3 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 {- | The build and test gates: which commands run, in what order, and under
 what wall-clock budget. Owned here rather than by a caller so the
 post-claude check and the merge rebase path cannot drift apart.

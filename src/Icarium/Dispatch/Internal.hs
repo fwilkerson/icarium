@@ -4,7 +4,6 @@ module Icarium.Dispatch.Internal (
     DispatchCtx (..),
     dispatch,
     buildPrompt,
-    dispatchBranchName,
     applyOutcomeToTask,
 ) where
 

@@ -4,7 +4,6 @@ module Icarium.Dispatch.Outcome (
     FinishArgs (..),
     applyOutcomeToTask,
     finishWith,
-    pruneLogFiles,
 ) where
 
 import Control.Monad (forM_, void, when)

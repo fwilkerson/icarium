@@ -2,7 +2,6 @@ module Icarium.Repo.Dispatch (
     NewDispatch (..),
     insertDispatch,
     getDispatch,
-    getDispatchesByPrefix,
     resolveDispatchId,
     listOpenDispatches,
     listDispatches,

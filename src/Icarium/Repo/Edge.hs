@@ -2,7 +2,6 @@ module Icarium.Repo.Edge (
     insertEdge,
     listEdges,
     deleteEdge,
-    getEdgesByPrefix,
     resolveEdgeId,
     referencedContexts,
     dependencyTasks,

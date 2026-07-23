@@ -19,7 +19,6 @@ module Icarium.Render (
     renderContextList,
     CurationQueueRow (..),
     renderCurationQueue,
-    formatLinkedCount,
     ContextChildRow (..),
     renderContextChildren,
     ContextTreeNode (..),
