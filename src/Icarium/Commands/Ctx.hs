@@ -1,8 +1,8 @@
-module Icarium.Commands.Ctx (Command, parser, run, autoDeriveDeps) where
+module Icarium.Commands.Ctx (Command, parser, run) where
 
 import Control.Monad (forM, forM_, void, when)
 import Data.ByteString.Lazy.Char8 qualified as BLC
-import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -16,14 +16,13 @@ import Icarium.Bodies (bodiesDir, ctxBodyPath, readBody)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Events qualified as Ev
-import Icarium.Node (createContextWithBody)
+import Icarium.Node (autoDeriveDeps, createContextWithBody, inheritedContextCategories)
 import Icarium.Render qualified as Render
 import Icarium.Render.Json qualified as Json
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
 import Icarium.Repo.Curation qualified as RCur
 import Icarium.Repo.Edge qualified as RE
-import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
 data Command
@@ -104,14 +103,7 @@ runAdd db o = withDb db $ \c -> do
 
     mTaskId <- lookupEnv "ICARIUM_TASK_ID"
 
-    -- Per-axis inheritance: if an axis has no explicit flag and
-    -- ICARIUM_TASK_ID is set, copy that axis's categories from the task.
-    inheritedCats <-
-        if isNothing (aDomain o) || isNothing (aDiscipline o)
-            then maybe (pure []) (loadInherited c) mTaskId
-            else pure []
-
-    -- Auto-derive from ICARIUM_TASK_ID when no --derived-from was given.
+    inheritedCats <- inheritedContextCategories c (aDomain o) (aDiscipline o) mTaskId
     autoDerived <- autoDeriveDeps c (aDerivedFrom o) mTaskId
 
     (cxid, fp) <-
@@ -138,30 +130,6 @@ runAdd db o = withDb db $ \c -> do
     when (T.null body) $ do
         hPutStrLn stderr ("# next: Write your markdown to " <> fp)
         hPutStrLn stderr ("# to edit later: Read $(icarium ctx path " <> T.unpack cxid <> ") then Edit")
-  where
-    loadInherited conn tid = do
-        allCats <- RC.taskCategoriesFor conn (T.pack tid)
-        pure (filter (not . overriddenByFlag . categoryAxis) allCats)
-    -- Which axes an explicit flag pre-empts. Axis eligibility is not decided
-    -- here: attachContextCategory drops whatever cannot ride on a context.
-    overriddenByFlag = \case
-        Domain -> isJust (aDomain o)
-        Discipline -> isJust (aDiscipline o)
-        Kind -> False
-
-{- | If no explicit --derived-from was supplied and ICARIUM_TASK_ID is set,
-returns a singleton edge pointing at the dispatched task.
-Explicit list non-empty → empty result (explicit wins).
-
-A miss is silent: dispatch injects the full task id, so there is no prefix
-left to fail to resolve and nothing actionable to warn about.
--}
-autoDeriveDeps :: Connection -> [Text] -> Maybe String -> IO [(NodeKind, Text)]
-autoDeriveDeps _ (_ : _) _ = pure []
-autoDeriveDeps _ [] Nothing = pure []
-autoDeriveDeps c [] (Just tid) = do
-    mt <- RT.getTask c (T.pack tid)
-    pure [(TaskNode, taskId t) | t <- maybe [] pure mt]
 
 -- =============================================================
 -- list

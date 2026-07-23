@@ -8,7 +8,7 @@ import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
 import Data.Text qualified as T
-import Icarium.Commands.Category (SyncReport (..), syncCategories)
+import Icarium.Categories (SyncReport (..), syncCategories)
 import Icarium.Commands.Util (requireConfig)
 import Icarium.Config (
     Config (..),

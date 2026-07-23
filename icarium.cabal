@@ -20,6 +20,7 @@ library
     import:           lang
     hs-source-dirs:   src
     exposed-modules:  Icarium.Types
+                      Icarium.Categories
                       Icarium.Id
                       Icarium.Schema
                       Icarium.Migrations
@@ -112,6 +113,7 @@ test-suite icarium-test
     ghc-options:      -threaded -with-rtsopts=-N
     other-modules:    BodiesSpec
                       BodyDiffSpec
+                      CategoriesSpec
                       CliCtxSpec
                       CliDispatchHelpers
                       CliDispatchSpec

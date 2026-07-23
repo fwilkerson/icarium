@@ -5,7 +5,6 @@ own siblings: 'SchemaSpec', 'ResolverSpec', 'SearchSpec', 'ContextSpec',
 module RepoSpec (tests) where
 
 import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import System.IO (hClose)
@@ -13,10 +12,7 @@ import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
-import Icarium.Commands.Category (SyncReport (..), syncCategories)
-import Icarium.Commands.Ctx (autoDeriveDeps)
 import Icarium.Config (
-    CategoriesConfig (..),
     Config (..),
     DispatchConfig (..),
     ReviewConfig (..),
@@ -56,20 +52,6 @@ tests =
         , testGroup
             "dependencyTasks"
             [ testCase "selects all Task columns (regression: missing no_commit)" testDependencyTasksReturnsAllColumns
-            ]
-        , testGroup
-            "category sync"
-            [ testCase "inserts toml-only categories" testSyncInserts
-            , testCase "reports orphans and exits non-zero (no prune)" testSyncOrphanNoPrune
-            , testCase "prunes unused orphans when no blockers" testSyncPrunesUnused
-            , testCase "blocks on in-use category; no deletions" testSyncBlocksInUse
-            ]
-        , testGroup
-            "autoDeriveDeps"
-            [ testCase "ICARIUM_TASK_ID set, no explicit → edge inserted" testAutoDeriveDepsEdgeInserted
-            , testCase "explicit --derived-from wins over ICARIUM_TASK_ID" testAutoDeriveDepsExplicitWins
-            , testCase "ICARIUM_TASK_ID unset → no auto edge" testAutoDeriveDepsNoEnv
-            , testCase "ICARIUM_TASK_ID set but task missing → empty" testAutoDeriveDepsTaskMissing
             ]
         , testGroup
             "no_commit column"
@@ -153,88 +135,6 @@ testDependencyTasksReturnsAllColumns = withTestDb $ \c -> do
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
     deps <- RE.dependencyTasks c t1
     map taskNoCommit deps @?= [True]
-
--- =============================================================
--- category sync
--- =============================================================
-
-testSyncInserts :: IO ()
-testSyncInserts = withTestDb $ \conn -> do
-    let cfg = CategoriesConfig{catDomains = ["cli"], catDisciplines = ["haskell"], catKinds = []}
-    rpt <- syncCategories conn cfg False
-    srInserted rpt @?= [(Domain, "cli"), (Discipline, "haskell")]
-    null (srOrphans rpt) @?= True
-    null (srPruned rpt) @?= True
-    null (srBlocking rpt) @?= True
-    cats <- RC.listCategories conn Nothing
-    length cats @?= 2
-
-testSyncOrphanNoPrune :: IO ()
-testSyncOrphanNoPrune = withTestDb $ \conn -> do
-    _ <- RC.insertCategory conn Domain "stale-domain"
-    let cfg = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
-    rpt <- syncCategories conn cfg False
-    null (srInserted rpt) @?= True
-    length (srOrphans rpt) @?= 1
-    null (srPruned rpt) @?= True
-    null (srBlocking rpt) @?= True
-    cats <- RC.listCategories conn Nothing
-    length cats @?= 1
-
-testSyncPrunesUnused :: IO ()
-testSyncPrunesUnused = withTestDb $ \conn -> do
-    _ <- RC.insertCategory conn Domain "stale-domain"
-    let cfg = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
-    rpt <- syncCategories conn cfg True
-    null (srInserted rpt) @?= True
-    null (srOrphans rpt) @?= True
-    length (srPruned rpt) @?= 1
-    null (srBlocking rpt) @?= True
-    cats <- RC.listCategories conn Nothing
-    length cats @?= 0
-
-testSyncBlocksInUse :: IO ()
-testSyncBlocksInUse = withTestDb $ \conn -> do
-    cid <- RC.insertCategory conn Domain "stale-domain"
-    tid <- mkTaskRow conn "T"
-    RC.attachTaskCategory conn tid cid
-    let cfg = CategoriesConfig{catDomains = [], catDisciplines = [], catKinds = []}
-    rpt <- syncCategories conn cfg True
-    null (srInserted rpt) @?= True
-    null (srOrphans rpt) @?= True
-    null (srPruned rpt) @?= True
-    length (srBlocking rpt) @?= 1
-    let (_, nodeIds) = head (srBlocking rpt)
-    nodeIds @?= [tid]
-    cats <- RC.listCategories conn Nothing
-    length cats @?= 1
-
--- =============================================================
--- autoDeriveDeps
--- =============================================================
-
-testAutoDeriveDepsEdgeInserted :: IO ()
-testAutoDeriveDepsEdgeInserted = withTestDb $ \c -> do
-    tid <- mkTaskRow c "Dispatch task"
-    result <- autoDeriveDeps c [] (Just (T.unpack tid))
-    result @?= [(TaskNode, tid)]
-
-testAutoDeriveDepsExplicitWins :: IO ()
-testAutoDeriveDepsExplicitWins = withTestDb $ \c -> do
-    tid <- mkTaskRow c "Dispatch task"
-    otherTid <- mkTaskRow c "Other task"
-    result <- autoDeriveDeps c [otherTid] (Just (T.unpack tid))
-    result @?= []
-
-testAutoDeriveDepsNoEnv :: IO ()
-testAutoDeriveDepsNoEnv = withTestDb $ \c -> do
-    result <- autoDeriveDeps c [] Nothing
-    result @?= []
-
-testAutoDeriveDepsTaskMissing :: IO ()
-testAutoDeriveDepsTaskMissing = withTestDb $ \c -> do
-    result <- autoDeriveDeps c [] (Just "01ZZZZZZZZ0000000000000000")
-    result @?= []
 
 -- =============================================================
 -- no_commit column

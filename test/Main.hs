@@ -4,6 +4,7 @@ import Test.Tasty (defaultMain, testGroup)
 
 import BodiesSpec qualified
 import BodyDiffSpec qualified
+import CategoriesSpec qualified
 import CliSpec qualified
 import ContextSpec qualified
 import DispatchRepoSpec qualified
@@ -35,6 +36,7 @@ main =
             "icarium"
             [ BodiesSpec.tests
             , BodyDiffSpec.tests
+            , CategoriesSpec.tests
             , CliSpec.tests
             , EventsSpec.tests
             , GateSpec.tests

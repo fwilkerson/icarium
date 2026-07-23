@@ -1,24 +1,16 @@
-module Icarium.Commands.Category (
-    Command,
-    parser,
-    run,
+module Icarium.Commands.Category (Command, parser, run) where
 
-    -- * Exported for Init and tests
-    SyncReport (..),
-    syncCategories,
-) where
-
-import Control.Monad (forM, forM_, unless, void, when)
+import Control.Monad (forM_, unless, void, when)
 import Data.Char (isAlphaNum, isAscii)
 import Data.Maybe (isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
-import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 
+import Icarium.Categories (SyncReport (..), syncCategories)
 import Icarium.Commands.Util
 import Icarium.Config (
     CategoriesConfig (..),
@@ -140,51 +132,6 @@ syncP =
                 <> help "Delete DB-only categories with no attachments (fails if any are in use)"
             )
 
-data SyncReport = SyncReport
-    { srInserted :: [(CategoryAxis, Text)]
-    , srOrphans :: [Category]
-    , srPruned :: [Category]
-    , srBlocking :: [(Category, [Text])]
-    }
-    deriving (Show)
-
-{- | Reconcile toml categories into the DB.
-
-Inserts categories present in toml but absent from DB.
-prune=False: records DB-only categories as orphans (caller should exit non-zero).
-prune=True: deletes all DB-only categories when none are in use; if any are
-in use, records them as blocking and performs no deletions.
--}
-syncCategories :: Connection -> CategoriesConfig -> Bool -> IO SyncReport
-syncCategories conn cfg prune = do
-    dbCats <- RC.listCategories conn Nothing
-    let tomlCats = tomlCategoryList cfg
-        toIns = toInsertList dbCats tomlCats
-        orphans = dbOnlyList dbCats tomlCats
-    forM_ toIns $ uncurry (RC.insertCategory conn)
-    (pruned, blocking, remaining) <-
-        if not prune
-            then pure ([], [], orphans)
-            else do
-                results <- forM orphans $ \cat -> do
-                    usages <- RC.categoryNodeUsages conn (categoryId cat)
-                    pure (cat, usages)
-                let blockingRs = [(cat, ids) | (cat, ids) <- results, not (null ids)]
-                    unusedCats = [cat | (cat, []) <- results]
-                if null blockingRs
-                    then do
-                        forM_ unusedCats $ \cat ->
-                            RC.deleteCategory conn (categoryAxis cat) (categoryName cat)
-                        pure (unusedCats, [], [])
-                    else pure ([], blockingRs, [])
-    pure
-        SyncReport
-            { srInserted = toIns
-            , srOrphans = remaining
-            , srPruned = pruned
-            , srBlocking = blocking
-            }
-
 runSync :: FilePath -> SyncOpts -> IO ()
 runSync db o = do
     config <- requireConfig
@@ -212,17 +159,3 @@ runSync db o = do
 
 catLabel :: Category -> Text
 catLabel cat = categoryAxisText (categoryAxis cat) <> ":" <> categoryName cat
-
-tomlCategoryList :: CategoriesConfig -> [(CategoryAxis, Text)]
-tomlCategoryList cfg =
-    [(Domain, n) | n <- catDomains cfg]
-        ++ [(Discipline, n) | n <- catDisciplines cfg]
-        ++ [(Kind, n) | n <- catKinds cfg]
-
-toInsertList :: [Category] -> [(CategoryAxis, Text)] -> [(CategoryAxis, Text)]
-toInsertList dbCats =
-    filter (\(ax, n) -> not (any (\c -> categoryAxis c == ax && categoryName c == n) dbCats))
-
-dbOnlyList :: [Category] -> [(CategoryAxis, Text)] -> [Category]
-dbOnlyList dbCats tomlCats =
-    filter (\c -> (categoryAxis c, categoryName c) `notElem` tomlCats) dbCats
