@@ -5,6 +5,8 @@ import Test.Tasty (defaultMain, testGroup)
 import BodiesSpec qualified
 import BodyDiffSpec qualified
 import CliSpec qualified
+import ContextSpec qualified
+import DispatchRepoSpec qualified
 import EventsSpec qualified
 import GateSpec qualified
 import GitSpec qualified
@@ -15,8 +17,12 @@ import LogResultSpec qualified
 import NodeSpec qualified
 import PayloadSpec qualified
 import PostClaudeSpec qualified
+import QueueSpec qualified
 import RenderSpec qualified
 import RepoSpec qualified
+import ResolverSpec qualified
+import SchemaSpec qualified
+import SearchSpec qualified
 import TickSpec qualified
 import TimeoutSpec qualified
 
@@ -41,5 +47,11 @@ main =
             , PostClaudeSpec.tests
             , RenderSpec.tests
             , RepoSpec.tests
+            , SchemaSpec.tests
+            , ResolverSpec.tests
+            , SearchSpec.tests
+            , ContextSpec.tests
+            , QueueSpec.tests
+            , DispatchRepoSpec.tests
             , TimeoutSpec.tests
             ]

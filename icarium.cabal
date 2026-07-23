@@ -113,6 +113,8 @@ test-suite icarium-test
                       CliSurfaceSpec
                       CliTaskSpec
                       CliWorktreeSpec
+                      ContextSpec
+                      DispatchRepoSpec
                       EventsSpec
                       GateSpec
                       GitSpec
@@ -123,8 +125,12 @@ test-suite icarium-test
                       NodeSpec
                       PayloadSpec
                       PostClaudeSpec
+                      QueueSpec
                       RenderSpec
                       RepoSpec
+                      ResolverSpec
+                      SchemaSpec
+                      SearchSpec
                       TestHelpers
                       TickSpec
                       TimeoutSpec
