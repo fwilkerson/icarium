@@ -1,7 +1,6 @@
 -- | CLI contract for @icarium ctx@ and @icarium link@: CRUD, edges, curation.
 module CliCtxSpec (tests) where
 
-import Control.Monad (when)
 import Data.Aeson (Key, Object, Value (..), decode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC

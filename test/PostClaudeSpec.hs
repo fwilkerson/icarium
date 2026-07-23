@@ -32,7 +32,7 @@ import Icarium.Dispatch.Payload (
     WorkerPayload (..),
     WorkerStatus (..),
  )
-import Icarium.Dispatch.PostClaude (checkpointDirtyTree, handlePostClaude, writeWarnContextEntry)
+import Icarium.Dispatch.PostClaude (checkpointDirtyTree, writeWarnContextEntry)
 import Icarium.Git qualified as Git
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RCx
@@ -41,7 +41,7 @@ import Icarium.Repo.Edge qualified as RE
 import Icarium.Repo.Task qualified as RT
 import Icarium.Schema (applySchema)
 import Icarium.Types
-import TestHelpers (insertTestDispatch, minTask, mkCat, withOutOfTreeDb, withTestDb, withTestRepo)
+import TestHelpers (insertTestDispatch, minTask, mkCat, runPostClaude, withOutOfTreeDb, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -49,8 +49,8 @@ tests =
         "PostClaude"
         [ testCase "checkpointDirtyTree commits dirty tree with wip message" testCheckpointDirtyTree
         , testCase "checkpointDirtyTree is no-op on clean tree" testCheckpointCleanTree
-        , testCase "handlePostClaude failure leaves wip commit on dispatch branch" testHandlePostClaudeFailureCheckpoints
-        , testCase "handlePostClaude no-commit success with agent commits is failure; branch retained" testNoCommitAgentCommittedAnyway
+        , testCase "post-claude failure leaves wip commit on dispatch branch" testHandlePostClaudeFailureCheckpoints
+        , testCase "post-claude no-commit success with agent commits is failure; branch retained" testNoCommitAgentCommittedAnyway
         , testCase "a failing gate's note is recorded on the dispatch row" testGateFailureNoteRecorded
         , testCase "finishWith OFailure checkpoints staged changes and leaves base clean" testFinishWithWipCheckpoint
         , testCase "writeWarnContextEntry links the note back to its task" testWarnEntryLinksTask
@@ -226,7 +226,7 @@ testWorkerBlockedIsFailure =
                         , dxBase = "main"
                         , dxWorkDir = dir
                         }
-            res <- handlePostClaude dx minCfg False ExitSuccess baseSha logPath
+            res <- runPostClaude dx minCfg False ExitSuccess baseSha logPath
             dresOutcome res @?= OFailure
             assertBool
                 ("notes carry the worker's reason: " <> T.unpack (dresNotes res))
@@ -390,7 +390,7 @@ testHandlePostClaudeFailureCheckpoints =
                             , dxBase = "main"
                             , dxWorkDir = dir
                             }
-                res <- handlePostClaude dx minCfg False (ExitFailure 1) baseSha "/dev/null"
+                res <- runPostClaude dx minCfg False (ExitFailure 1) baseSha "/dev/null"
                 -- outcome is failure
                 dresOutcome res @?= OFailure
                 -- dispatch branch still exists
@@ -452,7 +452,7 @@ testGateFailureNoteRecorded =
                             , dxWorkDir = dir
                             }
                     cfg = minCfg{cfgCommands = Just CommandsConfig{ccBuild = "exit 7", ccTest = "true"}}
-                res <- handlePostClaude dx cfg False ExitSuccess baseSha "/dev/null"
+                res <- runPostClaude dx cfg False ExitSuccess baseSha "/dev/null"
                 dresOutcome res @?= OFailure
                 dresNotes res @?= "exit 7 -> exit 7"
                 Just d <- RD.getDispatch conn did
@@ -573,7 +573,7 @@ testNoCommitAgentCommittedAnyway =
                             , dxWorkDir = dir
                             }
                 -- agent exited cleanly, tree is clean — but the branch has commits
-                res <- handlePostClaude dx minCfg True ExitSuccess baseSha "/dev/null"
+                res <- runPostClaude dx minCfg True ExitSuccess baseSha "/dev/null"
                 dresOutcome res @?= OFailure
                 branchList <- gitIn dir ["branch", "--list", T.unpack branch]
                 assertBool "dispatch branch retained" (T.unpack branch `isInfixOf` branchList)

@@ -4,7 +4,7 @@ module CliTaskSpec (tests) where
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (try)
-import Control.Monad (forM, forM_, replicateM, when)
+import Control.Monad (forM, forM_, replicateM)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Char (toLower)
 import Data.List (isInfixOf, isPrefixOf, nub, sort, tails)

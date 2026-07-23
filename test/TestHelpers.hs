@@ -9,6 +9,7 @@ module TestHelpers (
     insertTestDispatch,
     attachContextCats,
     minTask,
+    runPostClaude,
     withTestRepo,
     withCwdLock,
     withOutOfTreeDb,
@@ -27,11 +28,15 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Query (..), close, execute, open)
 import Icarium.Events (eventLogPath)
 import System.Directory (doesFileExist)
+import System.Exit (ExitCode)
 import System.IO.Temp (withSystemTempDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, setWorkingDir)
 
+import Icarium.Config (Config)
 import Icarium.Db (migrateDb)
+import Icarium.Dispatch.Outcome (DispatchCtx, DispatchResult)
+import Icarium.Dispatch.PostClaude (PostClaudeArgs (..), PostClaudeResult (..), handlePostClaudeWithReview)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Context qualified as RK
 import Icarium.Repo.Task qualified as RT
@@ -80,6 +85,29 @@ minTask =
         , taskClaimedAt = Nothing
         , taskRouting = mempty
         }
+
+{- | Run post-claude for a review-less scenario: the caller supplies only the
+no-commit flag it cares about, and gets the 'DispatchResult' back unwrapped.
+Callers must pass a config with @cfgReview = Nothing@ — that, not the task,
+is what keeps the reviewer out of the run.
+-}
+runPostClaude :: DispatchCtx -> Config -> Bool -> ExitCode -> Text -> FilePath -> IO DispatchResult
+runPostClaude dx cfg noCommit exit baseSha logPath = do
+    res <-
+        handlePostClaudeWithReview
+            PostClaudeArgs
+                { pcaCtx = dx
+                , pcaConfig = cfg
+                , pcaTask = minTask{taskNoCommit = noCommit}
+                , pcaBaselineBody = ""
+                , pcaSysPrompt = Nothing
+                , pcaExit = exit
+                , pcaBaseSha = baseSha
+                , pcaLogPath = logPath
+                }
+    pure $ case res of
+        PCDone dr -> dr
+        PCRetry dr _ -> dr
 
 {- | Create a throwaway git repo with one commit on main. The directory
 is removed after the action returns. Tests that exercise production

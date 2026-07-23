@@ -35,7 +35,7 @@ import Icarium.Dispatch.Outcome (
     DispatchResult (..),
     applyOutcomeToTask,
  )
-import Icarium.Dispatch.PostClaude (PostClaudeResult (..), handlePostClaudeWithReview)
+import Icarium.Dispatch.PostClaude (PostClaudeArgs (..), PostClaudeResult (..), handlePostClaudeWithReview)
 import Icarium.Dispatch.Reviewer (loadReviewerPrompt)
 import Icarium.Dispatch.Worktree (
     WorktreeError (..),
@@ -284,7 +284,17 @@ doRealAttempt conn req attempt mFindings mBaseline = do
             pcResult <-
                 ( do
                     exit <- runClaudeStreaming ctx dcfg
-                    handlePostClaudeWithReview dx cfg task baselineBody mSysPrompt (taskNoCommit task) exit baseSha logPath
+                    handlePostClaudeWithReview
+                        PostClaudeArgs
+                            { pcaCtx = dx
+                            , pcaConfig = cfg
+                            , pcaTask = task
+                            , pcaBaselineBody = baselineBody
+                            , pcaSysPrompt = mSysPrompt
+                            , pcaExit = exit
+                            , pcaBaseSha = baseSha
+                            , pcaLogPath = logPath
+                            }
                 )
                     `onException` teardownWorktree "." dcfg wt
             teardownWorktree "." dcfg wt

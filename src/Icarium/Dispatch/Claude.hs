@@ -60,8 +60,9 @@ import Icarium.Dispatch.Tick (TickAction (..), TickState (..), emptyTickState, s
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Types
 
-{- | ExitCode returned when the wall-clock limit fires. @handlePostClaude@
-translates this sentinel into an OFailure with a timeout note.
+{- | ExitCode returned when the wall-clock limit fires.
+@handlePostClaudeWithReview@ translates this sentinel into an OFailure with a
+timeout note.
 -}
 timeoutSentinel :: ExitCode
 timeoutSentinel = ExitFailure 124

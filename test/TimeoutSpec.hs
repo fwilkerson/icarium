@@ -17,7 +17,6 @@ import Icarium.Config (
  )
 import Icarium.Dispatch.Claude (raceTimeout, timeoutSentinel)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult (..))
-import Icarium.Dispatch.PostClaude (handlePostClaude)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Repo.Task qualified as RT
 import Icarium.Types (
@@ -26,7 +25,7 @@ import Icarium.Types (
     Effort (..),
     TaskState (..),
  )
-import TestHelpers (withCwdLock, withOutOfTreeDb, withTestDb, withTestRepo)
+import TestHelpers (runPostClaude, withCwdLock, withOutOfTreeDb, withTestDb, withTestRepo)
 
 tests :: TestTree
 tests =
@@ -110,7 +109,7 @@ testTimeoutOutcome = withTestRepo $ \dir -> withOutOfTreeDb $ \dbPath -> withTes
                 , dxBase = "main"
                 , dxWorkDir = dir
                 }
-    res <- handlePostClaude dx fakeConfig False timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
+    res <- runPostClaude dx fakeConfig False timeoutSentinel "deadbeef" "/tmp/fake.jsonl"
     dresOutcome res @?= OFailure
     assertBool
         "result notes say timed out"

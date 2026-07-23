@@ -1,6 +1,6 @@
 module Icarium.Dispatch.PostClaude (
     PostClaudeResult (..),
-    handlePostClaude,
+    PostClaudeArgs (..),
     handlePostClaudeWithReview,
     writeWarnContextEntry,
     checkpointDirtyTree,
@@ -45,63 +45,42 @@ data PostClaudeResult
     | -- | Current dispatch closed with OFailure; Text = findings for next attempt.
       PCRetry DispatchResult Text
 
--- | Backward-compatible interface (no review). Used by tests.
-handlePostClaude ::
-    DispatchCtx ->
-    Config ->
-    Bool ->
-    ExitCode ->
-    Text ->
-    FilePath ->
-    IO DispatchResult
-handlePostClaude dx cfg noCommit exit baseSha logPath = do
-    res <- handlePostClaudeImpl dx cfg Nothing Nothing noCommit exit baseSha logPath
-    pure $ case res of
-        PCDone dr -> dr
-        PCRetry dr _ -> dr
+data PostClaudeArgs = PostClaudeArgs
+    { pcaCtx :: DispatchCtx
+    , pcaConfig :: Config
+    , pcaTask :: Task
+    , pcaBaselineBody :: Text
+    {- ^ Task body at FIRST attempt start — the tamper baseline for the
+    body-change report (retries keep the original, so a failed attempt
+    cannot launder its edits into a clean baseline).
+    -}
+    , pcaSysPrompt :: Maybe Text
+    {- ^ Reviewer system prompt, loaded before the worker started (see
+    'Icarium.Dispatch.Reviewer.loadReviewerPrompt') rather than read
+    here, so the reviewer never sees a prompt the worker had a chance
+    to influence mid-run.
+    -}
+    , pcaExit :: ExitCode
+    , pcaBaseSha :: Text
+    , pcaLogPath :: FilePath
+    }
 
-{- | Full interface used by the dispatch loop; runs reviewer when configured.
-The reviewer system prompt (already loaded, before the worker started —
-see 'Icarium.Dispatch.Reviewer.loadReviewerPrompt') is passed in rather than
-read here, so the reviewer never sees a prompt the worker had a chance to
-influence mid-run. @baselineBody@ is the task body at FIRST attempt start —
-the tamper baseline for the body-change report (retries keep the original,
-so a failed attempt cannot launder its edits into a clean baseline).
--}
-handlePostClaudeWithReview ::
-    DispatchCtx ->
-    Config ->
-    Task ->
-    Text ->
-    Maybe Text ->
-    Bool ->
-    ExitCode ->
-    Text ->
-    FilePath ->
-    IO PostClaudeResult
-handlePostClaudeWithReview dx cfg task baselineBody =
-    handlePostClaudeImpl dx cfg (Just (task, baselineBody))
-
--- =============================================================
--- Internal implementation
--- =============================================================
-
-handlePostClaudeImpl ::
-    DispatchCtx ->
-    Config ->
-    Maybe (Task, Text) ->
-    Maybe Text ->
-    Bool ->
-    ExitCode ->
-    Text ->
-    FilePath ->
-    IO PostClaudeResult
-handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
-    mPayload <- readWorkerPayload logPath
-    let conn = dxConn dx
+-- | Post-run handling for one dispatch; runs the reviewer when configured.
+handlePostClaudeWithReview :: PostClaudeArgs -> IO PostClaudeResult
+handlePostClaudeWithReview args = do
+    mPayload <- readWorkerPayload (pcaLogPath args)
+    let PostClaudeArgs
+            { pcaCtx = dx
+            , pcaConfig = cfg
+            , pcaExit = exit
+            , pcaBaseSha = baseSha
+            , pcaLogPath = logPath
+            } = args
+        conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
         wt = dxWorkDir dx
+        noCommit = taskNoCommit (pcaTask args)
         ret = dcLogRetentionRuns (cfgDispatch cfg)
         maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
         finish o mSha notes =
@@ -165,34 +144,34 @@ handlePostClaudeImpl dx cfg mTask mSysPrompt noCommit exit baseSha logPath = do
             RD.setMerged conn did baseSha
             pure (PCDone dr)
         Right (Just ()) ->
-            runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha
+            runReviewThenPark args finish
 
 {- | Reviewer gate, then park: the dispatch branch is left for the CLI
 layer's auto-merge (or @icarium dispatch merge@) to land. Nothing here
 touches the base branch.
 -}
 runReviewThenPark ::
-    DispatchCtx ->
-    Config ->
-    Maybe (Task, Text) ->
-    Maybe Text ->
+    PostClaudeArgs ->
     (DispatchOutcome -> Maybe Text -> Text -> IO DispatchResult) ->
-    FilePath ->
-    Int ->
-    Text ->
     IO PostClaudeResult
-runReviewThenPark dx cfg mTask mSysPrompt finish logPath maxMins baseSha = do
-    let conn = dxConn dx
+runReviewThenPark args finish = do
+    let PostClaudeArgs
+            { pcaCtx = dx
+            , pcaConfig = cfg
+            , pcaTask = task0
+            , pcaBaselineBody = baselineBody
+            , pcaSysPrompt = mSysPrompt
+            , pcaBaseSha = baseSha
+            , pcaLogPath = logPath
+            } = args
+        conn = dxConn dx
         db = dxDbPath dx
         did = dxDid dx
         wt = dxWorkDir dx
-        activeReview = do
-            (task, baseline) <- mTask
-            rc <- cfgReview cfg
-            if rcEnabled rc then Just (task, baseline, rc) else Nothing
-    mReviewResult <- case activeReview of
+        maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
+    mReviewResult <- case mfilter rcEnabled (cfgReview cfg) of
         Nothing -> pure Nothing
-        Just (task0, baselineBody, rcfg) -> do
+        Just rcfg -> do
             -- Mid-run body-file edits (e.g. a ## Proof section) must reach
             -- the reviewer; task0 predates the worker run. The section diff
             -- against the first-attempt baseline is the tamper signal: the
