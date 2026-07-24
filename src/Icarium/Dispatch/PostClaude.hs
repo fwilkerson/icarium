@@ -112,7 +112,10 @@ handlePostClaudeWithReview args = do
     -- there is a commit to land, so the expensive stages are worth paying for.
     case dReason (decideOutcome (signals Nothing Nothing)) of
         Clean -> do
-            either (const (pure ())) (RD.setLastCommit conn did) mBranchSha
+            either
+                (const (pure ()))
+                (\sha -> RD.updateDispatch conn did RD.emptyUpdate{RD.duLastCommit = Just sha})
+                mBranchSha
             runGates gateEnv (cfgCommands cfg) >>= \case
                 Left note -> settle args mPayload Nothing (decideOutcome (signals (Just (Left note)) Nothing))
                 Right () -> do
@@ -143,15 +146,13 @@ settle args mPayload mReviewedTask decision = do
             dx
             FinishArgs
                 { faDecision = decision
-                , faSha = Nothing
                 , faRetention = dcLogRetentionRuns (cfgDispatch (pcaConfig args))
                 , faLogPath = Just (pcaLogPath args)
                 , faBaseSha = Just (pcaBaseSha args)
                 , faPayload = mPayload
                 }
     case dReason decision of
-        -- Nothing to land: stamp merged so the dispatch never shows as
-        -- parked. Ordered after finish, which writes merge_sha = NULL.
+        -- Nothing to land: stamp merged so the dispatch never shows as parked.
         NoCommitClean -> RD.setMerged conn did (pcaBaseSha args)
         ReviewerWarn findings -> forM_ mReviewedTask $ \task -> do
             cats <- RC.taskCategoriesFor conn (taskId task)
@@ -194,7 +195,16 @@ runReviewStage args = case mfilter rcEnabled (cfgReview cfg) of
                 reviewerLogPath
                 maxMins
         let verdict = reviewVerdict (rrOutcome rr)
-        RD.setReviewInfo conn did verdict (rrLogPath rr) (bodyChanged bodyDiff)
+        RD.updateDispatch conn did $
+            RD.emptyUpdate
+                { RD.duReview =
+                    Just
+                        RD.ReviewStamp
+                            { RD.rsVerdict = verdict
+                            , RD.rsLogPath = rrLogPath rr
+                            , RD.rsBodyChanged = bodyChanged bodyDiff
+                            }
+                }
         hPutStrLn stderr ("[reviewer] verdict: " <> T.unpack (reviewVerdictText verdict))
         pure (Just (task, rr))
   where

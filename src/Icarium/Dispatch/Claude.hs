@@ -184,7 +184,11 @@ runClaudeStreaming ctx dcfg = do
         withProcessWait pcfg $ \p -> do
             -- Record the child PID so recovery can detect a dead process.
             mPid <- getPid p
-            mapM_ (\pid -> bracket (openDb dbPath) close $ \c -> RD.setPid c did (fromIntegral pid)) mPid
+            mapM_
+                ( \pid -> bracket (openDb dbPath) close $ \c ->
+                    RD.updateDispatch c did RD.emptyUpdate{RD.duPid = Just (fromIntegral pid)}
+                )
+                mPid
             _ <- forkIO (teeAndHeartbeat retryThreshold dbPath (getStdout p) logH did (taskTitle task))
             result <- raceTimeout maxUsecs (waitExitCode p)
             case result of
@@ -214,7 +218,7 @@ teeAndHeartbeat retryThreshold dbPath src logH did title = do
             else do
                 line <- BC.hGetLine h
                 BC.hPutStrLn lh line
-                RD.updateHeartbeat c d
+                RD.updateDispatch c d RD.emptyUpdate{RD.duStampHeartbeat = True}
                 now <- getCurrentTime
                 let ts = formatTime defaultTimeLocale "%H:%M:%S" now
                     (outLines, st', action) = summariseTick retryThreshold ts line st
@@ -226,14 +230,19 @@ teeAndHeartbeat retryThreshold dbPath src logH did title = do
                 when tokensChanged $
                     void $
                         (try :: IO () -> IO (Either SomeException ())) $
-                            RD.updateTokens c d (tsTokIn st') (tsTokOut st') (tsTokCache st')
+                            RD.updateDispatch c d $
+                                RD.emptyUpdate
+                                    { RD.duTokensIn = Just (tsTokIn st')
+                                    , RD.duTokensOut = Just (tsTokOut st')
+                                    , RD.duTokensCacheRead = Just (tsTokCache st')
+                                    }
                 case action of
                     TickContinue -> loop h lh d st' c
                     TickKill reason -> do
                         hPutStrLn stderr ("icarium: watchdog: " ++ T.unpack reason)
                         void $
                             (try :: IO () -> IO (Either SomeException ())) $
-                                RD.updateNotes c d reason
+                                RD.updateDispatch c d RD.emptyUpdate{RD.duNotes = Just reason}
                         mDispatch <- RD.getDispatch c d
                         case mDispatch >>= dispatchPid of
                             Just pid ->

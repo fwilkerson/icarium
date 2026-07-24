@@ -55,7 +55,6 @@ data DispatchResult = DispatchResult
 
 data FinishArgs = FinishArgs
     { faDecision :: Decision
-    , faSha :: Maybe Text
     , faRetention :: Int
     , faLogPath :: Maybe FilePath
     , faBaseSha :: Maybe Text
@@ -63,7 +62,7 @@ data FinishArgs = FinishArgs
     }
 
 finishWith :: DispatchCtx -> FinishArgs -> IO DispatchResult
-finishWith dx FinishArgs{faDecision = decision, faSha = mSha, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha, faPayload = mPayload} = do
+finishWith dx FinishArgs{faDecision = decision, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha, faPayload = mPayload} = do
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
@@ -88,7 +87,7 @@ finishWith dx FinishArgs{faDecision = decision, faSha = mSha, faRetention = rete
     -- is its note verbatim — so both pick up the same suffix.
     let withWip t = t <> maybe "" ("\nwip_commit: " <>) mWipSha
         enrichedNotes = withWip (renderReason (dReason decision))
-    RD.finishDispatch conn did outcome mSha (Just enrichedNotes)
+    RD.finishDispatch conn did outcome (Just enrichedNotes)
     -- The row is the only place the owning task is recorded; the event
     -- carries it so a watcher need not join back to the DB.
     mDispatch <- RD.getDispatch conn did

@@ -534,7 +534,7 @@ testFinishWithWipCheckpoint =
                             , dxBase = "main"
                             , dxWorkDir = dir
                             }
-                res <- finishWith dx FinishArgs{faDecision = timedOutDecision, faSha = Nothing, faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha, faPayload = Nothing}
+                res <- finishWith dx FinishArgs{faDecision = timedOutDecision, faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha, faPayload = Nothing}
                 -- (a) worktree is clean: the staged change went into the WIP commit
                 clean <- Git.isClean dir
                 assertBool "worktree clean after WIP checkpoint" clean

@@ -35,6 +35,13 @@ tests =
             [ testCase "setMerged round-trips merge_sha and a non-null merged_at" testSetMergedRoundTrips
             , testCase "listParkedDispatches includes success+unmerged, excludes after setMerged" testListParkedDispatches
             ]
+        , testGroup
+            "updateDispatch"
+            [ testCase "writes the named columns and leaves the rest alone" testUpdateDispatchPatches
+            , testCase "an empty update touches nothing" testUpdateDispatchEmpty
+            , testCase "the heartbeat stamp is a single-column write" testUpdateDispatchHeartbeat
+            , testCase "the review stamp lands all three columns together" testUpdateDispatchReview
+            ]
         ]
 
 -- =============================================================
@@ -167,7 +174,7 @@ testSetMergedRoundTrips = withTestDb $ \c -> do
     tid <- mkTaskRow c "Merge tracking task"
     let did = "01MERGE000000000000000001M" :: Text
     insertTestDispatch c did tid
-    RD.finishDispatch c did OSuccess Nothing Nothing
+    RD.finishDispatch c did OSuccess Nothing
     Just before <- RD.getDispatch c did
     dispatchMergeSha before @?= Nothing
     dispatchMergedAt before @?= Nothing
@@ -182,7 +189,7 @@ testListParkedDispatches = withTestDb $ \c -> do
     tid <- mkTaskRow c "Parked task"
     let did = "01PARK0000000000000000001P" :: Text
     insertTestDispatch c did tid
-    RD.finishDispatch c did OSuccess Nothing Nothing
+    RD.finishDispatch c did OSuccess Nothing
 
     parked <- RD.listParkedDispatches c
     map dispatchId parked @?= [did]
@@ -190,3 +197,76 @@ testListParkedDispatches = withTestDb $ \c -> do
     RD.setMerged c did "cafebabe"
     parked' <- RD.listParkedDispatches c
     null parked' @?= True
+
+-- =============================================================
+-- updateDispatch
+-- =============================================================
+
+-- | Backdate the heartbeat so a re-stamp is observable at second resolution.
+backdateHeartbeat :: Connection -> Text -> IO ()
+backdateHeartbeat c did =
+    execute
+        c
+        (Query "UPDATE dispatches SET heartbeat_at = ? WHERE id = ?")
+        ("2020-01-01 00:00:00" :: Text, did)
+
+testUpdateDispatchPatches :: IO ()
+testUpdateDispatchPatches = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Patch task"
+    let did = "01UPD00000000000000000001U" :: Text
+    insertTestDispatch c did tid
+    RD.updateDispatch c did RD.emptyUpdate{RD.duNotes = Just "first"}
+    RD.updateDispatch c did RD.emptyUpdate{RD.duPid = Just 4242, RD.duLastCommit = Just "abc123"}
+    Just d <- RD.getDispatch c did
+    dispatchNotes d @?= Just "first"
+    dispatchPid d @?= Just 4242
+    dispatchLastCommit d @?= Just "abc123"
+    dispatchTokensIn d @?= Nothing
+    dispatchOutcome d @?= Nothing
+
+testUpdateDispatchEmpty :: IO ()
+testUpdateDispatchEmpty = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Empty patch task"
+    let did = "01UPD00000000000000000002U" :: Text
+    insertTestDispatch c did tid
+    RD.updateDispatch c did RD.emptyUpdate{RD.duNotes = Just "kept"}
+    backdateHeartbeat c did
+    RD.updateDispatch c did RD.emptyUpdate
+    Just d <- RD.getDispatch c did
+    dispatchNotes d @?= Just "kept"
+    dispatchHeartbeat d @?= "2020-01-01 00:00:00"
+
+testUpdateDispatchHeartbeat :: IO ()
+testUpdateDispatchHeartbeat = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Heartbeat task"
+    let did = "01UPD00000000000000000003U" :: Text
+    insertTestDispatch c did tid
+    RD.updateDispatch c did RD.emptyUpdate{RD.duNotes = Just "kept", RD.duPid = Just 7}
+    backdateHeartbeat c did
+    RD.updateDispatch c did RD.emptyUpdate{RD.duStampHeartbeat = True}
+    Just d <- RD.getDispatch c did
+    assertBool "heartbeat re-stamped" (dispatchHeartbeat d /= "2020-01-01 00:00:00")
+    dispatchNotes d @?= Just "kept"
+    dispatchPid d @?= Just 7
+
+testUpdateDispatchReview :: IO ()
+testUpdateDispatchReview = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Review task"
+    let did = "01UPD00000000000000000004U" :: Text
+    insertTestDispatch c did tid
+    RD.updateDispatch
+        c
+        did
+        RD.emptyUpdate
+            { RD.duReview =
+                Just
+                    RD.ReviewStamp
+                        { RD.rsVerdict = RVWarn
+                        , RD.rsLogPath = "/tmp/reviewer.jsonl"
+                        , RD.rsBodyChanged = True
+                        }
+            }
+    Just d <- RD.getDispatch c did
+    dispatchReviewVerdict d @?= Just RVWarn
+    dispatchReviewerLogPath d @?= Just "/tmp/reviewer.jsonl"
+    dispatchBodyChanged d @?= Just True

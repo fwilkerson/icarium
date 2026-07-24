@@ -533,7 +533,7 @@ reconcileDispatch db c dcfg now staleSec d = do
                     else pure Nothing
             lastCommit <- fmap (fromRight "") (Git.revParse "." (dispatchBranch d))
             let notes = Render.renderRecoveryNotes health mDirty lastCommit
-            RD.finishDispatch c (dispatchId d) OInterrupted Nothing (Just notes)
+            RD.finishDispatch c (dispatchId d) OInterrupted (Just notes)
             Ev.emit db "dispatch recover" $
                 Ev.DispatchFinished (dispatchId d) (dispatchTaskId d) OInterrupted
             mTask <- RT.getTask c (dispatchTaskId d)

@@ -146,7 +146,7 @@ teeAndBeat mgh src dst =
         Nothing -> loop (pure ())
         Just gh ->
             bracket (openDb (ghDbPath gh)) close $ \c ->
-                loop (quietly (RD.updateHeartbeat c (ghDid gh)))
+                loop (quietly (RD.updateDispatch c (ghDid gh) RD.emptyUpdate{RD.duStampHeartbeat = True}))
   where
     loop :: IO () -> IO ()
     loop beat = do

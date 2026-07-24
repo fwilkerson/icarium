@@ -187,7 +187,7 @@ testParkedDepBlocks = withTestDb $ \c -> do
     (dep, dependent) <- mkDepPair c
     let did = "01DEPGATE00000000000000001" :: Text
     insertTestDispatch c did dep
-    RD.finishDispatch c did OSuccess Nothing Nothing
+    RD.finishDispatch c did OSuccess Nothing
     ready <- readyIds c []
     assertBool "dependent held while dependency is parked" (dependent `notElem` ready)
 
@@ -196,7 +196,7 @@ testMergedDepUnblocks = withTestDb $ \c -> do
     (dep, dependent) <- mkDepPair c
     let did = "01DEPGATE00000000000000002" :: Text
     insertTestDispatch c did dep
-    RD.finishDispatch c did OSuccess Nothing Nothing
+    RD.finishDispatch c did OSuccess Nothing
     RD.setMerged c did "deadbeef"
     ready <- readyIds c []
     assertBool "dependent eligible once dependency merged" (dependent `elem` ready)

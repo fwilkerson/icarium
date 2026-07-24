@@ -6,12 +6,10 @@ module Icarium.Repo.Dispatch (
     listOpenDispatches,
     listDispatches,
     listParkedDispatches,
-    updateHeartbeat,
-    updateTokens,
-    setLastCommit,
-    setPid,
-    updateNotes,
-    setReviewInfo,
+    DispatchUpdate (..),
+    ReviewStamp (..),
+    emptyUpdate,
+    updateDispatch,
     setMerged,
     finishDispatch,
     logPathsOutsideRetention,
@@ -20,7 +18,9 @@ module Icarium.Repo.Dispatch (
 ) where
 
 import Data.Text (Text, pack, unpack)
-import Database.SQLite.Simple (Connection, FromRow (..), Only (..), Query (..), execute, field, query, query_)
+import Data.Text qualified as T
+import Database.SQLite.Simple (Connection, FromRow (..), Only (..), Query (..), SQLData, execute, field, query, query_)
+import Database.SQLite.Simple.ToField (ToField, toField)
 
 import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
 import Icarium.Types (Dispatch (..), DispatchOutcome, Effort, ReviewVerdict)
@@ -131,70 +131,96 @@ listParkedDispatches conn =
                    \ORDER BY started_at ASC"
         )
 
-updateHeartbeat :: Connection -> Text -> IO ()
-updateHeartbeat conn did =
-    execute
-        conn
-        (Query "UPDATE dispatches SET heartbeat_at = datetime('now') WHERE id = ?")
-        (Only did)
-
-updateTokens :: Connection -> Text -> Int -> Int -> Int -> IO ()
-updateTokens conn did tokIn tokOut tokCache =
-    execute
-        conn
-        ( Query
-            "UPDATE dispatches \
-            \SET tokens_in = ?, tokens_out = ?, tokens_cache_read = ? \
-            \WHERE id = ?"
-        )
-        (tokIn, tokOut, tokCache, did)
-
-setLastCommit :: Connection -> Text -> Text -> IO ()
-setLastCommit conn did sha =
-    execute
-        conn
-        (Query "UPDATE dispatches SET last_commit = ? WHERE id = ?")
-        (sha, did)
-
-setPid :: Connection -> Text -> Int -> IO ()
-setPid conn did pid =
-    execute
-        conn
-        (Query "UPDATE dispatches SET pid = ? WHERE id = ?")
-        (pid, did)
-
-updateNotes :: Connection -> Text -> Text -> IO ()
-updateNotes conn did notes =
-    execute
-        conn
-        (Query "UPDATE dispatches SET notes = ? WHERE id = ?")
-        (notes, did)
-
-{- | The Bool is the body-changed tamper signal; stored alongside the
-verdict so one can never be stamped without the other.
+{- | The reviewer's verdict, its log, and the body-changed tamper signal.
+One field so a verdict can never be stamped without the evidence behind it.
 -}
-setReviewInfo :: Connection -> Text -> ReviewVerdict -> FilePath -> Bool -> IO ()
-setReviewInfo conn did verdict reviewerLogPath bodyChanged =
-    execute
-        conn
-        ( Query
-            "UPDATE dispatches \
-            \SET review_verdict = ?, reviewer_log_path = ?, body_changed = ? \
-            \WHERE id = ?"
-        )
-        (verdict, pack reviewerLogPath, bodyChanged, did)
+data ReviewStamp = ReviewStamp
+    { rsVerdict :: ReviewVerdict
+    , rsLogPath :: FilePath
+    , rsBodyChanged :: Bool
+    }
+
+{- | A patch over one dispatch row: @Nothing@/@False@ leaves the column
+alone. The @duStamp*@ flags write @datetime('now')@, which has no value to
+carry.
+-}
+data DispatchUpdate = DispatchUpdate
+    { duPid :: Maybe Int
+    , duLastCommit :: Maybe Text
+    , duNotes :: Maybe Text
+    , duOutcome :: Maybe DispatchOutcome
+    , duMergeSha :: Maybe Text
+    , duTokensIn :: Maybe Int
+    , duTokensOut :: Maybe Int
+    , duTokensCacheRead :: Maybe Int
+    , duReview :: Maybe ReviewStamp
+    , duStampHeartbeat :: Bool
+    , duStampEnded :: Bool
+    , duStampMerged :: Bool
+    }
+
+emptyUpdate :: DispatchUpdate
+emptyUpdate =
+    DispatchUpdate
+        { duPid = Nothing
+        , duLastCommit = Nothing
+        , duNotes = Nothing
+        , duOutcome = Nothing
+        , duMergeSha = Nothing
+        , duTokensIn = Nothing
+        , duTokensOut = Nothing
+        , duTokensCacheRead = Nothing
+        , duReview = Nothing
+        , duStampHeartbeat = False
+        , duStampEnded = False
+        , duStampMerged = False
+        }
+
+{- | Apply a patch. The SET clause is built from the fields the patch names,
+so a heartbeat-only update stays a single-column write on the hot path, and
+an empty patch never reaches the DB.
+-}
+updateDispatch :: Connection -> Text -> DispatchUpdate -> IO ()
+updateDispatch conn did DispatchUpdate{..}
+    | null assigns = pure ()
+    | otherwise =
+        execute
+            conn
+            ( Query $
+                "UPDATE dispatches SET "
+                    <> T.intercalate ", " (map fst assigns)
+                    <> " WHERE id = ?"
+            )
+            (concatMap snd assigns <> [toField did])
+  where
+    assigns :: [(Text, [SQLData])]
+    assigns =
+        concat
+            [ col "pid" duPid
+            , col "last_commit" duLastCommit
+            , col "notes" duNotes
+            , col "outcome" duOutcome
+            , col "merge_sha" duMergeSha
+            , col "tokens_in" duTokensIn
+            , col "tokens_out" duTokensOut
+            , col "tokens_cache_read" duTokensCacheRead
+            , foldMap review duReview
+            , stamp "heartbeat_at" duStampHeartbeat
+            , stamp "ended_at" duStampEnded
+            , stamp "merged_at" duStampMerged
+            ]
+    col :: (ToField a) => Text -> Maybe a -> [(Text, [SQLData])]
+    col name = foldMap (\v -> [(name <> " = ?", [toField v])])
+    stamp name on = [(name <> " = datetime('now')", []) | on]
+    review ReviewStamp{..} =
+        col "review_verdict" (Just rsVerdict)
+            <> col "reviewer_log_path" (Just (pack rsLogPath))
+            <> col "body_changed" (Just rsBodyChanged)
 
 -- | Stamp a dispatch as landed: merge sha plus the current timestamp.
 setMerged :: Connection -> Text -> Text -> IO ()
 setMerged conn did sha =
-    execute
-        conn
-        ( Query
-            "UPDATE dispatches \
-            \SET merge_sha = ?, merged_at = datetime('now') \
-            \WHERE id = ?"
-        )
-        (sha, did)
+    updateDispatch conn did emptyUpdate{duMergeSha = Just sha, duStampMerged = True}
 
 {- | Log paths for dispatches outside the N most recent by started_at DESC.
 Includes both worker and reviewer log paths. Only returns non-NULL entries.
@@ -270,24 +296,14 @@ getDispatchStats conn mSince = do
                 (Only since)
     pure stats
 
--- | Terminal update: outcome, ended_at, optional merge sha, optional notes.
+-- | Terminal stamp: outcome, ended_at, and optionally the closing notes.
 finishDispatch ::
     Connection ->
     -- | dispatch id
     Text ->
     DispatchOutcome ->
-    -- | merge sha (success only)
-    Maybe Text ->
     -- | notes
     Maybe Text ->
     IO ()
-finishDispatch conn did outcome mSha mNotes =
-    execute
-        conn
-        ( Query
-            "UPDATE dispatches \
-            \SET outcome = ?, ended_at = datetime('now'), \
-            \    merge_sha = ?, notes = ? \
-            \WHERE id = ?"
-        )
-        (outcome, mSha, mNotes, did)
+finishDispatch conn did outcome mNotes =
+    updateDispatch conn did emptyUpdate{duOutcome = Just outcome, duNotes = mNotes, duStampEnded = True}

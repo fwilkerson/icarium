@@ -50,7 +50,8 @@ mergeParked :: Config -> Connection -> Dispatch -> IO MergeOutcome
 mergeParked cfg conn d = do
     out <- fmap (either id MergeLanded) . runExceptT $ attempt
     case out of
-        MergeBlocked _ note -> RD.updateNotes conn (dispatchId d) note
+        MergeBlocked _ note ->
+            RD.updateDispatch conn (dispatchId d) RD.emptyUpdate{RD.duNotes = Just note}
         _ -> pure ()
     pure out
   where
