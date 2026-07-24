@@ -53,6 +53,25 @@ is the selection.
 
 ### Dispatch lifecycle
 
+**Dispatch**:
+One attempt at one task: select it, run a worker against it, conclude an
+outcome, land the branch. The unit — everything else in this section
+describes a part of one.
+
+**Drain**:
+Repeated dispatch until a stop reason. Not a distinct mode: a single named
+dispatch is a drain of one, differing only in how the task was selected. The
+distinction that survives is *selection* — a named task, or the queue head —
+because a selector that finds nothing means "no such task" when named and
+"queue empty" when it is the queue.
+_Avoid_: batch mode, queue mode (both imply a second code path; there is one)
+
+**Stop reason**:
+Why a drain ended: queue empty, cap reached, SIGINT, worktree back-pressure,
+or a fatal setup error. Named rather than inline, because the exit code is
+derived from them together with what the dispatches produced — never asserted
+per branch.
+
 **Landed / Merged**:
 A dispatch branch that is in the integration branch. Distinct from task
 state: `done` means the work was accepted (gates and reviewer passed);
