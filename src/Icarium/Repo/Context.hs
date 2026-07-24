@@ -35,13 +35,14 @@ import Database.SQLite.Simple (
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (axisFilters, inClause, prefixLookup, resolveByPrefix)
+import Icarium.Repo.Internal (axisFilters, inClause, prefixLookup, qualified, resolveByPrefix)
 import Icarium.Types (
     Category (..),
     CategoryAxis,
     Context (..),
     NodeKind (..),
     categoryAxisText,
+    contextCols,
     retrievalAxes,
  )
 
@@ -86,21 +87,18 @@ contextsFromDispatch conn did =
         conn
         ( Query $
             "SELECT "
-                <> contextCols
+                <> qualified "" contextCols
                 <> " FROM context WHERE source_dispatch_id = ?"
                 <> " ORDER BY created_at ASC, id ASC"
         )
         (Only did)
-
-contextCols :: Text
-contextCols = "id, title, body, created_at, updated_at"
 
 getContext :: Connection -> Text -> IO (Maybe Context)
 getContext conn cid = do
     rows <-
         query
             conn
-            (Query $ "SELECT " <> contextCols <> " FROM context WHERE id = ?")
+            (Query $ "SELECT " <> qualified "" contextCols <> " FROM context WHERE id = ?")
             (Only cid)
     pure $ case rows of
         (k : _) -> Just k
@@ -108,7 +106,7 @@ getContext conn cid = do
 
 -- | Context entries whose ULID starts with @prefix@.
 getContextsByPrefix :: Connection -> Text -> IO [Context]
-getContextsByPrefix conn = prefixLookup conn "context" contextCols
+getContextsByPrefix conn = prefixLookup conn "context" (qualified "" contextCols)
 
 -- | Resolve a user-supplied string to a canonical context ULID via prefix match.
 resolveContextId :: Connection -> Text -> IO (Either String Text)
@@ -127,7 +125,7 @@ listContexts conn retiredFilter includeSuperseded cats =
     query conn q params
   where
     (whereClause, params) = ctxCatWhere retiredFilter includeSuperseded cats
-    q = Query $ "SELECT " <> contextCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
+    q = Query $ "SELECT " <> qualified "" contextCols <> " FROM context" <> whereClause <> " ORDER BY created_at ASC"
 
 ctxCatWhere :: Maybe Bool -> Bool -> [(CategoryAxis, Text)] -> (Text, [SQLData])
 ctxCatWhere retiredFilter includeSuperseded cats =
@@ -226,7 +224,7 @@ categoryMatchedContexts conn cats cap
     q =
         Query $
             "SELECT "
-                <> contextCols
+                <> qualified "" contextCols
                 <> " FROM context"
                 <> " WHERE id NOT IN (SELECT context_id FROM retired_context) AND "
                 <> T.intercalate " AND " clauses

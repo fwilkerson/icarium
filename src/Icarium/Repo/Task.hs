@@ -48,8 +48,8 @@ import GHC.Clock (getMonotonicTime)
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
-import Icarium.Repo.Internal (axisFilters, inClause, prefixLookup, resolveByPrefix, taskCols)
-import Icarium.Types (CategoryAxis, NodeKind (..), Routing, Task (..), TaskState (..), readyStates, taskStateText)
+import Icarium.Repo.Internal (axisFilters, inClause, prefixLookup, qualified, resolveByPrefix)
+import Icarium.Types (CategoryAxis, NodeKind (..), Routing, Task (..), TaskState (..), readyStates, taskCols, taskStateText)
 
 data NewTask = NewTask
     { ntTitle :: Text
@@ -98,7 +98,7 @@ getTask conn tid = do
     rows <-
         query
             conn
-            (Query $ "SELECT " <> taskCols "" <> " FROM tasks WHERE id = ?")
+            (Query $ "SELECT " <> qualified "" taskCols <> " FROM tasks WHERE id = ?")
             (Only tid)
     pure $ case rows of
         (t : _) -> Just t
@@ -110,12 +110,12 @@ getTasksByIds _ [] = pure []
 getTasksByIds conn ids =
     query
         conn
-        (Query $ "SELECT " <> taskCols "" <> " FROM tasks WHERE id IN " <> inClause ids)
+        (Query $ "SELECT " <> qualified "" taskCols <> " FROM tasks WHERE id IN " <> inClause ids)
         (map SQLText ids)
 
 -- | Tasks whose ULID starts with @prefix@.
 getTasksByPrefix :: Connection -> Text -> IO [Task]
-getTasksByPrefix conn = prefixLookup conn "tasks" (taskCols "")
+getTasksByPrefix conn = prefixLookup conn "tasks" (qualified "" taskCols)
 
 -- | Resolve a user-supplied string to a canonical task ULID via prefix match.
 resolveTaskId :: Connection -> Text -> IO (Either String Text)
@@ -148,7 +148,7 @@ selectTasks conn tbl ord filterStates cats = do
     whereClause = case clauses of
         [] -> ""
         cs -> " WHERE " <> T.intercalate " AND " cs
-    buildQ t o = Query $ "SELECT " <> taskCols "" <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
+    buildQ t o = Query $ "SELECT " <> qualified "" taskCols <> " FROM " <> t <> whereClause <> " ORDER BY " <> o
 
 {- | What a claim attempt found. 'NoCandidate' is an answer — the queue is
 empty, or the named task is not claimable. 'LockBusy' is not: the write lock

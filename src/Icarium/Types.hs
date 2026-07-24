@@ -42,6 +42,14 @@ module Icarium.Types (
     Category (..),
     Dispatch (..),
     CurationEvent (..),
+
+    -- * DB column layout
+    -- $columns
+    taskCols,
+    contextCols,
+    edgeCols,
+    dispatchCols,
+    curationCols,
 ) where
 
 import Control.Applicative ((<|>))
@@ -57,6 +65,20 @@ import Database.SQLite.Simple.FromField (
  )
 import Database.SQLite.Simple.Ok (Ok)
 import Database.SQLite.Simple.ToField (ToField (..))
+
+{- $columns
+Each list names its table's columns in @FromRow@ order, and lives next to
+the instance it must match — the two halves used to sit in different
+modules, where no reader could check the pairing. Render with
+'Icarium.Repo.Internal.qualified'; every @SELECT@ that builds the record
+must use it, since a hand-written copy drifts and fails as a runtime
+conversion error rather than a type error.
+
+Table order is /not/ the invariant: 'taskCols' deliberately differs from
+@spec\/schema.sql@, and nothing feeds @SELECT *@ into a @FromRow@. What
+must hold is that the names match the table as a set and the order matches
+the @field@ chain — both asserted in @SchemaSpec@.
+-}
 
 -- =============================================================
 -- Enums
@@ -304,7 +326,7 @@ instance Semigroup Routing where
 instance Monoid Routing where
     mempty = Routing{rtModel = Nothing, rtEffort = Nothing}
 
--- Column order matches the tail of 'Icarium.Repo.Internal.taskCols'.
+-- Column order matches the tail of 'taskCols'.
 instance FromRow Routing where
     fromRow = Routing <$> field <*> field
 
@@ -343,6 +365,24 @@ instance FromRow Task where
             <*> field
             <*> fromRow
 
+-- | @tasks@ columns; the @model@/@effort@ tail is the nested 'Routing'.
+taskCols :: [Text]
+taskCols =
+    [ "id"
+    , "title"
+    , "body"
+    , "state"
+    , "priority"
+    , "block_reason"
+    , "created_at"
+    , "updated_at"
+    , "no_commit"
+    , "claimed_by"
+    , "claimed_at"
+    , "model"
+    , "effort"
+    ]
+
 data Context = Context
     { contextId :: Text
     , contextTitle :: Text
@@ -360,6 +400,10 @@ instance FromRow Context where
             <*> field
             <*> field
             <*> field
+
+-- | @context@ columns.
+contextCols :: [Text]
+contextCols = ["id", "title", "body", "created_at", "updated_at"]
 
 data Edge = Edge
     { edgeId :: Text
@@ -382,6 +426,10 @@ instance FromRow Edge where
             <*> field
             <*> field
             <*> field
+
+-- | @edges@ columns.
+edgeCols :: [Text]
+edgeCols = ["id", "kind", "src_kind", "src_id", "dst_kind", "dst_id", "created_at"]
 
 data Category = Category
     { categoryId :: Text
@@ -486,9 +534,14 @@ instance FromRow CurationEvent where
             <*> field
             <*> field
 
-{- | A row in the @dispatches@ table. Columns kept in the order the
-schema declares them so @FromRow@ lines up with @SELECT *@.
+{- | @context_curation@ columns. Also selected from the
+@context_latest_curation@ view, which is @SELECT cc.*@ over the same
+table — so the view may carry columns this list does not name.
 -}
+curationCols :: [Text]
+curationCols = ["id", "context_id", "disposition", "artifact", "note", "created_at"]
+
+-- | A row in the @dispatches@ table.
 data Dispatch = Dispatch
     { dispatchId :: Text
     , dispatchTaskId :: Text
@@ -542,3 +595,31 @@ instance FromRow Dispatch where
             <*> field
             <*> field
             <*> field
+
+-- | @dispatches@ columns.
+dispatchCols :: [Text]
+dispatchCols =
+    [ "id"
+    , "task_id"
+    , "branch"
+    , "base_branch"
+    , "base_sha"
+    , "pid"
+    , "model"
+    , "effort"
+    , "started_at"
+    , "heartbeat_at"
+    , "ended_at"
+    , "outcome"
+    , "merge_sha"
+    , "last_commit"
+    , "notes"
+    , "log_path"
+    , "tokens_in"
+    , "tokens_out"
+    , "tokens_cache_read"
+    , "review_verdict"
+    , "reviewer_log_path"
+    , "merged_at"
+    , "body_changed"
+    ]

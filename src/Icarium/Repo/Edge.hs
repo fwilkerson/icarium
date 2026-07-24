@@ -25,14 +25,17 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Internal (inClause, prefixLookup, resolveByPrefix, taskCols)
+import Icarium.Repo.Internal (inClause, prefixLookup, qualified, resolveByPrefix)
 import Icarium.Types (
     Context,
     Edge (..),
     EdgeKind (..),
     NodeKind (..),
     Task,
+    contextCols,
+    edgeCols,
     edgeKindDbText,
+    taskCols,
  )
 
 {- | Insert an edge. The DB enforces kind/endpoint typing and node
@@ -59,9 +62,6 @@ insertEdge conn kind srcKind srcId dstKind dstId = do
         (eid, kind, srcKind, srcId, dstKind, dstId)
     pure eid
 
-edgeCols :: Text
-edgeCols = "id, kind, src_kind, src_id, dst_kind, dst_id, created_at"
-
 listEdges ::
     Connection ->
     -- | filter by src id
@@ -74,7 +74,7 @@ listEdges ::
 listEdges conn mSrc mDst mKind =
     query
         conn
-        (Query $ "SELECT " <> edgeCols <> " FROM edges" <> whereClause <> " ORDER BY created_at ASC")
+        (Query $ "SELECT " <> qualified "" edgeCols <> " FROM edges" <> whereClause <> " ORDER BY created_at ASC")
         params
   where
     filters =
@@ -103,7 +103,7 @@ deleteEdge conn eid = do
 
 -- | Edges whose ULID starts with @prefix@.
 getEdgesByPrefix :: Connection -> Text -> IO [Edge]
-getEdgesByPrefix conn = prefixLookup conn "edges" edgeCols
+getEdgesByPrefix conn = prefixLookup conn "edges" (qualified "" edgeCols)
 
 -- | Resolve a user-supplied string to a canonical edge ULID via prefix match.
 resolveEdgeId :: Connection -> Text -> IO (Either String Text)
@@ -118,14 +118,17 @@ referencedContexts :: Connection -> Text -> IO [Context]
 referencedContexts conn tid =
     query
         conn
-        "SELECT cx.id, cx.title, cx.body, cx.created_at, cx.updated_at \
-        \FROM edges e \
-        \JOIN context cx ON cx.id = e.dst_id \
-        \WHERE e.kind = 'references' \
-        \  AND e.src_kind = 'task' AND e.src_id = ? \
-        \  AND e.dst_kind = 'context' \
-        \  AND cx.id NOT IN (SELECT context_id FROM retired_context WHERE disposition = 'stale') \
-        \ORDER BY e.created_at ASC"
+        ( Query $
+            "SELECT "
+                <> qualified "cx." contextCols
+                <> " FROM edges e \
+                   \JOIN context cx ON cx.id = e.dst_id \
+                   \WHERE e.kind = 'references' \
+                   \  AND e.src_kind = 'task' AND e.src_id = ? \
+                   \  AND e.dst_kind = 'context' \
+                   \  AND cx.id NOT IN (SELECT context_id FROM retired_context WHERE disposition = 'stale') \
+                   \ORDER BY e.created_at ASC"
+        )
         (Only tid)
 
 -- | Tasks that the given task depends on (depends_on edges, dst side).
@@ -135,7 +138,7 @@ dependencyTasks conn tid =
         conn
         ( Query $
             "SELECT "
-                <> taskCols "t."
+                <> qualified "t." taskCols
                 <> " FROM edges e \
                    \JOIN tasks t ON t.id = e.dst_id \
                    \WHERE e.kind = 'depends_on' \
@@ -154,7 +157,7 @@ derivedFromTasks conn tid =
         conn
         ( Query $
             "SELECT "
-                <> taskCols "t."
+                <> qualified "t." taskCols
                 <> " FROM edges e \
                    \JOIN tasks t ON t.id = e.dst_id \
                    \WHERE e.kind = 'derived_from' \
@@ -220,10 +223,11 @@ ctxChildContexts conn dstId mKind = do
         Just _ -> " AND e.kind = ?"
     q =
         Query $
-            "SELECT e.kind, cx.id, cx.title, cx.body, cx.created_at, cx.updated_at \
-            \FROM edges e \
-            \JOIN context cx ON cx.id = e.src_id \
-            \WHERE e.dst_id = ? AND e.dst_kind = 'context' AND e.src_kind = 'context'"
+            "SELECT e.kind, "
+                <> qualified "cx." contextCols
+                <> " FROM edges e \
+                   \JOIN context cx ON cx.id = e.src_id \
+                   \WHERE e.dst_id = ? AND e.dst_kind = 'context' AND e.src_kind = 'context'"
                 <> kindClause
                 <> " ORDER BY e.created_at ASC"
     params = case mKind of

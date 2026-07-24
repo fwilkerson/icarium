@@ -11,9 +11,10 @@ module SchemaSpec (tests) where
 import Control.Exception (SomeException, try)
 import Control.Monad (void)
 import Data.Either (isLeft)
+import Data.List qualified as L
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Only (..), Query (..), close, execute, execute_, fromOnly, open, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute, execute_, fromOnly, open, query_)
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
@@ -39,6 +40,11 @@ tests =
             [ testCase "applying embedded schema produces user_version = schemaVersion with expected tables" testInitialSchema
             , testCase "deleting a context entry cascades to context_categories rows" testContextCategoriesCascade
             , testCase "no task_status view: listTasks is the one source of effective state" testNoTaskStatusView
+            ]
+        , testGroup
+            "column layout"
+            [ testCase "every column list names exactly its table's columns" testColsMatchTables
+            , testCase "curationCols names columns the context_latest_curation view provides" testCurationColsInView
             ]
         , testGroup
             "migrateDb"
@@ -105,6 +111,52 @@ testNoTaskStatusView :: IO ()
 testNoTaskStatusView = withBaseTestDb $ \conn -> do
     views <- query_ conn "SELECT name FROM sqlite_master WHERE type='view'" :: IO [Only Text]
     assertBool "task_status view is gone" (Only ("task_status" :: Text) `notElem` views)
+
+-- =============================================================
+-- Column layout
+-- =============================================================
+
+-- | Column names of a table or view, in declaration order.
+tableColumns :: Connection -> Text -> IO [Text]
+tableColumns conn t =
+    map fromOnly
+        <$> query_ conn (Query $ "SELECT name FROM pragma_table_info('" <> t <> "')")
+
+{- | Half of the cols/'FromRow' invariant: the names must be the table's
+own. Compared as a /set/ — 'taskCols' is deliberately ordered to match the
+record, not the DDL. The other half (order matches the @field@ chain) is
+the per-entity round-trip in the repo specs.
+
+Equality, not subset, so that a new DDL column fails here and forces the
+call: carry it on the record, or list it as write-only below.
+-}
+testColsMatchTables :: IO ()
+testColsMatchTables = withBaseTestDb $ \conn ->
+    mapM_ (check conn) layouts
+  where
+    -- (table, cols, columns the record deliberately does not carry)
+    layouts =
+        [ ("tasks", taskCols, [])
+        , -- Provenance stamped at insert and read only by the bodies sweep;
+          -- 'Context' has no field for it.
+          ("context", contextCols, ["source_dispatch_id"])
+        , ("edges", edgeCols, [])
+        , ("dispatches", dispatchCols, [])
+        , ("context_curation", curationCols, [])
+        ]
+    check conn (table, cols, writeOnly) = do
+        actual <- tableColumns conn table
+        (table, L.sort (cols <> writeOnly)) @?= (table, L.sort actual)
+
+{- | @context_latest_curation@ is @SELECT cc.*@ over @context_curation@, so
+it may carry columns no list names; only a missing one is a bug. Hence
+subset, not equality.
+-}
+testCurationColsInView :: IO ()
+testCurationColsInView = withBaseTestDb $ \conn -> do
+    actual <- tableColumns conn "context_latest_curation"
+    let missing = filter (`notElem` actual) curationCols
+    missing @?= []
 
 -- =============================================================
 -- migrateDb
@@ -418,6 +470,11 @@ testMigration17AddsProvenance = withBaseTestDb $ \conn -> do
             IO [(Text, Text, Maybe Text)]
     rows @?= [("01PRE17", "kept", Nothing)]
 
+    -- Last migration to touch context: an upgraded DB must land on the same
+    -- shape the column list expects. See the note in testMigration19AddsRouting.
+    upgraded <- tableColumns conn "context"
+    L.sort upgraded @?= L.sort (contextCols <> ["source_dispatch_id"])
+
 {- | Migration 18 rebuilds the edges table to widen a CHECK. A rebuild that
 drops rows is silent — the constraint still looks right afterwards.
 -}
@@ -469,6 +526,14 @@ testMigration19AddsRouting = withBaseTestDb $ \conn -> do
         try (execute_ conn "UPDATE tasks SET effort = 'turbo' WHERE id = '01PRE19'") ::
             IO (Either SomeException ())
     assertBool "effort CHECK rejects a value outside the enum" (isLeft bad)
+
+    -- 19 is the last migration to touch tasks, so an upgraded DB lands here.
+    -- This is the only comparison that is not circular: the hand-written
+    -- pre-19 shape plus the migration is a construction independent of
+    -- schema.sql, which migrateDb-from-empty is not (migration 1 *is*
+    -- applySchema, so a "migrated" fresh DB is the schema verbatim).
+    upgraded <- tableColumns conn "tasks"
+    L.sort upgraded @?= L.sort taskCols
 
 {- | Upgrading DBs carry the dead view; DBs created after it left the base
 schema do not. Both must land in the same place.

@@ -6,7 +6,7 @@ module RepoSpec (tests) where
 
 import Data.Text (Text)
 import Data.Text.IO qualified as TIO
-import Database.SQLite.Simple (Connection)
+import Database.SQLite.Simple (Connection, Query (..), execute, (:.) (..))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
@@ -52,6 +52,10 @@ tests =
         , testGroup
             "dependencyTasks"
             [ testCase "selects all Task columns (regression: missing no_commit)" testDependencyTasksReturnsAllColumns
+            ]
+        , testGroup
+            "column layout"
+            [ testCase "every column lands in its own field, routing tail included" testTaskRoundTrip
             ]
         , testGroup
             "no_commit column"
@@ -135,6 +139,44 @@ testDependencyTasksReturnsAllColumns = withTestDb $ \c -> do
     _ <- RE.insertEdge c DependsOn TaskNode t1 TaskNode t2
     deps <- RE.dependencyTasks c t1
     map taskNoCommit deps @?= [True]
+
+-- =============================================================
+-- Column layout
+-- =============================================================
+
+{- | The order half of the invariant for @tasks@, whose last two columns
+are read by a nested @FromRow Routing@ — the one place a miscount spans
+two instances.
+-}
+testTaskRoundTrip :: IO ()
+testTaskRoundTrip = withTestDb $ \c -> do
+    execute
+        c
+        ( Query
+            "INSERT INTO tasks \
+            \(id, title, body, state, priority, block_reason, created_at, \
+            \ updated_at, no_commit, claimed_by, claimed_at, model, effort) \
+            \VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        )
+        ( ("01TASKROUNDTRIP0000000001" :: Text, "title" :: Text, "body" :: Text)
+            :. ("blocked" :: Text, 7 :: Int, "block_reason" :: Text)
+            :. ("created_at" :: Text, "updated_at" :: Text, 1 :: Int)
+            :. ("claimed_by" :: Text, "claimed_at" :: Text)
+            :. ("model" :: Text, "max" :: Text)
+        )
+    Just t <- RT.getTask c "01TASKROUNDTRIP0000000001"
+    taskTitle t @?= "title"
+    taskBody t @?= "body"
+    taskState t @?= Blocked
+    taskPriority t @?= Just 7
+    taskBlockReason t @?= Just "block_reason"
+    taskCreatedAt t @?= "created_at"
+    taskUpdatedAt t @?= "updated_at"
+    taskNoCommit t @?= True
+    taskClaimedBy t @?= Just "claimed_by"
+    taskClaimedAt t @?= Just "claimed_at"
+    rtModel (taskRouting t) @?= Just "model"
+    rtEffort (taskRouting t) @?= Just Max
 
 -- =============================================================
 -- no_commit column

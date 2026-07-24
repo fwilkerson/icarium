@@ -14,7 +14,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, Only (..), Query (..), SQLData (..), query, (:.) (..))
 
-import Icarium.Repo.Internal (inClause, taskCols)
+import Icarium.Repo.Internal (inClause, qualified)
 import Icarium.Types
 
 data SearchHit = SearchHit
@@ -227,7 +227,7 @@ searchTasks conn pq filters = do
     sql =
         Query $
             "SELECT "
-                <> taskCols ""
+                <> qualified "" taskCols
                 <> " FROM tasks"
                 <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'task')"
                 <> extraWhere
@@ -264,8 +264,9 @@ searchContexts conn pq filters = do
         | otherwise = " AND " <> T.intercalate " AND " catCl
     sql =
         Query $
-            "SELECT id, title, body, created_at, updated_at,"
-                <> " id IN (SELECT context_id FROM retired_context) FROM context"
+            "SELECT "
+                <> qualified "" contextCols
+                <> ", id IN (SELECT context_id FROM retired_context) FROM context"
                 <> " WHERE id IN (SELECT id FROM body_fts WHERE body_fts MATCH ? AND kind = 'context')"
                 <> extraWhere
     allParams = SQLText ftsQ : catPs

@@ -18,12 +18,8 @@ import Database.SQLite.Simple (
  )
 
 import Icarium.Id (newId)
-import Icarium.Repo.Context (contextCols)
-import Icarium.Repo.Internal (inClause)
-import Icarium.Types (Context (..), CurationEvent (..), Disposition)
-
-curationCols :: Text
-curationCols = "id, context_id, disposition, artifact, note, created_at"
+import Icarium.Repo.Internal (inClause, qualified)
+import Icarium.Types (Context (..), CurationEvent (..), Disposition, contextCols, curationCols)
 
 -- | Record one curation event. Append-only: nothing is ever updated.
 insertCuration :: Connection -> Text -> Disposition -> Maybe Text -> Maybe Text -> IO Text
@@ -33,7 +29,7 @@ insertCuration conn cxid disp artifact note = do
         conn
         ( Query $
             "INSERT INTO context_curation ("
-                <> curationCols
+                <> qualified "" curationCols
                 <> ") \
                    \VALUES (?, ?, ?, ?, ?, datetime('now'))"
         )
@@ -47,7 +43,7 @@ latestCuration conn cxid = do
         query
             conn
             ( Query $
-                "SELECT " <> curationCols <> " FROM context_latest_curation WHERE context_id = ?"
+                "SELECT " <> qualified "" curationCols <> " FROM context_latest_curation WHERE context_id = ?"
             )
             (Only cxid)
     pure $ case rows of
@@ -85,7 +81,7 @@ curationQueue conn mOlderThanDays = do
             mapM (\cx -> (,) cx <$> latestCuration conn (contextId cx)) cxs
     pure (map (,Nothing) never <> aged)
   where
-    selectCtx = "SELECT " <> contextCols <> " FROM context"
+    selectCtx = "SELECT " <> qualified "" contextCols <> " FROM context"
     neverClause = "id NOT IN (SELECT context_id FROM context_curation)"
     agedClause =
         "id IN (SELECT context_id FROM context_latest_curation \

@@ -48,7 +48,64 @@ tests =
             "context provenance"
             [ testCase "overlapping dispatches each attribute their own entries" testCtxProvenanceOverlappingRuns
             ]
+        , testGroup
+            "column layout"
+            [ testCase "every context column lands in its own field" testContextRoundTrip
+            , testCase "every curation column lands in its own field" testCurationRoundTrip
+            ]
         ]
+
+-- =============================================================
+-- Column layout
+-- =============================================================
+
+{- | Adjacent same-typed columns are where a transposition hides: the two
+timestamps here, and @artifact@/@note@ below, are the pairs no other test
+would distinguish.
+-}
+testContextRoundTrip :: IO ()
+testContextRoundTrip = withTestDb $ \c -> do
+    execute
+        c
+        ( Query
+            "INSERT INTO context (id, title, body, created_at, updated_at) \
+            \VALUES (?,?,?,?,?)"
+        )
+        ( "01CTXROUNDTRIP00000000001" :: Text
+        , "title" :: Text
+        , "body" :: Text
+        , "created_at" :: Text
+        , "updated_at" :: Text
+        )
+    Just k <- RK.getContext c "01CTXROUNDTRIP00000000001"
+    contextTitle k @?= "title"
+    contextBody k @?= "body"
+    contextCreatedAt k @?= "created_at"
+    contextUpdatedAt k @?= "updated_at"
+
+testCurationRoundTrip :: IO ()
+testCurationRoundTrip = withTestDb $ \c -> do
+    kid <- mkContext c "Curated" "body"
+    execute
+        c
+        ( Query
+            "INSERT INTO context_curation \
+            \(id, context_id, disposition, artifact, note, created_at) \
+            \VALUES (?,?,?,?,?,?)"
+        )
+        ( "01CURROUNDTRIP00000000001" :: Text
+        , kid
+        , "refactor" :: Text
+        , "artifact" :: Text
+        , "note" :: Text
+        , "created_at" :: Text
+        )
+    Just ev <- RCur.latestCuration c kid
+    curationContextId ev @?= kid
+    curationDisposition ev @?= Refactor
+    curationArtifact ev @?= Just "artifact"
+    curationNote ev @?= Just "note"
+    curationCreatedAt ev @?= "created_at"
 
 -- =============================================================
 -- categoryMatchedContexts

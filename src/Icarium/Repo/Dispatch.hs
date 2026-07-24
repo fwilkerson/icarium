@@ -22,8 +22,8 @@ import Data.Text qualified as T
 import Database.SQLite.Simple (Connection, FromRow (..), Only (..), Query (..), SQLData, execute, field, query, query_)
 import Database.SQLite.Simple.ToField (ToField, toField)
 
-import Icarium.Repo.Internal (prefixLookup, resolveByPrefix)
-import Icarium.Types (Dispatch (..), DispatchOutcome, Effort, ReviewVerdict)
+import Icarium.Repo.Internal (prefixLookup, qualified, resolveByPrefix)
+import Icarium.Types (Dispatch (..), DispatchOutcome, Effort, ReviewVerdict, dispatchCols)
 
 data NewDispatch = NewDispatch
     { ndTaskId :: Text
@@ -35,13 +35,6 @@ data NewDispatch = NewDispatch
     , ndLogPath :: Maybe FilePath
     , ndPid :: Maybe Int
     }
-
-dispatchCols :: Text
-dispatchCols =
-    "id, task_id, branch, base_branch, base_sha, pid, model, effort, \
-    \started_at, heartbeat_at, ended_at, outcome, merge_sha, last_commit, \
-    \notes, log_path, tokens_in, tokens_out, tokens_cache_read, \
-    \review_verdict, reviewer_log_path, merged_at, body_changed"
 
 {- | Insert a dispatch. The caller supplies the id so that the branch
 name and log path (which both embed the id) can be computed before
@@ -73,7 +66,7 @@ getDispatch conn did = do
     rows <-
         query
             conn
-            (Query $ "SELECT " <> dispatchCols <> " FROM dispatches WHERE id = ?")
+            (Query $ "SELECT " <> qualified "" dispatchCols <> " FROM dispatches WHERE id = ?")
             (Only did)
     pure $ case rows of
         (d : _) -> Just d
@@ -81,7 +74,7 @@ getDispatch conn did = do
 
 -- | Dispatches whose ULID starts with @prefix@.
 getDispatchesByPrefix :: Connection -> Text -> IO [Dispatch]
-getDispatchesByPrefix conn = prefixLookup conn "dispatches" dispatchCols
+getDispatchesByPrefix conn = prefixLookup conn "dispatches" (qualified "" dispatchCols)
 
 -- | Resolve a user-supplied string to a canonical dispatch ULID via prefix match.
 resolveDispatchId :: Connection -> Text -> IO (Either String Text)
@@ -96,7 +89,7 @@ listOpenDispatches conn =
         conn
         ( Query $
             "SELECT "
-                <> dispatchCols
+                <> qualified "" dispatchCols
                 <> " FROM dispatches WHERE outcome IS NULL ORDER BY started_at ASC"
         )
 
@@ -106,7 +99,7 @@ listDispatches conn Nothing =
         conn
         ( Query $
             "SELECT "
-                <> dispatchCols
+                <> qualified "" dispatchCols
                 <> " FROM dispatches ORDER BY started_at DESC"
         )
 listDispatches conn (Just tid) =
@@ -114,7 +107,7 @@ listDispatches conn (Just tid) =
         conn
         ( Query $
             "SELECT "
-                <> dispatchCols
+                <> qualified "" dispatchCols
                 <> " FROM dispatches WHERE task_id = ? ORDER BY started_at DESC"
         )
         (Only tid)
@@ -126,7 +119,7 @@ listParkedDispatches conn =
         conn
         ( Query $
             "SELECT "
-                <> dispatchCols
+                <> qualified "" dispatchCols
                 <> " FROM dispatches WHERE outcome = 'success' AND merge_sha IS NULL \
                    \ORDER BY started_at ASC"
         )

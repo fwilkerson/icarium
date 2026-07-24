@@ -6,7 +6,7 @@ module DispatchRepoSpec (tests) where
 
 import Data.Maybe (isJust)
 import Data.Text (Text)
-import Database.SQLite.Simple (Connection, Query (..), execute)
+import Database.SQLite.Simple (Connection, Query (..), execute, (:.) (..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
@@ -20,8 +20,8 @@ tests =
     testGroup
         "dispatch repo"
         [ testGroup
-            "token columns"
-            [ testCase "FromRow reads populated token columns" testDispatchTokensPopulated
+            "column layout"
+            [ testCase "every column lands in its own field" testDispatchRoundTrip
             , testCase "FromRow reads NULL token columns as Nothing" testDispatchTokensNull
             ]
         , testGroup
@@ -48,15 +48,15 @@ tests =
 -- Token columns
 -- =============================================================
 
-insertDispatchWithTokens :: Connection -> Text -> Text -> Maybe Int -> Maybe Int -> Maybe Int -> IO ()
-insertDispatchWithTokens c did tid mIn mOut mCache =
+-- | A dispatch row with the token columns left unwritten.
+insertDispatchWithoutTokens :: Connection -> Text -> Text -> IO ()
+insertDispatchWithoutTokens c did tid =
     execute
         c
         ( Query
             "INSERT INTO dispatches \
-            \(id, task_id, branch, base_branch, base_sha, model, effort, \
-            \ tokens_in, tokens_out, tokens_cache_read) \
-            \VALUES (?,?,?,?,?,?,?,?,?,?)"
+            \(id, task_id, branch, base_branch, base_sha, model, effort) \
+            \VALUES (?,?,?,?,?,?,?)"
         )
         ( did
         , tid
@@ -65,26 +65,64 @@ insertDispatchWithTokens c did tid mIn mOut mCache =
         , "0000000000000000000000000000000000000000" :: Text
         , "claude-sonnet-4-6" :: Text
         , "medium" :: Text
-        , mIn
-        , mOut
-        , mCache
         )
 
-testDispatchTokensPopulated :: IO ()
-testDispatchTokensPopulated = withTestDb $ \c -> do
-    tid <- mkTaskRow c "Token task"
+{- | The order half of the invariant, for the widest row in the schema:
+23 columns, most of them @Maybe Text@. Values are the column's own name so
+a transposition reports @expected "merge_sha" but got "last_commit"@.
+-}
+testDispatchRoundTrip :: IO ()
+testDispatchRoundTrip = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Round-trip task"
     let did = "01DISP0000000000000000001D" :: Text
-    insertDispatchWithTokens c did tid (Just 1234) (Just 567) (Just 89)
+    execute
+        c
+        ( Query
+            "INSERT INTO dispatches \
+            \(id, task_id, branch, base_branch, base_sha, pid, model, effort, \
+            \ started_at, heartbeat_at, ended_at, outcome, merge_sha, last_commit, \
+            \ notes, log_path, tokens_in, tokens_out, tokens_cache_read, \
+            \ review_verdict, reviewer_log_path, merged_at, body_changed) \
+            \VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        )
+        ( (did, tid, "branch" :: Text, "base_branch" :: Text, "base_sha" :: Text)
+            :. (11 :: Int, "model" :: Text, "xhigh" :: Text)
+            :. ("started_at" :: Text, "heartbeat_at" :: Text, "ended_at" :: Text)
+            :. ("interrupted" :: Text, "merge_sha" :: Text, "last_commit" :: Text)
+            :. ("notes" :: Text, "log_path" :: Text)
+            :. (12 :: Int, 13 :: Int, 14 :: Int)
+            :. ("warn" :: Text, "reviewer_log_path" :: Text, "merged_at" :: Text, 1 :: Int)
+        )
     Just d <- RD.getDispatch c did
-    dispatchTokensIn d @?= Just 1234
-    dispatchTokensOut d @?= Just 567
-    dispatchTokensCacheRead d @?= Just 89
+    dispatchId d @?= did
+    dispatchTaskId d @?= tid
+    dispatchBranch d @?= "branch"
+    dispatchBaseBranch d @?= "base_branch"
+    dispatchBaseSha d @?= "base_sha"
+    dispatchPid d @?= Just 11
+    dispatchModel d @?= "model"
+    dispatchEffort d @?= XHigh
+    dispatchStartedAt d @?= "started_at"
+    dispatchHeartbeat d @?= "heartbeat_at"
+    dispatchEndedAt d @?= Just "ended_at"
+    dispatchOutcome d @?= Just OInterrupted
+    dispatchMergeSha d @?= Just "merge_sha"
+    dispatchLastCommit d @?= Just "last_commit"
+    dispatchNotes d @?= Just "notes"
+    dispatchLogPath d @?= Just "log_path"
+    dispatchTokensIn d @?= Just 12
+    dispatchTokensOut d @?= Just 13
+    dispatchTokensCacheRead d @?= Just 14
+    dispatchReviewVerdict d @?= Just RVWarn
+    dispatchReviewerLogPath d @?= Just "reviewer_log_path"
+    dispatchMergedAt d @?= Just "merged_at"
+    dispatchBodyChanged d @?= Just True
 
 testDispatchTokensNull :: IO ()
 testDispatchTokensNull = withTestDb $ \c -> do
     tid <- mkTaskRow c "No token task"
     let did = "01DISP0000000000000000002D" :: Text
-    insertDispatchWithTokens c did tid Nothing Nothing Nothing
+    insertDispatchWithoutTokens c did tid
     Just d <- RD.getDispatch c did
     dispatchTokensIn d @?= Nothing
     dispatchTokensOut d @?= Nothing
