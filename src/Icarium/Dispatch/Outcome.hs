@@ -7,11 +7,13 @@ module Icarium.Dispatch.Outcome (
 ) where
 
 import Control.Monad (forM_, void, when)
+import Data.Bifunctor (second)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Database.SQLite.Simple (Connection)
 import System.Directory (doesFileExist, removeFile)
 
+import Icarium.Dispatch.Decide (Decision (..), renderReason)
 import Icarium.Dispatch.Payload (FutureNote (..), WorkerPayload (..), WorkerStatus (..))
 import Icarium.Events qualified as Ev
 import Icarium.Git qualified as Git
@@ -44,12 +46,16 @@ data DispatchResult = DispatchResult
     {- ^ The worker's schema-validated return; 'Nothing' when it never got as
     far as a final message (timeout, kill) or emitted something undecodable.
     -}
+    , dresTaskTransition :: Maybe (TaskState, Maybe Text)
+    {- ^ The task state this dispatch decided on, and the block reason to
+    record with it — see 'Icarium.Dispatch.Decide.dTaskTransition'. 'Nothing'
+    on a dry run, which decides nothing.
+    -}
     }
 
 data FinishArgs = FinishArgs
-    { faOutcome :: DispatchOutcome
+    { faDecision :: Decision
     , faSha :: Maybe Text
-    , faNotes :: Text
     , faRetention :: Int
     , faLogPath :: Maybe FilePath
     , faBaseSha :: Maybe Text
@@ -57,11 +63,12 @@ data FinishArgs = FinishArgs
     }
 
 finishWith :: DispatchCtx -> FinishArgs -> IO DispatchResult
-finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha, faPayload = mPayload} = do
+finishWith dx FinishArgs{faDecision = decision, faSha = mSha, faRetention = retention, faLogPath = mLogPath, faBaseSha = mBaseSha, faPayload = mPayload} = do
     let conn = dxConn dx
         did = dxDid dx
         branch = dxBranch dx
         wt = dxWorkDir dx
+        outcome = dOutcome decision
     -- On failure, snapshot any dirty state onto the dispatch branch before
     -- the worktree is torn down; the branch is what survives. Best-effort:
     -- ignore git errors so we don't mask the original failure note.
@@ -77,9 +84,10 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
                             Left _ -> pure Nothing
                             Right () -> either (const Nothing) Just <$> Git.revParse wt "HEAD"
             else pure Nothing
-    let enrichedNotes = case mWipSha of
-            Nothing -> notes
-            Just sha -> notes <> "\nwip_commit: " <> sha
+    -- The wip sha is only known here, and the block reason a failure records
+    -- is its note verbatim — so both pick up the same suffix.
+    let withWip t = t <> maybe "" ("\nwip_commit: " <>) mWipSha
+        enrichedNotes = withWip (renderReason (dReason decision))
     RD.finishDispatch conn did outcome mSha (Just enrichedNotes)
     -- The row is the only place the owning task is recorded; the event
     -- carries it so a watcher need not join back to the DB.
@@ -101,6 +109,7 @@ finishWith dx FinishArgs{faOutcome = outcome, faSha = mSha, faNotes = notes, faR
             , dresLogPath = mLogPath
             , dresBaseSha = mBaseSha
             , dresPayload = mPayload
+            , dresTaskTransition = second (fmap withWip) <$> dTaskTransition decision
             }
 
 -- | The worker's escalation reason, when it reported one.
@@ -123,17 +132,12 @@ pruneLogFiles conn retention = do
 {- | Perform every tracker mutation the dispatch implies. Intended to be
 called from the CLI layer after @dispatch@ returns.
 
-State:
-
-* success and task still in flight -> mark 'done' (the agent no longer
-  self-updates; we don't want to re-pick it).
-* failure -> mark 'blocked' with the dispatch notes as reason. A worker that
-  reported @blocked@ arrives here as a failure, carrying its own
-  @block_reason@ as those notes — the gate folds the block into the outcome
-  (see 'Icarium.Dispatch.PostClaude') so that everything keyed off outcome,
-  auto-merge included, agrees with the task row.
-* interrupted -> leave to @icarium dispatch recover@.
-* dry-run (dispatch id absent) -> no-op.
+'Icarium.Dispatch.Decide' already chose the target state; this decides only
+whether the live row still deserves it. A success lands 'Done' only from a
+state that is still in flight — the DB may have moved on since the run
+started, and a task a human has since abandoned must not be resurrected. An
+interrupted run decides nothing and is left to @icarium dispatch recover@; a
+dry run (dispatch id absent) is a no-op.
 
 Then the payload's @for_future_agents@ notes, whatever the outcome: a run
 that blocked still learned something, and that is what the next attempt needs.
@@ -145,25 +149,19 @@ applyOutcomeToTask conn db t res
         ingestFutureNotes conn db did t (maybe [] wpForFutureAgents (dresPayload res))
     | otherwise = pure ()
   where
-    applyState = case dresOutcome res of
-        OSuccess -> do
-            mFresh <- RT.getTask conn (taskId t)
-            case mFresh of
-                Just t'
-                    | taskState t' `elem` [InProgress, ReadyHeadless] ->
-                        transition t' Done RT.emptyUpdate{RT.tuState = Just Done}
-                _ -> pure ()
-        OFailure -> do
-            mFresh <- RT.getTask conn (taskId t)
-            forM_ mFresh $ \t' ->
+    applyState = forM_ (dresTaskTransition res) $ \(target, mReason) -> do
+        mFresh <- RT.getTask conn (taskId t)
+        forM_ mFresh $ \t' ->
+            when (stillEligible target t') $
                 transition
                     t'
-                    Blocked
+                    target
                     RT.emptyUpdate
-                        { RT.tuState = Just Blocked
-                        , RT.tuBlockReason = Just (Just (dresNotes res))
+                        { RT.tuState = Just target
+                        , RT.tuBlockReason = Just mReason
                         }
-        OInterrupted -> pure ()
+    stillEligible Done t' = taskState t' `elem` [InProgress, ReadyHeadless]
+    stillEligible _ _ = True
     transition before new upd = do
         void $ RT.updateTask conn (taskId before) upd
         Ev.emit db "dispatch" (Ev.TaskUpdated (taskId before) (taskState before) new)

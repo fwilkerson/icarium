@@ -4,34 +4,40 @@ module Icarium.Dispatch.PostClaude (
     handlePostClaudeWithReview,
     writeWarnContextEntry,
     checkpointDirtyTree,
-    postClaudeGuard,
 ) where
 
-import Control.Monad (forM_, mfilter, void)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Except (runExceptT, throwE)
+import Control.Monad (forM_, mfilter, void, when)
+import Data.Bifunctor (first)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.SQLite.Simple (Connection)
-import System.Exit (ExitCode (..))
+import System.Exit (ExitCode)
 import System.FilePath (takeDirectory)
 import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (Config (..), DispatchConfig (..), ReviewConfig (..))
 import Icarium.Dispatch.BodyDiff (bodyChanged, diffBody, renderBodyReport)
+import Icarium.Dispatch.Decide (
+    Decision (..),
+    DecisionInput (..),
+    DecisionReason (..),
+    GitSignals (..),
+    decideOutcome,
+    renderReason,
+    reviewVerdict,
+ )
 import Icarium.Dispatch.Gate (GateEnv (..), GateHeartbeat (..), gateBudgetUsecs, runGates)
 import Icarium.Dispatch.LogResult (LogResult (..), readLogResult)
 import Icarium.Dispatch.Outcome (DispatchCtx (..), DispatchResult, FinishArgs (..), finishWith)
 import Icarium.Dispatch.Payload (
     Finding,
     WorkerPayload (..),
-    WorkerStatus (..),
     decodeWorkerPayload,
     renderFindings,
  )
-import Icarium.Dispatch.Reviewer (ReviewResult (..), rrReport, rrVerdict, runReviewer)
+import Icarium.Dispatch.Reviewer (ReviewResult (..), runReviewer)
 import Icarium.Git qualified as Git
 import Icarium.Node (createContextWithBody)
 import Icarium.Repo.Category qualified as RC
@@ -65,150 +71,139 @@ data PostClaudeArgs = PostClaudeArgs
     , pcaLogPath :: FilePath
     }
 
--- | Post-run handling for one dispatch; runs the reviewer when configured.
+{- | Post-run handling for one dispatch. Gathers the signals a finished run
+left behind, hands them to 'decideOutcome', and acts on what comes back.
+
+The expensive stages are skipped when the cheap signals already settle the
+run — no gates on a tree that failed a guard, no reviewer on a failed gate.
+'Decide' still owns the precedence; this only avoids paying for evidence that
+could not change the answer.
+-}
 handlePostClaudeWithReview :: PostClaudeArgs -> IO PostClaudeResult
 handlePostClaudeWithReview args = do
     mPayload <- readWorkerPayload (pcaLogPath args)
-    let PostClaudeArgs
-            { pcaCtx = dx
-            , pcaConfig = cfg
-            , pcaExit = exit
-            , pcaBaseSha = baseSha
-            , pcaLogPath = logPath
-            } = args
-        conn = dxConn dx
-        did = dxDid dx
-        branch = dxBranch dx
-        wt = dxWorkDir dx
-        noCommit = taskNoCommit (pcaTask args)
-        ret = dcLogRetentionRuns (cfgDispatch cfg)
-        maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
-        finish o mSha notes =
-            finishWith
-                dx
-                FinishArgs
-                    { faOutcome = o
-                    , faSha = mSha
-                    , faNotes = notes
-                    , faRetention = ret
-                    , faLogPath = Just logPath
-                    , faBaseSha = Just baseSha
-                    , faPayload = mPayload
-                    }
-        checkExit = case exit of
-            ExitFailure 124 -> throwE ("timed out after " <> T.pack (show maxMins) <> " minutes")
-            ExitFailure c -> throwE ("claude exited " <> T.pack (show c))
-            ExitSuccess -> pure ()
-        -- A block is the worker's one unilateral claim (ADR 0008): it did not
-        -- deliver the task, so the dispatch did not succeed and its branch must
-        -- not auto-merge. Checked ahead of the guards so the recorded note is
-        -- the worker's own reason rather than the generic "made no commits".
-        checkWorkerBlocked = case mPayload of
-            Just p
-                | WBlocked <- wpStatus p ->
-                    throwE ("worker blocked: " <> fromMaybe "no reason given" (wpBlockReason p))
-            _ -> pure ()
-        -- Returns Nothing for no-commit success, Just () when gates passed.
-        preStep = do
-            checkExit
-            checkWorkerBlocked
-            porcelain <- liftIO (Git.statusPorcelain wt)
-            mBranchSha <- liftIO (Git.revParse wt branch)
-            mapM_ throwE (postClaudeGuard noCommit porcelain mBranchSha baseSha)
-            if noCommit
-                then pure Nothing
-                else do
-                    liftIO $ case mBranchSha of
-                        Right sha -> RD.setLastCommit conn did sha
-                        Left _ -> pure ()
-                    liftIO (runGates gates (cfgCommands cfg)) >>= either throwE pure
-                    pure (Just ())
+    porcelain <- Git.statusPorcelain wt
+    mBranchSha <- Git.revParse wt branch
+    let signals mGate mReview =
+            DecisionInput
+                { diNoCommit = taskNoCommit (pcaTask args)
+                , diExit = pcaExit args
+                , diTimeoutMinutes = dcMaxMinutesPerDispatch (cfgDispatch cfg)
+                , diPayload = mPayload
+                , diGit =
+                    GitSignals
+                        { gsPorcelain = porcelain
+                        , gsBranchSha = first (T.pack . show) mBranchSha
+                        , gsBaseSha = pcaBaseSha args
+                        }
+                , diGate = mGate
+                , diReview = mReview
+                }
         -- Gates run on behalf of this dispatch: they keep its heartbeat warm
         -- and, on expiry, leave the wedged process tree in its log.
-        gates =
+        gateEnv =
             GateEnv
                 { geDir = wt
                 , geBudgetUsecs = gateBudgetUsecs (cfgDispatch cfg)
-                , geLogPath = Just logPath
+                , geLogPath = Just (pcaLogPath args)
                 , geHeartbeat = Just GateHeartbeat{ghDbPath = dxDbPath dx, ghDid = did}
                 }
+    -- 'Clean' before any gate ran means nothing so far has settled the run:
+    -- there is a commit to land, so the expensive stages are worth paying for.
+    case dReason (decideOutcome (signals Nothing Nothing)) of
+        Clean -> do
+            either (const (pure ())) (RD.setLastCommit conn did) mBranchSha
+            runGates gateEnv (cfgCommands cfg) >>= \case
+                Left note -> settle args mPayload Nothing (decideOutcome (signals (Just (Left note)) Nothing))
+                Right () -> do
+                    mReviewed <- runReviewStage args
+                    settle args mPayload (fst <$> mReviewed) $
+                        decideOutcome (signals (Just (Right ())) (rrOutcome . snd <$> mReviewed))
+        _ -> settle args mPayload Nothing (decideOutcome (signals Nothing Nothing))
+  where
+    dx = pcaCtx args
+    cfg = pcaConfig args
+    conn = dxConn dx
+    did = dxDid dx
+    branch = dxBranch dx
+    wt = dxWorkDir dx
 
-    runExceptT preStep >>= \case
-        Left notes -> do
-            void (checkpointDirtyTree wt did notes)
-            PCDone <$> finish OFailure Nothing notes
-        Right Nothing -> do
-            -- Nothing to land: stamp merged so the dispatch never shows as
-            -- parked. Ordered after finish, which writes merge_sha = NULL.
-            dr <- finish OSuccess Nothing "no-commit task"
-            RD.setMerged conn did baseSha
-            pure (PCDone dr)
-        Right (Just ()) ->
-            runReviewThenPark args finish
-
-{- | Reviewer gate, then park: the dispatch branch is left for the CLI
-layer's auto-merge (or @icarium dispatch merge@) to land. Nothing here
-touches the base branch.
+{- | Record the decision, then do the writes it implies. The dispatch branch is
+left for the CLI layer's auto-merge (or @icarium dispatch merge@) to land —
+nothing here touches the base branch.
 -}
-runReviewThenPark ::
-    PostClaudeArgs ->
-    (DispatchOutcome -> Maybe Text -> Text -> IO DispatchResult) ->
-    IO PostClaudeResult
-runReviewThenPark args finish = do
-    let PostClaudeArgs
-            { pcaCtx = dx
-            , pcaConfig = cfg
-            , pcaTask = task0
-            , pcaBaselineBody = baselineBody
-            , pcaSysPrompt = mSysPrompt
-            , pcaBaseSha = baseSha
-            , pcaLogPath = logPath
-            } = args
-        conn = dxConn dx
-        db = dxDbPath dx
-        did = dxDid dx
-        wt = dxWorkDir dx
-        maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
-    mReviewResult <- case mfilter rcEnabled (cfgReview cfg) of
-        Nothing -> pure Nothing
-        Just rcfg -> do
-            -- Mid-run body-file edits (e.g. a ## Proof section) must reach
-            -- the reviewer; task0 predates the worker run. The section diff
-            -- against the first-attempt baseline is the tamper signal: the
-            -- body is worker-writable, so the reviewer must be told how the
-            -- text it judges against changed under it.
-            task <- refreshTaskBody conn db task0
-            let bodyDiff = diffBody baselineBody (taskBody task)
-                reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
-                reviewerLogPath = takeDirectory logPath <> "/" <> T.unpack did <> "-reviewer.jsonl"
-            diffText <- Git.diffPatch wt baseSha
-            rr <- runReviewer wt reviewModel mSysPrompt (renderBodyReport bodyDiff) (taskTitle task) (taskBody task) diffText reviewerLogPath maxMins
-            RD.setReviewInfo conn did (rrVerdict rr) (rrLogPath rr) (bodyChanged bodyDiff)
-            hPutStrLn stderr ("[reviewer] verdict: " <> T.unpack (reviewVerdictText (rrVerdict rr)))
-            pure (Just (task, rr))
-    case mReviewResult of
-        Just (_, rr) | rrVerdict rr == RVFail -> do
-            let report = rrReport rr
-            dr <- finish OFailure Nothing ("reviewer: fail\n" <> report)
-            pure (PCRetry dr report)
-        _ -> do
-            -- Parked-ness is derived (merge_sha NULL), so the note records
-            -- only what stays true after the branch lands.
-            let notes = case mReviewResult of
-                    Just (_, rr)
-                        | rrVerdict rr == RVWarn ->
-                            "reviewer warn\n" <> rrReport rr
-                    _ -> "gates passed"
-            dr <- finish OSuccess Nothing notes
-            case mReviewResult of
-                -- Right by construction: a warn verdict comes from findings.
-                Just (task, rr)
-                    | rrVerdict rr == RVWarn
-                    , Right fs <- rrOutcome rr -> do
-                        cats <- RC.taskCategoriesFor conn (taskId task)
-                        writeWarnContextEntry conn db did task cats fs
-                _ -> pure ()
-            pure (PCDone dr)
+settle :: PostClaudeArgs -> Maybe WorkerPayload -> Maybe Task -> Decision -> IO PostClaudeResult
+settle args mPayload mReviewedTask decision = do
+    -- Preserve in-flight work on the dispatch branch: it is what survives the
+    -- worktree teardown, and a human reads it after a failure.
+    when (dOutcome decision == OFailure) $
+        void (checkpointDirtyTree wt did (renderReason (dReason decision)))
+    dr <-
+        finishWith
+            dx
+            FinishArgs
+                { faDecision = decision
+                , faSha = Nothing
+                , faRetention = dcLogRetentionRuns (cfgDispatch (pcaConfig args))
+                , faLogPath = Just (pcaLogPath args)
+                , faBaseSha = Just (pcaBaseSha args)
+                , faPayload = mPayload
+                }
+    case dReason decision of
+        -- Nothing to land: stamp merged so the dispatch never shows as
+        -- parked. Ordered after finish, which writes merge_sha = NULL.
+        NoCommitClean -> RD.setMerged conn did (pcaBaseSha args)
+        ReviewerWarn findings -> forM_ mReviewedTask $ \task -> do
+            cats <- RC.taskCategoriesFor conn (taskId task)
+            writeWarnContextEntry conn (dxDbPath dx) did task cats findings
+        _ -> pure ()
+    pure (maybe (PCDone dr) (PCRetry dr) (dRetry decision))
+  where
+    dx = pcaCtx args
+    conn = dxConn dx
+    did = dxDid dx
+    wt = dxWorkDir dx
+
+{- | Run the reviewer, when one is configured, and record what it said.
+Returns the refreshed task alongside, since a warn mints a ctx entry off it.
+-}
+runReviewStage :: PostClaudeArgs -> IO (Maybe (Task, ReviewResult))
+runReviewStage args = case mfilter rcEnabled (cfgReview cfg) of
+    Nothing -> pure Nothing
+    Just rcfg -> do
+        -- Mid-run body-file edits (e.g. a ## Proof section) must reach
+        -- the reviewer; pcaTask predates the worker run. The section diff
+        -- against the first-attempt baseline is the tamper signal: the
+        -- body is worker-writable, so the reviewer must be told how the
+        -- text it judges against changed under it.
+        task <- refreshTaskBody conn db (pcaTask args)
+        let bodyDiff = diffBody (pcaBaselineBody args) (taskBody task)
+            reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
+            reviewerLogPath = takeDirectory (pcaLogPath args) <> "/" <> T.unpack did <> "-reviewer.jsonl"
+            maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
+        diffText <- Git.diffPatch wt (pcaBaseSha args)
+        rr <-
+            runReviewer
+                wt
+                reviewModel
+                (pcaSysPrompt args)
+                (renderBodyReport bodyDiff)
+                (taskTitle task)
+                (taskBody task)
+                diffText
+                reviewerLogPath
+                maxMins
+        let verdict = reviewVerdict (rrOutcome rr)
+        RD.setReviewInfo conn did verdict (rrLogPath rr) (bodyChanged bodyDiff)
+        hPutStrLn stderr ("[reviewer] verdict: " <> T.unpack (reviewVerdictText verdict))
+        pure (Just (task, rr))
+  where
+    dx = pcaCtx args
+    cfg = pcaConfig args
+    conn = dxConn dx
+    db = dxDbPath dx
+    did = dxDid dx
+    wt = dxWorkDir dx
 
 {- | The worker's final message is a 'workerSchema' payload, validated by the
 harness. Absent means it never reached a final message (timeout, kill);
@@ -260,28 +255,3 @@ checkpointDirtyTree wt did note = do
                 msg = "wip: dispatch " <> did <> " (failed: " <> shortNote <> ")"
             void $ Git.commitAll wt msg
             pure True
-
-{- | Pure guard logic for the post-claude checks. Returns Just an error
-message if a guard fires, Nothing if all pass. The Bool is whether this is
-a no-commit task.
-  * Dirty-tree guard fires in both modes when @porcelain@ (raw
-    `git status --porcelain` output) is non-empty after stripping.
-  * No-commit mode: fires when the branch SHA resolved and differs from
-    baseSha — the agent committed despite being told not to.
-  * Commit mode: fires when the branch SHA equals baseSha (agent exited
-    success but made no commits).
--}
-postClaudeGuard :: Bool -> Text -> Either e Text -> Text -> Maybe Text
-postClaudeGuard noCommit porcelain mBranchSha baseSha
-    | not (T.null porcStripped) = Just dirtyMsg
-    | noCommit = case branchSha of
-        Just sha | sha /= baseSha -> Just "no-commit task: agent left commits on dispatch branch (branch retained for inspection)"
-        _ -> Nothing
-    | branchSha == Just baseSha = Just "agent made no commits on dispatch branch"
-    | otherwise = Nothing
-  where
-    porcStripped = T.strip porcelain
-    branchSha = either (const Nothing) Just mBranchSha
-    dirtyMsg =
-        "agent left uncommitted changes; refusing to accept\nuncommitted:\n"
-            <> T.intercalate "\n" (map ("  " <>) (T.lines porcStripped))

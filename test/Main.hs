@@ -7,11 +7,11 @@ import BodyDiffSpec qualified
 import CategoriesSpec qualified
 import CliSpec qualified
 import ContextSpec qualified
+import DecideSpec qualified
 import DispatchRepoSpec qualified
 import EventsSpec qualified
 import GateSpec qualified
 import GitSpec qualified
-import GuardSpec qualified
 import HeartbeatSpec qualified
 import IdSpec qualified
 import LogResultSpec qualified
@@ -28,6 +28,7 @@ import SchemaSpec qualified
 import SearchSpec qualified
 import TickSpec qualified
 import TimeoutSpec qualified
+import WorktreeSpec qualified
 
 main :: IO ()
 main =
@@ -38,11 +39,11 @@ main =
             , BodyDiffSpec.tests
             , CategoriesSpec.tests
             , CliSpec.tests
+            , DecideSpec.tests
             , EventsSpec.tests
             , GateSpec.tests
             , GitSpec.tests
             , TickSpec.tests
-            , GuardSpec.tests
             , HeartbeatSpec.tests
             , IdSpec.tests
             , LogResultSpec.tests
@@ -60,4 +61,5 @@ main =
             , QueueSpec.tests
             , DispatchRepoSpec.tests
             , TimeoutSpec.tests
+            , WorktreeSpec.tests
             ]

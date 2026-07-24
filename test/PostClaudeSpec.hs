@@ -17,6 +17,12 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Config (CategoriesConfig (..), CommandsConfig (..), Config (..), DispatchConfig (..), ProjectConfig (..))
 import Icarium.Db (migrateDb)
+import Icarium.Dispatch.Decide (
+    Decision,
+    DecisionInput (..),
+    GitSignals (..),
+    decideOutcome,
+ )
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
@@ -77,6 +83,10 @@ dispatchResult outcome notes mPayload =
         , dresLogPath = Nothing
         , dresBaseSha = Nothing
         , dresPayload = mPayload
+        , dresTaskTransition = case outcome of
+            OSuccess -> Just (Done, Nothing)
+            OFailure -> Just (Blocked, Just notes)
+            OInterrupted -> Nothing
         }
 
 {- | A task tagged on all three axes, in a temp-dir DB so ctx body files
@@ -106,6 +116,20 @@ withIngestTask act =
             insertTestDispatch c ingestDispatchId tid
             Just t <- RT.getTask c tid
             act c db t
+
+-- | What 'decideOutcome' returns for a run that blew its wall-clock budget.
+timedOutDecision :: Decision
+timedOutDecision =
+    decideOutcome
+        DecisionInput
+            { diNoCommit = False
+            , diExit = ExitFailure 124
+            , diTimeoutMinutes = 30
+            , diPayload = Nothing
+            , diGit = GitSignals{gsPorcelain = "", gsBranchSha = Left "not resolved", gsBaseSha = ""}
+            , diGate = Nothing
+            , diReview = Nothing
+            }
 
 -- | The run every 'dispatchResult' in this module claims to come from.
 ingestDispatchId :: Text
@@ -510,7 +534,7 @@ testFinishWithWipCheckpoint =
                             , dxBase = "main"
                             , dxWorkDir = dir
                             }
-                res <- finishWith dx FinishArgs{faOutcome = OFailure, faSha = Nothing, faNotes = "agent timed out", faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha, faPayload = Nothing}
+                res <- finishWith dx FinishArgs{faDecision = timedOutDecision, faSha = Nothing, faRetention = 25, faLogPath = Nothing, faBaseSha = Just baseSha, faPayload = Nothing}
                 -- (a) worktree is clean: the staged change went into the WIP commit
                 clean <- Git.isClean dir
                 assertBool "worktree clean after WIP checkpoint" clean

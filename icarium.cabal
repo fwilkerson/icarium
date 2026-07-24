@@ -43,6 +43,7 @@ library
                       Icarium.Dispatch.Agreement
                       Icarium.Dispatch.BodyDiff
                       Icarium.Dispatch.Claude
+                      Icarium.Dispatch.Decide
                       Icarium.Dispatch.Gate
                       Icarium.Dispatch.LogResult
                       Icarium.Dispatch.Merge
@@ -125,11 +126,11 @@ test-suite icarium-test
                       CliTaskSpec
                       CliWorktreeSpec
                       ContextSpec
+                      DecideSpec
                       DispatchRepoSpec
                       EventsSpec
                       GateSpec
                       GitSpec
-                      GuardSpec
                       HeartbeatSpec
                       IdSpec
                       LogResultSpec
@@ -147,6 +148,7 @@ test-suite icarium-test
                       TestHelpers
                       TickSpec
                       TimeoutSpec
+                      WorktreeSpec
     build-depends:    base,
                       aeson,
                       bytestring,

@@ -276,6 +276,7 @@ minResult =
         , dresLogPath = Nothing
         , dresBaseSha = Just "abc123"
         , dresPayload = Nothing
+        , dresTaskTransition = Just (Done, Nothing)
         }
 
 fullLog :: LogResult

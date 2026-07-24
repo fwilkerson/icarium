@@ -1,7 +1,5 @@
 module Icarium.Dispatch.Reviewer (
     ReviewResult (..),
-    rrVerdict,
-    rrReport,
     runReviewer,
     loadReviewerPrompt,
 ) where
@@ -46,28 +44,18 @@ import Icarium.Dispatch.Payload (
     ReviewerPayload (..),
     decodeReviewerPayload,
     jsonSchemaArgs,
-    renderFindings,
     reviewerSchema,
-    verdictFromFindings,
  )
-import Icarium.Types (ReviewVerdict (..))
 
 {- | Either the reviewer reported (findings, possibly empty) or the run itself
 failed. The two are not one field: a process that timed out has no findings
-but is not a pass, so 'rrVerdict' fails closed on 'Left' rather than deriving
-a verdict from an empty list it never received.
+but is not a pass. What that means is not decided here — the reviewer reports,
+'Icarium.Dispatch.Decide' concludes (ADR 0008).
 -}
 data ReviewResult = ReviewResult
     { rrOutcome :: Either Text [Finding]
     , rrLogPath :: FilePath
     }
-
-rrVerdict :: ReviewResult -> ReviewVerdict
-rrVerdict = either (const RVFail) verdictFromFindings . rrOutcome
-
--- | What a human or the retrying worker reads: the findings table, or why the run failed.
-rrReport :: ReviewResult -> Text
-rrReport = either id renderFindings . rrOutcome
 
 {- | The two-axis brief (ADR 0004), adapted from the @code-review@ skill's
 Standards and Spec sub-agent prompts. The harness is one Read-only agent, so

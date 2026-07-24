@@ -177,6 +177,8 @@ dryRunPreview conn req task mAgreement = do
             , dresLogPath = Nothing
             , dresBaseSha = Nothing
             , dresPayload = Nothing
+            , -- A dry run decides nothing about the task.
+              dresTaskTransition = Nothing
             }
 
 {- | Renders 'claudeArgs' for human readability: the comma-joined tool lists

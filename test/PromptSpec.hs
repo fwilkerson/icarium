@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase)
 
+import Icarium.Dispatch.Claude (claudeArgs)
 import Icarium.Dispatch.Internal (buildPrompt)
 import Icarium.Prompt (taskPromptBody)
 import Icarium.Repo.Category qualified as RC
@@ -22,7 +23,27 @@ tests =
     testGroup
         "prompt"
         [ testCase "CLI preview is a prefix of the dispatch prompt" testPreviewIsPrefix
+        , testCase "claudeArgs includes --permission-mode dontAsk plus existing flags" testClaudeArgsPermissionMode
         ]
+
+-- | True when @x@, @y@ appear as two consecutive elements of @xs@.
+hasAdjacentPair :: (Eq a) => a -> a -> [a] -> Bool
+hasAdjacentPair x y xs = (x, y) `elem` zip xs (drop 1 xs)
+
+testClaudeArgsPermissionMode :: IO ()
+testClaudeArgsPermissionMode = do
+    let args = claudeArgs "claude-sonnet-4-6" Medium ["Read", "Edit"] ["Read"] Nothing
+    assertBool "adjacent --permission-mode dontAsk" (hasAdjacentPair "--permission-mode" "dontAsk" args)
+    assertBool "-p present" ("-p" `elem` args)
+    assertBool "adjacent --output-format stream-json" (hasAdjacentPair "--output-format" "stream-json" args)
+    assertBool "--strict-mcp-config present" ("--strict-mcp-config" `elem` args)
+    assertBool "no --mcp-config when key absent" ("--mcp-config" `notElem` args)
+    -- The gate ingests the worker's final message, so it must be constrained.
+    assertBool "--json-schema present" ("--json-schema" `elem` args)
+    let argsWithMcp = claudeArgs "claude-sonnet-4-6" Medium ["Read", "Edit"] ["Read"] (Just ".mcp.json")
+    assertBool
+        "adjacent --mcp-config <path> when key set"
+        (hasAdjacentPair "--mcp-config" ".mcp.json" argsWithMcp)
 
 testPreviewIsPrefix :: IO ()
 testPreviewIsPrefix = withTestDb $ \c -> do
