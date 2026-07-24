@@ -10,6 +10,7 @@ module Icarium.Repo.Task (
     listTasks,
     queueTasks,
     ClaimResult (..),
+    defaultOwner,
     claimNextTask,
     claimReadyTask,
     claimTask,
@@ -24,8 +25,9 @@ module Icarium.Repo.Task (
 ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (throwIO, try)
+import Control.Exception (SomeException, catch, throwIO, try)
 import Control.Monad (void, when)
+import Data.Char (isSpace)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -45,6 +47,9 @@ import Database.SQLite.Simple (
 import Database.SQLite.Simple.ToField (toField)
 import Database.SQLite3 (Error (..))
 import GHC.Clock (getMonotonicTime)
+import System.Environment (lookupEnv)
+import System.Posix.Unistd (getSystemID, nodeName)
+import System.Posix.User (getEffectiveUserName)
 
 import Icarium.Id (newId)
 import Icarium.Repo.Fts qualified as Fts
@@ -165,6 +170,19 @@ data ClaimResult
     | NoCandidate
     | LockBusy
     deriving (Show)
+
+{- | Who a claim is stamped for when no owner is given. ICARIUM_OWNER lets
+a supervisor name its agents; the user\@host fallback at least distinguishes
+machines.
+-}
+defaultOwner :: IO Text
+defaultOwner =
+    lookupEnv "ICARIUM_OWNER" >>= \case
+        Just s | not (all isSpace s) -> pure (T.strip (T.pack s))
+        _ -> do
+            user <- getEffectiveUserName `catch` \(_ :: SomeException) -> pure "unknown"
+            host <- nodeName <$> getSystemID
+            pure (T.pack (user <> "@" <> host))
 
 {- | Run a claim inside @BEGIN IMMEDIATE@, retrying while SQLite says busy.
 

@@ -36,6 +36,7 @@ module Icarium.Render (
     renderDispatchStats,
     renderRunSummary,
     renderRunOutcome,
+    renderLockBusy,
     renderRecoveryNotes,
     renderRecovered,
     renderLanded,

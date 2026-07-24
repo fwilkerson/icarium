@@ -500,7 +500,7 @@ runClaim db o = do
     when (maybe False (T.all isSpace) (clOwner o)) $
         fatal 2 "--owner must not be empty"
     withDb db $ \c -> do
-        owner <- maybe defaultOwner pure (clOwner o)
+        owner <- maybe RT.defaultOwner pure (clOwner o)
         mtid <- traverse (resolveOrFatal . RT.resolveTaskId c) (clId o)
         res <- case mtid of
             Nothing -> RT.claimNextTask c [ReadyInteractive] owner

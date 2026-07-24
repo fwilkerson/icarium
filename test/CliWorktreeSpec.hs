@@ -56,6 +56,7 @@ tests =
         , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
         , testCase "dispatch run (drain): a failed dispatch exits 3" testDrainFailedDispatchExits3
         , testCase "dispatch: worktree_setup exit 75 stops drain cleanly" testWorktreeSetup75
+        , testCase "dispatch: worktree_setup exit 75 stops a named run the same way" testWorktreeSetup75Named
         , testCase "dispatch: worktree_setup nonzero errors a single run" testWorktreeSetupErr
         , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
         , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
@@ -382,7 +383,10 @@ testDispatchFailBlocks = withDispatchRepo $ \dir db -> do
     baseSha <- gitOut dir ["rev-parse", "main"]
     (code, out, err) <- runDispatch dir db (Just "fail") ["dispatch", "run", tid]
     code @?= ExitFailure 3
-    assertBool "reports failure" ("dispatch did not succeed" `isInfixOf` err)
+    -- The named form is a drain of one, so it reports a failure the way a
+    -- drain does; there is no second wording left for it to use.
+    assertBool "reports failure" ("dispatches failed" `isInfixOf` err)
+    assertBool "message names where to look" ("dispatch list --outcome failure" `isInfixOf` err)
     assertBool "notes carry the exit code" ("claude exited 2" `isInfixOf` out)
 
     (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
@@ -440,6 +444,23 @@ testWorktreeSetup75 = withDispatchRepo $ \dir db -> do
     (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
     code @?= ExitSuccess
     assertBool "drain reports no capacity and stops" ("no worktree capacity" `isInfixOf` err)
+    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
+    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
+
+{- | Back-pressure reads the same whichever selector picked the task: the
+machine is full, nothing was dispatched, and the task stays ready. The named
+form used to exit 3 here while the drain exited 0 — a per-mode reporting
+policy that the single pipeline has no room for.
+-}
+testWorktreeSetup75Named :: IO ()
+testWorktreeSetup75Named = withDispatchRepo $ \dir db -> do
+    tid <- addReadyTask dir db "named capacity task"
+    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "exit 75") Nothing)
+    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    assertBool "reports no capacity and stops" ("no worktree capacity" `isInfixOf` err)
     (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
     assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
     (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]

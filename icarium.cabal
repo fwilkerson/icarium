@@ -44,6 +44,7 @@ library
                       Icarium.Dispatch.BodyDiff
                       Icarium.Dispatch.Claude
                       Icarium.Dispatch.Decide
+                      Icarium.Dispatch.Drain
                       Icarium.Dispatch.Gate
                       Icarium.Dispatch.LogResult
                       Icarium.Dispatch.Merge
@@ -127,6 +128,7 @@ test-suite icarium-test
                       CliWorktreeSpec
                       ContextSpec
                       DecideSpec
+                      DrainSpec
                       DispatchRepoSpec
                       EventsSpec
                       GateSpec

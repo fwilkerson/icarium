@@ -6,6 +6,14 @@ module Icarium.Render.Dispatch (
     renderDispatchStats,
     renderRunSummary,
     renderRunOutcome,
+    renderDispatching,
+    renderQueueEmpty,
+    renderCapReached,
+    renderSigint,
+    renderStopping,
+    renderTaskNotFound,
+    renderLockBusy,
+    renderRunFailure,
     renderRecoveryNotes,
     renderRecovered,
     renderLanded,
@@ -218,6 +226,36 @@ renderRunSummary r mLog files =
 renderRunOutcome :: DispatchResult -> Text
 renderRunOutcome r =
     dispatchOutcomeText (dresOutcome r) <> " \x2014 " <> dresNotes r
+
+renderDispatching :: Text -> Text
+renderDispatching tid = "dispatching " <> tid
+
+-- | Why a run stopped, in the glossary's own words.
+renderQueueEmpty, renderSigint :: Text
+renderQueueEmpty = renderStopping "ready queue empty"
+renderSigint = "SIGINT received; stopping after current dispatch"
+
+renderCapReached :: Int -> Text
+renderCapReached n = renderStopping ("reached max dispatches (" <> tshow n <> ")")
+
+renderStopping :: Text -> Text
+renderStopping note = note <> "; stopping"
+
+renderTaskNotFound :: Text -> Text
+renderTaskNotFound tid = "task not found: " <> tid
+
+-- | @retry@ is the command to run again after a claim that took nothing.
+renderLockBusy :: Text -> Text
+renderLockBusy retry =
+    "another process holds the database write lock; nothing was claimed. Retry: " <> retry
+
+-- | Both halves of why a run was not clean; whether it was is the caller's call.
+renderRunFailure :: Bool -> Bool -> Text
+renderRunFailure anyFailed anyParked =
+    T.intercalate "; " $ [failedNote | anyFailed] <> [parkedNote | anyParked]
+  where
+    failedNote = "some dispatches failed; inspect with `icarium dispatch list --outcome failure`"
+    parkedNote = "some dispatches stayed parked; land with `icarium dispatch merge --all`"
 
 {- | Structured recovery notes for an interrupted dispatch. Stored, not just
 printed: they land in @dispatches.notes@ and the task's @block_reason@.

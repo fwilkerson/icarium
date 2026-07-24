@@ -2,9 +2,8 @@ module Icarium.Commands.Dispatch (Command, parser, run) where
 
 import Control.Monad (forM, forM_, unless, void, when)
 import Data.Either (fromRight)
-import Data.IORef (IORef, modifyIORef, newIORef, readIORef)
 import Data.List (nub)
-import Data.Maybe (fromMaybe, isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -12,24 +11,16 @@ import Data.Time (UTCTime, getCurrentTime)
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
 import System.Directory (doesDirectoryExist, doesFileExist)
-import System.IO (hPutStrLn, stderr)
-import System.Posix.Signals (Handler (..), installHandler, raiseSignal, sigINT)
 
-import Icarium.Dispatch.LogResult (readLogResult)
 import Icarium.Git qualified as Git
 
 import Icarium.Commands.Util
 import Icarium.Config (Config, DispatchConfig (..), cfgDispatch)
 import Icarium.Db (withDb, withDbSync)
-import Icarium.Dispatch qualified as D
+import Icarium.Dispatch.Drain qualified as Drain
 import Icarium.Dispatch.Merge (MergeOutcome (..), mergeParked)
 import Icarium.Dispatch.PostClaude (checkpointDirtyTree)
-import Icarium.Dispatch.Worktree (
-    WorktreeError (..),
-    teardownWorktree,
-    worktreeErrorText,
-    worktreePath,
- )
+import Icarium.Dispatch.Worktree (teardownWorktree, worktreePath)
 import Icarium.Events qualified as Ev
 import Icarium.Heartbeat (dispatchHealth, healthInterrupted)
 import Icarium.Render qualified as Render
@@ -102,261 +93,39 @@ runP =
                 auto
                 ( long "max"
                     <> metavar "N"
-                    <> help "Cap dispatches in queue mode (ignored with TASK_ID)"
+                    <> help "Cap dispatches when draining the queue; a named TASK_ID is a drain of one"
                 )
             )
         <*> (($ mempty) <$> routingP "this dispatch")
         <*> optional (textOption "base-branch" "NAME" "Override the base branch for git operations")
         <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 
+{- | Flags in, a selector and a cap out. Everything a run decides — what it
+selects, why it stops, what it exits with — belongs to
+"Icarium.Dispatch.Drain"; a named task is a drain whose selector yields once,
+so there is nothing to branch on here.
+-}
 runRun :: FilePath -> RunOpts -> IO ()
 runRun db o = do
     cfg <- requireConfig
-    case rTaskId o of
-        Just rawId ->
-            withDbSync db $ \c -> do
-                tid <- resolveOrFatal (RT.resolveTaskId c rawId)
-                mt <-
-                    if rDryRun o
-                        then -- A dry run previews; it must not move the task.
-                            maybe RT.NoCandidate preview <$> RT.getTask c tid
-                        else do
-                            owner <- defaultOwner
-                            r <- RT.claimTask c tid owner
-                            -- A busy lock claimed nothing; the log is
-                            -- append-only, so a claim event written here
-                            -- could never be retracted.
-                            case r of
-                                RT.Claimed _ from ->
-                                    Ev.emit db "dispatch run" (Ev.TaskClaimed tid from owner)
-                                _ -> pure ()
-                            pure r
-                case mt of
-                    RT.NoCandidate -> fatal 1 ("task not found: " <> T.unpack tid)
-                    RT.LockBusy -> lockBusy ("icarium dispatch run " <> T.unpack tid)
-                    RT.Claimed task _ -> do
-                        eres <-
-                            D.dispatch
-                                c
-                                D.DispatchRequest
-                                    { D.drTask = task
-                                    , D.drConfig = cfg
-                                    , D.drDbPath = db
-                                    , D.drDryRun = rDryRun o
-                                    , D.drRouting = rRouting o
-                                    , D.drBaseOverride = rBase o
-                                    }
-                        case eres of
-                            Left err -> do
-                                release db c o task
-                                fatal 3 (T.unpack (worktreeErrorText err))
-                            Right res -> do
-                                D.applyOutcomeToTask c db task res
-                                summarize res
-                                autoMerge cfg c res >>= mapM_ (uncurry reportSingleAutoMerge)
-        Nothing -> do
-            forM_ (rMax o) $ \n ->
-                when (n <= 0) $ fatal 2 "max must be > 0"
-            sigCount <- newIORef (0 :: Int)
-            let sigHandler = do
-                    modifyIORef sigCount (+ 1)
-                    n <- readIORef sigCount
-                    when (n >= 2) $ do
-                        void $ installHandler sigINT Default Nothing
-                        raiseSignal sigINT
-            void $ installHandler sigINT (Catch sigHandler) Nothing
-            tally <- newIORef emptyTally
-            withDbSync db $ \conn -> do
-                let ctx =
-                        DrainCtx
-                            { dctxDb = db
-                            , dctxOpts = o
-                            , dctxCfg = cfg
-                            , dctxMCap = rMax o
-                            , dctxSigCount = sigCount
-                            , dctxTally = tally
-                            , dctxConn = conn
-                            }
-                drainLoop ctx 0
-            readIORef tally >>= mapM_ (fatal 3 . T.unpack) . drainFailure
-
-{- | A dry run takes the same branch as a claim but moves nothing, so the
-task never left the state it is in. Nothing reads the from-state here: a
-preview emits no claim event.
--}
-preview :: Task -> RT.ClaimResult
-preview t = RT.Claimed t (taskState t)
-
-data DrainCtx = DrainCtx
-    { dctxDb :: FilePath
-    , dctxOpts :: RunOpts
-    , dctxCfg :: Config
-    , dctxMCap :: Maybe Int
-    , dctxSigCount :: IORef Int
-    , dctxTally :: IORef DrainTally
-    , dctxConn :: Connection
-    }
-
--- | What a drain leaves behind, accumulated as it goes.
-data DrainTally = DrainTally
-    { dtFailed :: Int
-    , dtParked :: Int
-    }
-
-emptyTally :: DrainTally
-emptyTally = DrainTally 0 0
-
-countFailed, countParked :: DrainTally -> DrainTally
-countFailed t = t{dtFailed = dtFailed t + 1}
-countParked t = t{dtParked = dtParked t + 1}
-
-{- | The drain's exit is derived from what it accumulated, not picked at
-whichever branch stopped it (ADR 0009): a failed dispatch and one that never
-landed both mean the queue is not clean. Why the drain stopped — cap, SIGINT,
-empty queue — does not enter into it.
--}
-drainFailure :: DrainTally -> Maybe Text
-drainFailure t = case (dtFailed t, dtParked t) of
-    (0, 0) -> Nothing
-    (0, _) -> Just parkedNote
-    (_, 0) -> Just failedNote
-    _ -> Just (failedNote <> "; " <> parkedNote)
-  where
-    failedNote = "some dispatches failed; inspect with `icarium dispatch list --outcome failure`"
-    parkedNote = "some dispatches stayed parked; land with `icarium dispatch merge --all`"
-
-drainLoop :: DrainCtx -> Int -> IO ()
-drainLoop ctx !i
-    | Just cap <- dctxMCap ctx
-    , i >= cap =
-        hPutStrLn stderr ("icarium: reached max dispatches (" <> show cap <> "); stopping")
-    | otherwise = do
-        let conn = dctxConn ctx
-            opts = dctxOpts ctx
-            cfg = dctxCfg ctx
-            db = dctxDb ctx
-        -- Claiming is the selection: taking the queue head and marking it
-        -- in_progress is one atomic step, so racing drains cannot pick the
-        -- same task. A dry run previews the head instead, moving nothing.
-        -- Headless only: 'ready_interactive' is work a human must do.
-        mt <-
-            if rDryRun opts
-                then maybe RT.NoCandidate preview . listToMaybe <$> RT.queueTasks conn [ReadyHeadless]
-                else do
-                    owner <- defaultOwner
-                    r <- RT.claimNextTask conn [ReadyHeadless] owner
-                    case r of
-                        RT.Claimed t from ->
-                            Ev.emit db "dispatch run" (Ev.TaskClaimed (taskId t) from owner)
-                        _ -> pure ()
-                    pure r
-        case mt of
-            RT.NoCandidate -> hPutStrLn stderr "icarium: ready queue empty; stopping"
-            -- Not an empty queue: stopping the drain here would silently leave
-            -- ready work behind, so fail loudly instead.
-            RT.LockBusy -> lockBusy "icarium dispatch run"
-            RT.Claimed t _ -> do
-                hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
-                eres <-
-                    D.dispatch
-                        conn
-                        D.DispatchRequest
-                            { D.drTask = t
-                            , D.drConfig = cfg
-                            , D.drDbPath = db
-                            , D.drDryRun = rDryRun opts
-                            , D.drRouting = rRouting opts
-                            , D.drBaseOverride = rBase opts
-                            }
-                case eres of
-                    -- No work started, so the claim is released either way:
-                    -- capacity may free up later (back-pressure), while a
-                    -- setup error would just repeat.
-                    Left err@(WtNoCapacity _) -> do
-                        release db conn opts t
-                        hPutStrLn stderr $
-                            "icarium: " <> T.unpack (worktreeErrorText err) <> "; stopping"
-                    Left err -> do
-                        release db conn opts t
-                        fatal 3 (T.unpack (worktreeErrorText err))
-                    Right res -> do
-                        D.applyOutcomeToTask conn db t res
-                        TIO.hPutStrLn stderr ("icarium: " <> Render.renderRunOutcome res)
-                        printSummary res
-                        unless (D.dresOutcome res == OSuccess) $
-                            modifyIORef (dctxTally ctx) countFailed
-                        stopped <-
-                            autoMerge cfg conn res >>= \case
-                                Nothing -> pure False
-                                Just (d, out) -> case out of
-                                    MergeLanded sha -> False <$ TIO.putStrLn (Render.renderLanded d sha)
-                                    MergeBlocked _ note -> do
-                                        modifyIORef (dctxTally ctx) countParked
-                                        False <$ TIO.hPutStrLn stderr ("icarium: " <> Render.renderStillParked d note)
-                                    -- Worktree back-pressure is machine-level: the next
-                                    -- dispatch would hit the same wall, so stop the drain.
-                                    MergeStopped note -> do
-                                        modifyIORef (dctxTally ctx) countParked
-                                        True <$ TIO.hPutStrLn stderr ("icarium: " <> note <> "; stopping")
-                        n <- readIORef (dctxSigCount ctx)
-                        -- A dry run leaves the task ready, so recursing would
-                        -- preview the same head forever.
-                        unless (stopped || rDryRun opts) $
-                            if n >= 1
-                                then
-                                    hPutStrLn
-                                        stderr
-                                        "icarium: SIGINT received; stopping after current dispatch"
-                                else drainLoop ctx (i + 1)
-
-{- | Undo a claim whose dispatch never started (no-op under --dry-run,
-which never claimed).
--}
-release :: FilePath -> Connection -> RunOpts -> Task -> IO ()
-release db conn opts t = unless (rDryRun opts) $ do
-    RT.releaseTask conn (taskId t)
-    Ev.emit db "dispatch run" (Ev.TaskUpdated (taskId t) InProgress ReadyHeadless)
-
-{- | Land a just-successful dispatch immediately (attempt-then-park).
-Returns Nothing when there is nothing to land: dry-run, non-success, or
-already merged (no-commit successes are pre-stamped merged).
--}
-autoMerge :: Config -> Connection -> D.DispatchResult -> IO (Maybe (Dispatch, MergeOutcome))
-autoMerge cfg c res
-    | Just did <- D.dresDispatchId res
-    , OSuccess <- D.dresOutcome res =
-        RD.getDispatch c did >>= \case
-            Just d | Nothing <- dispatchMergeSha d -> Just . (d,) <$> mergeParked cfg c d
-            _ -> pure Nothing
-    | otherwise = pure Nothing
-
-{- | Single-run reporting: a dispatch that stays parked is an incomplete
-outcome — exit 3, naming the fixing command.
--}
-reportSingleAutoMerge :: Dispatch -> MergeOutcome -> IO ()
-reportSingleAutoMerge d = \case
-    MergeLanded sha -> TIO.putStrLn (Render.renderLanded d sha)
-    MergeBlocked _ note -> stillParked note
-    MergeStopped note -> stillParked note
-  where
-    stillParked note = fatal 3 (T.unpack (Render.renderStillParked d note))
-
--- | Print the enriched summary block; does not exit on failure.
-printSummary :: D.DispatchResult -> IO ()
-printSummary r = do
-    mLog <- maybe (pure Nothing) readLogResult (D.dresLogPath r)
-    -- Diff against the dispatch branch, which still exists here: the
-    -- auto-merge (which deletes it) runs after this summary. The branch may
-    -- be gone for no-commit runs — changedFiles returns [] then.
-    files <- maybe (pure []) (\sha -> Git.changedFiles "." sha (D.dresBranch r)) (D.dresBaseSha r)
-    TIO.putStr (Render.renderRunSummary r mLog files)
-
-summarize :: D.DispatchResult -> IO ()
-summarize r = do
-    printSummary r
-    case D.dresOutcome r of
-        OSuccess -> pure ()
-        _ -> fatal 3 "dispatch did not succeed"
+    forM_ (rMax o) $ \n -> when (n <= 0) $ fatal 2 "max must be > 0"
+    withDbSync db $ \conn -> do
+        selector <- case rTaskId o of
+            Nothing -> pure Drain.QueueHead
+            Just raw -> Drain.Named <$> resolveOrFatal (RT.resolveTaskId conn raw)
+        report <-
+            Drain.drain
+                Drain.DrainRequest
+                    { Drain.dqConn = conn
+                    , Drain.dqDbPath = db
+                    , Drain.dqConfig = cfg
+                    , Drain.dqSelector = selector
+                    , Drain.dqCap = rMax o
+                    , Drain.dqDryRun = rDryRun o
+                    , Drain.dqRouting = rRouting o
+                    , Drain.dqBaseOverride = rBase o
+                    }
+        forM_ (Drain.runExit report) $ \(code, msg) -> fatal code (T.unpack msg)
 
 -- =============================================================
 -- list

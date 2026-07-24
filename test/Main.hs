@@ -9,6 +9,7 @@ import CliSpec qualified
 import ContextSpec qualified
 import DecideSpec qualified
 import DispatchRepoSpec qualified
+import DrainSpec qualified
 import EventsSpec qualified
 import GateSpec qualified
 import GitSpec qualified
@@ -40,6 +41,7 @@ main =
             , CategoriesSpec.tests
             , CliSpec.tests
             , DecideSpec.tests
+            , DrainSpec.tests
             , EventsSpec.tests
             , GateSpec.tests
             , GitSpec.tests
