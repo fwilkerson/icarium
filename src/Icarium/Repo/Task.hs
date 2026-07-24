@@ -154,9 +154,14 @@ selectTasks conn tbl ord filterStates cats = do
 empty, or the named task is not claimable. 'LockBusy' is not: the write lock
 never came free, so the queue's contents are still unknown. Callers that
 collapse the two report an empty queue to a caller that should retry.
+
+'Claimed' carries the state the task was in *before* the stamp, read under
+the same lock. Deriving it outside lets a racing claimer make the recorded
+value wrong, in an event log that is append-only and never rewritten — so
+there is no way to hold a claim without also holding where it came from.
 -}
 data ClaimResult
-    = Claimed Task
+    = Claimed Task TaskState
     | NoCandidate
     | LockBusy
     deriving (Show)
@@ -179,7 +184,7 @@ The deadline bounds the whole thing: an attempt that burned the 5s
 @busy_timeout@ has already waited out a slow writer, and stacking seven more
 of those would hang a claim for most of a minute to no purpose.
 -}
-withClaimLock :: Connection -> IO (Maybe Task) -> IO ClaimResult
+withClaimLock :: Connection -> IO (Maybe (Task, TaskState)) -> IO ClaimResult
 withClaimLock conn act = do
     started <- getMonotonicTime
     go started [5000, 10000, 20000, 40000, 80000, 160000, 320000]
@@ -187,7 +192,7 @@ withClaimLock conn act = do
     go started delays = do
         r <- try (withImmediateTransaction conn act)
         case r of
-            Right (Just t) -> pure (Claimed t)
+            Right (Just (t, from)) -> pure (Claimed t from)
             Right Nothing -> pure NoCandidate
             Left e
                 | sqlError e `notElem` [ErrorBusy, ErrorLocked] -> throwIO e
@@ -215,7 +220,7 @@ claimNextTask conn states owner = withClaimLock conn $ do
         query
             conn
             ( Query $
-                "SELECT id FROM ready_tasks WHERE state IN "
+                "SELECT id, state FROM ready_tasks WHERE state IN "
                     <> inClause states
                     <> " ORDER BY "
                     <> readyOrder
@@ -224,9 +229,7 @@ claimNextTask conn states owner = withClaimLock conn $ do
             (map (SQLText . taskStateText) states)
     case rows of
         [] -> pure Nothing
-        (Only tid : _) -> do
-            stampClaim conn tid owner
-            getTask conn tid
+        ((tid, from) : _) -> stampAndRead conn tid owner from
 
 {- | Claim a *named* task, provided it is still in a ready-ish state.
 'NoCandidate' when it is not — the caller reports why. Unlike
@@ -239,13 +242,11 @@ claimReadyTask conn tid owner = withClaimLock conn $ do
     rows <-
         query
             conn
-            (Query $ "SELECT id FROM tasks WHERE id = ? AND state IN " <> inClause readyStates)
+            (Query $ "SELECT state FROM tasks WHERE id = ? AND state IN " <> inClause readyStates)
             (SQLText tid : map (SQLText . taskStateText) readyStates)
-    case rows :: [Only Text] of
+    case rows of
         [] -> pure Nothing
-        _ -> do
-            stampClaim conn tid owner
-            getTask conn tid
+        (Only from : _) -> stampAndRead conn tid owner from
 
 {- | Claim a named task regardless of queue position or state. @dispatch
 run TASK_ID@ re-runs tasks that are blocked or already in progress, so a
@@ -254,8 +255,18 @@ naming the task is itself the selection.
 -}
 claimTask :: Connection -> Text -> Text -> IO ClaimResult
 claimTask conn tid owner = withClaimLock conn $ do
+    rows <- query conn "SELECT state FROM tasks WHERE id = ?" (Only tid)
+    case rows of
+        [] -> pure Nothing
+        (Only from : _) -> stampAndRead conn tid owner from
+
+{- | Stamp the claim and read back the claimed row, pairing it with the
+state observed before the stamp. Both halves run inside the claim lock.
+-}
+stampAndRead :: Connection -> Text -> Text -> TaskState -> IO (Maybe (Task, TaskState))
+stampAndRead conn tid owner from = do
     stampClaim conn tid owner
-    getTask conn tid
+    fmap (,from) <$> getTask conn tid
 
 stampClaim :: Connection -> Text -> Text -> IO ()
 stampClaim conn tid owner =

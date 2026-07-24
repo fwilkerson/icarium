@@ -38,6 +38,13 @@ tests =
             , testCase "a claim retries until the write lock frees" testClaimRetriesUntilLockFrees
             ]
         , testGroup
+            "the claim reports the state it took the task from"
+            [ testCase "queue head" testClaimNextReportsFrom
+            , testCase "named task, if ready" testClaimReadyReportsFrom
+            , testCase "named task, regardless of state" testClaimTaskReportsFrom
+            , testCase "no candidate yields no from-state" testNoCandidateHasNoFrom
+            ]
+        , testGroup
             "dependency gating on merged"
             [ testCase "parked dependency blocks dependent" testParkedDepBlocks
             , testCase "merged dependency unblocks dependent" testMergedDepUnblocks
@@ -83,11 +90,14 @@ testInteractiveDepsGated = withTestDb $ \c -> do
     ready' @?= [dependent]
 
 -- | Uncontended claims can only be Claimed or NoCandidate; drop to a Maybe.
-claimedTask :: RT.ClaimResult -> Maybe Task
-claimedTask = \case
-    RT.Claimed t -> Just t
+claimed :: RT.ClaimResult -> Maybe (Task, TaskState)
+claimed = \case
+    RT.Claimed t from -> Just (t, from)
     RT.NoCandidate -> Nothing
     RT.LockBusy -> error "LockBusy on a connection nothing else is using"
+
+claimedTask :: RT.ClaimResult -> Maybe Task
+claimedTask = fmap fst . claimed
 
 {- | Dispatch and the interactive CLI share one claim path and differ only
 in which states they will take.
@@ -99,9 +109,9 @@ testClaimNextTaskStateFiltered = withTestDb $ \c -> do
     headlessClaim <- RT.claimNextTask c [ReadyHeadless] "dispatch"
     assertBool "headless queue does not see interactive work" (isNothing (claimedTask headlessClaim))
 
-    claimed <- claimedTask <$> RT.claimNextTask c [ReadyInteractive] "human"
-    fmap taskId claimed @?= Just interactive
-    fmap taskState claimed @?= Just InProgress
+    got <- claimedTask <$> RT.claimNextTask c [ReadyInteractive] "human"
+    fmap taskId got @?= Just interactive
+    fmap taskState got @?= Just InProgress
 
 testClaimReadyTaskNamed :: IO ()
 testClaimReadyTaskNamed = withTestDb $ \c -> do
@@ -123,6 +133,62 @@ testClaimReadyTaskRefusesNonReady = withTestDb $ \c -> do
     assertBool "planned task refused" (isNothing (claimedTask r))
     still <- RT.getTask c planned
     fmap taskState still @?= Just Planned
+
+-- =============================================================
+-- The from-state
+-- =============================================================
+
+claimedFrom :: RT.ClaimResult -> Maybe TaskState
+claimedFrom = fmap snd . claimed
+
+testClaimNextReportsFrom :: IO ()
+testClaimNextReportsFrom = withTestDb $ \c -> do
+    _ <- mkTaskIn c "Headless work" ReadyHeadless
+    _ <- mkTaskIn c "Interactive work" ReadyInteractive
+
+    h <- RT.claimNextTask c [ReadyHeadless] "dispatch"
+    claimedFrom h @?= Just ReadyHeadless
+
+    i <- RT.claimNextTask c [ReadyInteractive] "human"
+    claimedFrom i @?= Just ReadyInteractive
+
+testClaimReadyReportsFrom :: IO ()
+testClaimReadyReportsFrom = withTestDb $ \c -> do
+    headless <- mkTaskIn c "Headless work" ReadyHeadless
+    interactive <- mkTaskIn c "Interactive work" ReadyInteractive
+
+    h <- RT.claimReadyTask c headless "human"
+    claimedFrom h @?= Just ReadyHeadless
+
+    i <- RT.claimReadyTask c interactive "human"
+    claimedFrom i @?= Just ReadyInteractive
+
+{- | This form takes a task in any state, so the from-state is the only
+record of where it came from — and it can only be read under the lock.
+-}
+testClaimTaskReportsFrom :: IO ()
+testClaimTaskReportsFrom = withTestDb $ \c -> do
+    blocked <- mkTaskIn c "Blocked work" Blocked
+    b <- RT.claimTask c blocked "dispatch"
+    claimedFrom b @?= Just Blocked
+    fmap taskState (claimedTask b) @?= Just InProgress
+
+    -- A re-run of work already in progress reports in_progress, not the
+    -- ready state the task passed through earlier.
+    again <- RT.claimTask c blocked "dispatch"
+    claimedFrom again @?= Just InProgress
+
+testNoCandidateHasNoFrom :: IO ()
+testNoCandidateHasNoFrom = withTestDb $ \c -> do
+    empty' <- RT.claimNextTask c [ReadyHeadless] "dispatch"
+    claimedFrom empty' @?= Nothing
+
+    planned <- mkTaskIn c "Under-specified" Planned
+    refused <- RT.claimReadyTask c planned "human"
+    claimedFrom refused @?= Nothing
+
+    missing <- RT.claimTask c "01MISSING0000000000000000" "dispatch"
+    claimedFrom missing @?= Nothing
 
 {- | Two connections onto one file DB, neither with a busy_timeout, so a
 held write lock surfaces as SQLITE_BUSY immediately — the contention the
@@ -159,9 +225,10 @@ testClaimRetriesUntilLockFrees = withRacingConns $ \claimer holder -> do
     _ <- forkIO (threadDelay 50000 >> execute_ holder "ROLLBACK")
     r <- RT.claimNextTask claimer [ReadyInteractive] "human"
     case r of
-        RT.Claimed t -> do
+        RT.Claimed t from -> do
             taskId t @?= tid
             taskState t @?= InProgress
+            from @?= ReadyInteractive
         other -> assertFailure ("expected a claim, got " <> show other)
 
 -- =============================================================

@@ -502,18 +502,12 @@ runClaim db o = do
     withDb db $ \c -> do
         owner <- maybe defaultOwner pure (clOwner o)
         mtid <- traverse (resolveOrFatal . RT.resolveTaskId c) (clId o)
-        -- The state the claim took the task *from*: for the queue form the
-        -- query itself guarantees it; for a named task it must be read
-        -- before the stamp overwrites it.
-        (res, from) <- case mtid of
-            Nothing -> (,Just ReadyInteractive) <$> RT.claimNextTask c [ReadyInteractive] owner
-            Just tid -> do
-                before <- RT.getTask c tid
-                (,taskState <$> before) <$> RT.claimReadyTask c tid owner
+        res <- case mtid of
+            Nothing -> RT.claimNextTask c [ReadyInteractive] owner
+            Just tid -> RT.claimReadyTask c tid owner
         case res of
-            RT.Claimed t -> do
-                forM_ from $ \was ->
-                    Ev.emit db "task claim" (Ev.TaskClaimed (taskId t) was owner)
+            RT.Claimed t from -> do
+                Ev.emit db "task claim" (Ev.TaskClaimed (taskId t) from owner)
                 TIO.putStrLn (taskId t)
             RT.LockBusy -> lockBusy "icarium task claim"
             -- Exit 1 with no output is the empty-queue signal scripts read;

@@ -116,11 +116,10 @@ runRun db o = do
         Just rawId ->
             withDbSync db $ \c -> do
                 tid <- resolveOrFatal (RT.resolveTaskId c rawId)
-                -- A dry run previews; it must not move the task.
-                before <- RT.getTask c tid
                 mt <-
                     if rDryRun o
-                        then pure (maybe RT.NoCandidate RT.Claimed before)
+                        then -- A dry run previews; it must not move the task.
+                            maybe RT.NoCandidate preview <$> RT.getTask c tid
                         else do
                             owner <- defaultOwner
                             r <- RT.claimTask c tid owner
@@ -128,15 +127,14 @@ runRun db o = do
                             -- append-only, so a claim event written here
                             -- could never be retracted.
                             case r of
-                                RT.Claimed _ ->
-                                    forM_ before $ \t ->
-                                        Ev.emit db "dispatch run" (Ev.TaskClaimed tid (taskState t) owner)
+                                RT.Claimed _ from ->
+                                    Ev.emit db "dispatch run" (Ev.TaskClaimed tid from owner)
                                 _ -> pure ()
                             pure r
                 case mt of
                     RT.NoCandidate -> fatal 1 ("task not found: " <> T.unpack tid)
                     RT.LockBusy -> lockBusy ("icarium dispatch run " <> T.unpack tid)
-                    RT.Claimed task -> do
+                    RT.Claimed task _ -> do
                         eres <-
                             D.dispatch
                                 c
@@ -184,6 +182,13 @@ runRun db o = do
             when (parked > 0) $
                 fatal 3 "some dispatches stayed parked; land with `icarium dispatch merge --all`"
 
+{- | A dry run takes the same branch as a claim but moves nothing, so the
+task never left the state it is in. Nothing reads the from-state here: a
+preview emits no claim event.
+-}
+preview :: Task -> RT.ClaimResult
+preview t = RT.Claimed t (taskState t)
+
 data DrainCtx = DrainCtx
     { dctxDb :: FilePath
     , dctxOpts :: RunOpts
@@ -210,14 +215,13 @@ drainLoop ctx !i
         -- Headless only: 'ready_interactive' is work a human must do.
         mt <-
             if rDryRun opts
-                then maybe RT.NoCandidate RT.Claimed . listToMaybe <$> RT.queueTasks conn [ReadyHeadless]
+                then maybe RT.NoCandidate preview . listToMaybe <$> RT.queueTasks conn [ReadyHeadless]
                 else do
                     owner <- defaultOwner
                     r <- RT.claimNextTask conn [ReadyHeadless] owner
                     case r of
-                        -- The queue it drew from names the state it came from.
-                        RT.Claimed t ->
-                            Ev.emit db "dispatch run" (Ev.TaskClaimed (taskId t) ReadyHeadless owner)
+                        RT.Claimed t from ->
+                            Ev.emit db "dispatch run" (Ev.TaskClaimed (taskId t) from owner)
                         _ -> pure ()
                     pure r
         case mt of
@@ -225,7 +229,7 @@ drainLoop ctx !i
             -- Not an empty queue: stopping the drain here would silently leave
             -- ready work behind, so fail loudly instead.
             RT.LockBusy -> lockBusy "icarium dispatch run"
-            RT.Claimed t -> do
+            RT.Claimed t _ -> do
                 hPutStrLn stderr $ "icarium: dispatching " <> T.unpack (taskId t)
                 eres <-
                     D.dispatch
