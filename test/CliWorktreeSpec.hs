@@ -54,6 +54,7 @@ tests =
         , testCase "dispatch run: racing drains never select the same task" testDrainClaimIsAtomic
         , testCase "dispatch: claude failure blocks task, retains branch, removes worktree" testDispatchFailBlocks
         , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
+        , testCase "dispatch run (drain): a failed dispatch exits 3" testDrainFailedDispatchExits3
         , testCase "dispatch: worktree_setup exit 75 stops drain cleanly" testWorktreeSetup75
         , testCase "dispatch: worktree_setup nonzero errors a single run" testWorktreeSetupErr
         , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
@@ -394,6 +395,23 @@ testDispatchFailBlocks = withDispatchRepo $ \dir db -> do
     headAfter @?= baseSha
     status <- gitOut dir ["status", "--porcelain"]
     assertBool "invoking checkout clean" (null status)
+
+{- | ADR 0009: a drain that dispatched and failed is not a clean drain.
+Both tasks fail, the queue then empties, and the run still exits 3 naming
+where to look — the drain agrees with the single named form.
+-}
+testDrainFailedDispatchExits3 :: IO ()
+testDrainFailedDispatchExits3 = withDispatchRepo $ \dir db -> do
+    tidA <- addReadyTask dir db "drain fail alpha"
+    tidB <- addReadyTask dir db "drain fail beta"
+    (code, _, err) <- runDispatch dir db (Just "fail") ["dispatch", "run"]
+    code @?= ExitFailure 3
+    assertBool "drain reports the failures" ("dispatches failed" `isInfixOf` err)
+    assertBool "message names where to look" ("dispatch list --outcome failure" `isInfixOf` err)
+    assertBool "drain still ran to an empty queue" ("ready queue empty" `isInfixOf` err)
+    forM_ [tidA, tidB] $ \tid -> do
+        (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+        assertBool "task blocked" ("blocked" `isInfixOf` taskOut)
 
 -- Scenario 6b: agent leaves a dirty tree -> failure, the dirty state is
 -- checkpointed as a wip commit on the retained dispatch branch.

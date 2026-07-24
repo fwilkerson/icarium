@@ -52,7 +52,7 @@ parser =
     subparser
         ( subcmd
             "run"
-            "Run one dispatch (with TASK_ID) or drain the ready queue in priority order (no TASK_ID, optionally --max N)."
+            "Run one dispatch (with TASK_ID) or drain the ready queue in priority order (no TASK_ID, optionally --max N). Exit 3 if any dispatch failed or stayed parked; exit 0 only when everything selected succeeded and landed."
             (Run <$> runP)
             <> subcmd "list" "List dispatches (alias: ls)" (List <$> listP)
             <> subcmd "show" "Show a single dispatch" (Show <$> showP)
@@ -165,7 +165,7 @@ runRun db o = do
                         void $ installHandler sigINT Default Nothing
                         raiseSignal sigINT
             void $ installHandler sigINT (Catch sigHandler) Nothing
-            parkedCount <- newIORef (0 :: Int)
+            tally <- newIORef emptyTally
             withDbSync db $ \conn -> do
                 let ctx =
                         DrainCtx
@@ -174,13 +174,11 @@ runRun db o = do
                             , dctxCfg = cfg
                             , dctxMCap = rMax o
                             , dctxSigCount = sigCount
-                            , dctxParkedCount = parkedCount
+                            , dctxTally = tally
                             , dctxConn = conn
                             }
                 drainLoop ctx 0
-            parked <- readIORef parkedCount
-            when (parked > 0) $
-                fatal 3 "some dispatches stayed parked; land with `icarium dispatch merge --all`"
+            readIORef tally >>= mapM_ (fatal 3 . T.unpack) . drainFailure
 
 {- | A dry run takes the same branch as a claim but moves nothing, so the
 task never left the state it is in. Nothing reads the from-state here: a
@@ -195,9 +193,37 @@ data DrainCtx = DrainCtx
     , dctxCfg :: Config
     , dctxMCap :: Maybe Int
     , dctxSigCount :: IORef Int
-    , dctxParkedCount :: IORef Int
+    , dctxTally :: IORef DrainTally
     , dctxConn :: Connection
     }
+
+-- | What a drain leaves behind, accumulated as it goes.
+data DrainTally = DrainTally
+    { dtFailed :: Int
+    , dtParked :: Int
+    }
+
+emptyTally :: DrainTally
+emptyTally = DrainTally 0 0
+
+countFailed, countParked :: DrainTally -> DrainTally
+countFailed t = t{dtFailed = dtFailed t + 1}
+countParked t = t{dtParked = dtParked t + 1}
+
+{- | The drain's exit is derived from what it accumulated, not picked at
+whichever branch stopped it (ADR 0009): a failed dispatch and one that never
+landed both mean the queue is not clean. Why the drain stopped — cap, SIGINT,
+empty queue — does not enter into it.
+-}
+drainFailure :: DrainTally -> Maybe Text
+drainFailure t = case (dtFailed t, dtParked t) of
+    (0, 0) -> Nothing
+    (0, _) -> Just parkedNote
+    (_, 0) -> Just failedNote
+    _ -> Just (failedNote <> "; " <> parkedNote)
+  where
+    failedNote = "some dispatches failed; inspect with `icarium dispatch list --outcome failure`"
+    parkedNote = "some dispatches stayed parked; land with `icarium dispatch merge --all`"
 
 drainLoop :: DrainCtx -> Int -> IO ()
 drainLoop ctx !i
@@ -257,18 +283,20 @@ drainLoop ctx !i
                         D.applyOutcomeToTask conn db t res
                         TIO.hPutStrLn stderr ("icarium: " <> Render.renderRunOutcome res)
                         printSummary res
+                        unless (D.dresOutcome res == OSuccess) $
+                            modifyIORef (dctxTally ctx) countFailed
                         stopped <-
                             autoMerge cfg conn res >>= \case
                                 Nothing -> pure False
                                 Just (d, out) -> case out of
                                     MergeLanded sha -> False <$ TIO.putStrLn (Render.renderLanded d sha)
                                     MergeBlocked _ note -> do
-                                        modifyIORef (dctxParkedCount ctx) (+ 1)
+                                        modifyIORef (dctxTally ctx) countParked
                                         False <$ TIO.hPutStrLn stderr ("icarium: " <> Render.renderStillParked d note)
                                     -- Worktree back-pressure is machine-level: the next
                                     -- dispatch would hit the same wall, so stop the drain.
                                     MergeStopped note -> do
-                                        modifyIORef (dctxParkedCount ctx) (+ 1)
+                                        modifyIORef (dctxTally ctx) countParked
                                         True <$ TIO.hPutStrLn stderr ("icarium: " <> note <> "; stopping")
                         n <- readIORef (dctxSigCount ctx)
                         -- A dry run leaves the task ready, so recursing would

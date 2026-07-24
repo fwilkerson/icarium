@@ -225,6 +225,13 @@ it. Being in the queue is stricter than the state alone — the `ready_tasks` vi
 In-progress or blocked upstreams are not satisfied. If `worktree_setup` exits 75 (no capacity) the
 drain stops cleanly, leaving the task untouched; any other setup failure stops with an error.
 
+**A drain's exit code reflects partial failure** ([ADR 0009](docs/adr/0009-drain-exit-code-reflects-partial-failure.md)).
+Exit 3 when any dispatch failed or any dispatch stayed parked; exit 0 only when every task selected
+was dispatched, succeeded, and landed — an empty queue included. Reaching `--max` or taking a SIGINT
+is a stop *reason*, not a failure: neither raises the code by itself, but dispatches that failed
+before the stop still do. A *named* task that does not resolve stays exit 1 — that is the selection
+failing, not the work.
+
 **Failure quarantine.** When a dispatch fails, the task is moved to `state='blocked'`. Because
 `blocked` is not `done`, any task depending on it drops out of the ready queue — quarantined with no
 explicit action. Independent tasks keep draining.
