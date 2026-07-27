@@ -8,6 +8,7 @@ module Icarium.Render (
     renderTaskPrompt,
     untaggedPromptWarning,
     untaggedAddNudge,
+    emptyBodyNudge,
     TaskRow (..),
     renderTaskList,
     mkBar,

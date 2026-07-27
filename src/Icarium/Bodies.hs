@@ -2,6 +2,7 @@ module Icarium.Bodies (
     bodiesDir,
     taskBodyPath,
     ctxBodyPath,
+    nodeBodyPath,
     ensureBodiesDirs,
     writeBody,
     readBody,
@@ -24,6 +25,11 @@ taskBodyPath bodDir tid = bodDir </> "tasks" </> (T.unpack tid ++ ".md")
 
 ctxBodyPath :: FilePath -> Text -> FilePath
 ctxBodyPath bodDir cid = bodDir </> "contexts" </> (T.unpack cid ++ ".md")
+
+-- | The one place the task/context body-path choice is made.
+nodeBodyPath :: FilePath -> NodeKind -> Text -> FilePath
+nodeBodyPath bodDir TaskNode = taskBodyPath bodDir
+nodeBodyPath bodDir ContextNode = ctxBodyPath bodDir
 
 ensureBodiesDirs :: FilePath -> IO ()
 ensureBodiesDirs bodDir = do
@@ -48,9 +54,7 @@ to the printed path without a forced no-op Read of an empty stub.
 persistBody :: FilePath -> NodeKind -> Text -> Text -> IO FilePath
 persistBody db kind nid body = do
     let bodDir = bodiesDir db
-        fp = case kind of
-            TaskNode -> taskBodyPath bodDir nid
-            ContextNode -> ctxBodyPath bodDir nid
+        fp = nodeBodyPath bodDir kind nid
     ensureBodiesDirs bodDir
     unless (T.null body) $ writeBody fp body
     pure fp

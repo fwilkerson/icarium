@@ -74,6 +74,7 @@ library
                       Icarium.Commands.Doctor
                       Icarium.Commands.Task
                       Icarium.Commands.Ctx
+                      Icarium.Commands.Node
                       Icarium.Commands.Link
                       Icarium.Commands.Category
                       Icarium.Commands.Dispatch

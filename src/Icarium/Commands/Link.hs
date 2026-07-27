@@ -6,6 +6,7 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Options.Applicative
 
+import Icarium.Commands.Node (resolveNode)
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Render qualified as Render

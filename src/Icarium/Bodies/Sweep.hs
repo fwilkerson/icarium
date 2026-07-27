@@ -19,7 +19,7 @@ import System.Directory (
 import System.FilePath (dropExtension, takeDirectory, takeExtension, (</>))
 import System.IO (hPutStrLn, stderr)
 
-import Icarium.Bodies (bodiesDir, ctxBodyPath, ensureBodiesDirs, taskBodyPath, writeBody)
+import Icarium.Bodies (bodiesDir, ensureBodiesDirs, nodeBodyPath, taskBodyPath, writeBody)
 import Icarium.Repo.Context qualified as Repo.Context
 import Icarium.Repo.Fts qualified as Fts
 import Icarium.Repo.Task qualified as Repo.Task
@@ -75,7 +75,7 @@ sweepKind :: Connection -> FilePath -> NodeKind -> IO ()
 sweepKind conn bodDir kind = do
     entries <- listIdTimes conn kind
     forM_ entries $ \(eid, updAt) -> do
-        let fp = bodyPath bodDir kind eid
+        let fp = nodeBodyPath bodDir kind eid
         exists <- doesFileExist fp
         if not exists
             then migrateBodyToFile conn kind eid fp
@@ -123,10 +123,6 @@ orphanScan conn bodDir tDir kind = do
 kindDir :: FilePath -> NodeKind -> FilePath
 kindDir bodDir TaskNode = bodDir </> "tasks"
 kindDir bodDir ContextNode = bodDir </> "contexts"
-
-bodyPath :: FilePath -> NodeKind -> Text -> FilePath
-bodyPath bodDir TaskNode eid = taskBodyPath bodDir eid
-bodyPath bodDir ContextNode eid = ctxBodyPath bodDir eid
 
 listIdTimes :: Connection -> NodeKind -> IO [(Text, Text)]
 listIdTimes conn TaskNode = Repo.Task.listTaskIdTimes conn

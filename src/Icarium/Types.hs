@@ -18,6 +18,7 @@ module Icarium.Types (
     parseEdgeKindDb,
     NodeKind (..),
     nodeKindText,
+    nodeKindCli,
     CategoryAxis (..),
     categoryAxisText,
     parseCategoryAxis,
@@ -218,9 +219,23 @@ parseEdgeKindDb = \case
 
 data NodeKind = TaskNode | ContextNode deriving (Show, Eq)
 
+{- | The /persisted/ spelling: @task@ / @context@. This is the FTS @kind@
+column and what @search --kind@ parses, so changing it needs a migration. It
+is also what @not found@ messages name. For the CLI command group, use
+'nodeKindCli'.
+-}
 nodeKindText :: NodeKind -> Text
 nodeKindText TaskNode = "task"
 nodeKindText ContextNode = "context"
+
+{- | The /CLI/ spelling: @task@ / @ctx@. This is the command group, and the
+event-log Actor is the CLI command — so a deletion's actor reads @ctx rm@.
+Pick 'nodeKindText' here and the log names a command nobody can run. For the
+persisted @kind@ column, use 'nodeKindText'.
+-}
+nodeKindCli :: NodeKind -> Text
+nodeKindCli TaskNode = "task"
+nodeKindCli ContextNode = "ctx"
 
 parseNodeKind :: Text -> Maybe NodeKind
 parseNodeKind = \case

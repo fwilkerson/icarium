@@ -3,6 +3,7 @@ module Icarium.Render.Task (
     renderTaskPrompt,
     untaggedPromptWarning,
     untaggedAddNudge,
+    emptyBodyNudge,
     TaskRow (..),
     renderTaskList,
     mkBar,
@@ -167,6 +168,13 @@ untaggedAddNudge :: Text -> [Text]
 untaggedAddNudge tid =
     [ "# next: Untagged — no context will auto-pull."
     , "#       icarium task update " <> tid <> " --domain <name>"
+    ]
+
+-- | Shown on @add@ with no body: where to Write it, how to edit it later.
+emptyBodyNudge :: NodeKind -> Text -> FilePath -> [Text]
+emptyBodyNudge kind nid fp =
+    [ "# next: Write your markdown to " <> T.pack fp
+    , "# to edit later: Read $(icarium " <> nodeKindCli kind <> " path " <> nid <> ") then Edit"
     ]
 
 promptDeps :: [Task] -> [Text]

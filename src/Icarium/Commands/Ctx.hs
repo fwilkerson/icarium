@@ -8,11 +8,11 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
-import System.Directory (doesFileExist, removeFile)
 import System.Environment (lookupEnv)
-import System.IO (hPutStrLn, stderr)
+import System.IO (stderr)
 
-import Icarium.Bodies (bodiesDir, ctxBodyPath, readBody)
+import Icarium.Bodies (bodiesDir, ctxBodyPath)
+import Icarium.Commands.Node qualified as Node
 import Icarium.Commands.Util
 import Icarium.Db (withDb)
 import Icarium.Events qualified as Ev
@@ -31,9 +31,9 @@ data Command
     | Show ShowOpts
     | Update UpdateOpts
     | Curate CurateOpts
-    | Rm RmOpts
-    | Path PathOpts
-    | Cat CatOpts
+    | Rm Text
+    | Path Text
+    | Cat Text
     | Children ChildrenOpts
     | Tree TreeOpts
     | Exists ExistsOpts
@@ -46,9 +46,9 @@ parser =
             <> subcmd "show" "Show context metadata. The body is intentionally not printed: Read $(icarium ctx path <id>) so a subsequent Edit can succeed (Claude Code's Edit tool requires a prior Read of the same path)." (Show <$> showP)
             <> subcmd "update" "Update context metadata. To edit the body: Read $(icarium ctx path <id>) then Edit." (Update <$> updateP)
             <> subcmd "curate" "Record a curation disposition for an entry (guidance | rule | refactor | keep | stale). Bare form lists the curation queue: never-curated entries, plus aged ones with --older-than." (Curate <$> curateP)
-            <> subcmd "rm" "Delete a context entry" (Rm <$> rmP)
-            <> subcmd "path" "Print body file path for a context entry (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
-            <> subcmd "cat" "Print body of a context entry to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
+            <> subcmd "rm" "Delete a context entry" (Rm <$> Node.nodeIdArg ContextNode)
+            <> subcmd "path" "Print body file path for a context entry (the body is a markdown file you Read/Edit directly)." (Path <$> Node.nodeIdArg ContextNode)
+            <> subcmd "cat" "Print body of a context entry to stdout. Exit non-zero if the body file is missing." (Cat <$> Node.nodeIdArg ContextNode)
             <> subcmd "children" "List direct context children of a context entry (entries that derive from, reference, or supersede it)." (Children <$> childrenP)
             <> subcmd "tree" "Recursive tree of context children, indented. Cycle-safe." (Tree <$> treeP)
             <> subcmd "exists" "Check whether a context id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
@@ -61,12 +61,12 @@ run db = \case
     Show o -> runShow db o
     Update o -> runUpdate db o
     Curate o -> runCurate db o
-    Rm o -> runRm db o
-    Path o -> runPath db o
-    Cat o -> runCat db o
+    Rm t -> Node.runRm ContextNode db t
+    Path t -> Node.runPath ContextNode db t
+    Cat t -> Node.runCat ContextNode db t
     Children o -> runChildren db o
     Tree o -> runTree db o
-    Exists o -> runExists db o
+    Exists o -> Node.runExists ContextNode db (exVerbose o) (exId o)
 
 -- =============================================================
 -- add
@@ -98,8 +98,8 @@ runAdd db o = withDb db $ \c -> do
     -- Pre-validate category names and any referenced ids.
     mDomain <- mapM (requireCategory c Domain) (aDomain o)
     mDisc <- mapM (requireCategory c Discipline) (aDiscipline o)
-    derived <- mapM (resolveNode c) (aDerivedFrom o)
-    mSupersedesId <- mapM (requireContext c) (aSupersedes o)
+    derived <- mapM (Node.resolveNode c) (aDerivedFrom o)
+    mSupersedesId <- mapM (Node.requireContext c) (aSupersedes o)
 
     mTaskId <- lookupEnv "ICARIUM_TASK_ID"
 
@@ -127,9 +127,8 @@ runAdd db o = withDb db $ \c -> do
     Ev.emit db "ctx add" (Ev.CtxCreated cxid)
     TIO.putStrLn cxid
     TIO.putStrLn (T.pack fp)
-    when (T.null body) $ do
-        hPutStrLn stderr ("# next: Write your markdown to " <> fp)
-        hPutStrLn stderr ("# to edit later: Read $(icarium ctx path " <> T.unpack cxid <> ") then Edit")
+    when (T.null body) $
+        mapM_ (TIO.hPutStrLn stderr) (Render.emptyBodyNudge ContextNode cxid fp)
 
 -- =============================================================
 -- list
@@ -206,8 +205,8 @@ data ShowOpts = ShowOpts
 
 showP :: Parser ShowOpts
 showP =
-    ShowOpts . T.pack
-        <$> strArgument (metavar "CONTEXT_ID")
+    ShowOpts
+        <$> Node.nodeIdArg ContextNode
         <*> jsonFlag
 
 runShow :: FilePath -> ShowOpts -> IO ()
@@ -235,8 +234,8 @@ data UpdateOpts = UpdateOpts
 
 updateP :: Parser UpdateOpts
 updateP =
-    UpdateOpts . T.pack
-        <$> strArgument (metavar "CONTEXT_ID")
+    UpdateOpts
+        <$> Node.nodeIdArg ContextNode
         <*> optional (textOption "title" "TEXT" "Replace entry title. Keep ≤ 72 chars; longer titles are truncated in `ctx list`.")
         <*> optional (textOption "domain" "NAME" "Replace domain category; empty string clears")
         <*> optional (textOption "discipline" "NAME" "Replace discipline category; empty string clears")
@@ -328,8 +327,8 @@ requireArtifact c disp mArtifact = case (disp, mArtifact) of
     (Guidance, Nothing) -> missing "guidance" "the destination doc/skill path"
     (Rule, Nothing) -> missing "rule" "the rule/invariant/test name"
     (Refactor, Nothing) -> missing "refactor" "the filed task id"
-    (Refactor, Just a) -> Just <$> requireTask c a
-    (Stale, Just a) -> Just <$> requireContext c a
+    (Refactor, Just a) -> Just <$> Node.requireTask c a
+    (Stale, Just a) -> Just <$> Node.requireContext c a
     (Keep, Just _) -> fatal 2 "keep records no artifact; drop --artifact"
     (_, a) -> pure a
   where
@@ -357,56 +356,6 @@ runCurateQueue db o = do
                 TIO.putStr (Render.renderCurationQueue utf8 rows)
 
 -- =============================================================
--- rm
--- =============================================================
-
-newtype RmOpts = RmOpts {rId :: Text}
-
-rmP :: Parser RmOpts
-rmP = RmOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
-
-runRm :: FilePath -> RmOpts -> IO ()
-runRm db o = withDb db $ \c -> do
-    cxid <- resolveOrFatal (RCx.resolveContextId c (rId o))
-    ok <- RCx.deleteContext c cxid
-    if ok
-        then do
-            let fp = ctxBodyPath (bodiesDir db) cxid
-            exists <- doesFileExist fp
-            when exists $ removeFile fp
-            Ev.emit db "ctx rm" (Ev.CtxDeleted cxid)
-            TIO.putStrLn ("deleted " <> cxid)
-        else fatal 1 ("context not found: " <> T.unpack (rId o))
-
--- =============================================================
--- path
--- =============================================================
-
-newtype PathOpts = PathOpts {pId :: Text}
-
-pathP :: Parser PathOpts
-pathP = PathOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
-
-runPath :: FilePath -> PathOpts -> IO ()
-runPath db o = withDb db $ \c -> do
-    cxid <- resolveOrFatal (RCx.resolveContextId c (pId o))
-    TIO.putStrLn (T.pack (ctxBodyPath (bodiesDir db) cxid))
-
--- =============================================================
--- cat
--- =============================================================
-
-newtype CatOpts = CatOpts {catId :: Text}
-
-catP :: Parser CatOpts
-catP = CatOpts . T.pack <$> strArgument (metavar "CONTEXT_ID")
-
-runCat :: FilePath -> CatOpts -> IO ()
-runCat db o = withDb db $ \c -> do
-    cxid <- resolveOrFatal (RCx.resolveContextId c (catId o))
-    TIO.putStr =<< readBody (ctxBodyPath (bodiesDir db) cxid)
-
--- =============================================================
 -- children
 -- =============================================================
 
@@ -418,8 +367,8 @@ data ChildrenOpts = ChildrenOpts
 
 childrenP :: Parser ChildrenOpts
 childrenP =
-    ChildrenOpts . T.pack
-        <$> strArgument (metavar "CONTEXT_ID")
+    ChildrenOpts
+        <$> Node.nodeIdArg ContextNode
         <*> optional
             ( option
                 edgeKindReader
@@ -450,8 +399,8 @@ data TreeOpts = TreeOpts
 
 treeP :: Parser TreeOpts
 treeP =
-    TreeOpts . T.pack
-        <$> strArgument (metavar "CONTEXT_ID")
+    TreeOpts
+        <$> Node.nodeIdArg ContextNode
         <*> jsonFlag
 
 runTree :: FilePath -> TreeOpts -> IO ()
@@ -489,10 +438,6 @@ data ExistsOpts = ExistsOpts
 
 existsP :: Parser ExistsOpts
 existsP =
-    ExistsOpts . T.pack
-        <$> strArgument (metavar "CONTEXT_ID")
+    ExistsOpts
+        <$> Node.nodeIdArg ContextNode
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
-
-runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDb db $ \c ->
-    reportExists (RCx.getContextsByPrefix c) contextId "contexts" (exVerbose o) (exId o)

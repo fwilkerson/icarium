@@ -21,6 +21,16 @@ split is decided; adding an axis means choosing a side there.
 
 ## Language
 
+### Nodes
+
+**Node**:
+A task or a context entry. Both carry a ULID id, a title, a file-backed body,
+retrieval categories, an FTS row, and a place in the link graph; the overlap
+is total, which is what makes the supertype real rather than a convenience.
+`NodeKind` is the one place the two are told apart. Categories, curation
+events, edges and dispatches are not nodes — none of them has a body.
+_Avoid_: entity, record (neither says the thing is linkable)
+
 ### Task lifecycle
 
 **State**:

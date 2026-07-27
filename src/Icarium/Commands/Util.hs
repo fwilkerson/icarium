@@ -17,12 +17,6 @@ module Icarium.Commands.Util (
     resolveAxisFlag,
     resolveCatFilters,
 
-    -- * Node resolution
-    requireTask,
-    requireContext,
-    resolveNode,
-    reportExists,
-
     -- * Body input handling
     BodyInput (..),
     bodyInputParser,
@@ -36,7 +30,6 @@ module Icarium.Commands.Util (
     jsonFlag,
 ) where
 
-import Control.Monad (when)
 import Data.Char (toUpper)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
@@ -52,8 +45,6 @@ import System.IO (hIsTerminalDevice, hPutStrLn, stderr, stdout)
 import Icarium.Config (Config, defaultConfigPath, loadConfig)
 import Icarium.Render qualified as Render
 import Icarium.Repo.Category qualified as RC
-import Icarium.Repo.Context qualified as RCx
-import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
 fatal :: Int -> String -> IO a
@@ -230,51 +221,6 @@ jsonFlag =
         ( long "json"
             <> help "Emit machine-readable JSON on stdout instead of the human table"
         )
-
-requireTask :: Connection -> Text -> IO Text
-requireTask c input = do
-    r <- RT.resolveTaskId c input
-    case r of
-        Right tid -> pure tid
-        Left err -> fatal 2 err
-
-requireContext :: Connection -> Text -> IO Text
-requireContext c input = do
-    r <- RCx.resolveContextId c input
-    case r of
-        Right cxid -> pure cxid
-        Left err -> fatal 2 err
-
-resolveNode :: Connection -> Text -> IO (NodeKind, Text)
-resolveNode c input = do
-    ts <- RT.getTasksByPrefix c input
-    cxs <- RCx.getContextsByPrefix c input
-    case (ts, cxs) of
-        ([t], []) -> pure (TaskNode, taskId t)
-        ([], [cx]) -> pure (ContextNode, contextId cx)
-        ([], []) -> fatal 2 ("unknown node: " <> T.unpack input)
-        _ -> fatal 2 ("ambiguous id: " <> T.unpack input)
-
-{- | The @exists@ contract, shared by @task@ and @ctx@: exit 0 on a unique
-prefix match (printing the full id when @verbose@), 1 on no match, 2 on
-ambiguity. Callers only script the exit code, so the codes are the
-interface. @plural@ names the entities in the ambiguity message.
--}
-reportExists :: (Text -> IO [a]) -> (a -> Text) -> Text -> Bool -> Text -> IO ()
-reportExists lookupFn projectId plural verbose input = do
-    xs <- lookupFn input
-    case xs of
-        [x] -> when verbose $ TIO.putStrLn (projectId x)
-        [] -> exitWith (ExitFailure 1)
-        _ -> do
-            hPutStrLn stderr $
-                "ambiguous: "
-                    <> T.unpack input
-                    <> " matches "
-                    <> show (length xs)
-                    <> " "
-                    <> T.unpack plural
-            exitWith (ExitFailure 2)
 
 requireCategory :: Connection -> CategoryAxis -> Text -> IO Category
 requireCategory c axis name = do

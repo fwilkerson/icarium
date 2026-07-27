@@ -12,6 +12,7 @@ one when something actually reads the log.
 module Icarium.Events (
     Event (..),
     Actor,
+    nodeDeleted,
     eventLogPath,
     renderEvent,
     emit,
@@ -33,6 +34,7 @@ import System.IO (BufferMode (..), IOMode (..), hFlush, hSetBinaryMode, hSetBuff
 import Icarium.Types (
     DispatchOutcome,
     Disposition,
+    NodeKind (..),
     TaskState (..),
     dispatchOutcomeText,
     dispositionText,
@@ -70,6 +72,11 @@ data Event
     | -- | dispatch id, task id, the worker's reason
       DispatchEscalated Text Text Text
     deriving (Show, Eq)
+
+-- | The deleted-event for a node kind: the shared @rm@ runner names the kind.
+nodeDeleted :: NodeKind -> Text -> Event
+nodeDeleted TaskNode = TaskDeleted
+nodeDeleted ContextNode = CtxDeleted
 
 -- | The log that sits beside the given database file.
 eventLogPath :: FilePath -> FilePath

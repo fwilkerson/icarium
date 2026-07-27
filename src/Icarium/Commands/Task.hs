@@ -9,11 +9,11 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Database.SQLite.Simple (Connection)
 import Options.Applicative
-import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode (..), exitWith)
-import System.IO (hPutStrLn, stderr)
+import System.IO (stderr)
 
 import Icarium.Bodies (bodiesDir, readBody, taskBodyPath)
+import Icarium.Commands.Node qualified as Node
 import Icarium.Commands.Util
 import Icarium.Db (withDb, withDbSync)
 import Icarium.Events qualified as Ev
@@ -33,11 +33,11 @@ data Command
     | Queue QueueOpts
     | Show ShowOpts
     | Update UpdateOpts
-    | Rm RmOpts
+    | Rm Text
     | Next NextOpts
     | Claim ClaimOpts
-    | Path PathOpts
-    | Cat CatOpts
+    | Path Text
+    | Cat Text
     | Exists ExistsOpts
 
 parser :: Parser Command
@@ -50,11 +50,11 @@ parser =
             <> subcmd "update" "Update task metadata. To edit the body: Read $(icarium task path <id>) then Edit." (Update <$> updateP)
             <> subcmd "start" "Set state to in-progress. Shorthand for `update <id> --state in-progress`." (Update <$> stateShorthandP InProgress)
             <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP Done)
-            <> subcmd "rm" "Delete a task" (Rm <$> rmP)
+            <> subcmd "rm" "Delete a task" (Rm <$> Node.nodeIdArg TaskNode)
             <> subcmd "next" "Print the next ready-interactive task id; exit 1 if empty. Same row as the head of `task queue --interactive`." (Next <$> nextP)
             <> subcmd "claim" "Atomically claim a task: marks it in-progress, stamps an owner, prints its id. With TASK_ID, claims that task if it is in either ready state. Without, takes the head of the ready-interactive queue; exit 1 if empty, exit 3 if the database write lock stayed busy (retry)." (Claim <$> claimP)
-            <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> pathP)
-            <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> catP)
+            <> subcmd "path" "Print body file path for a task (the body is a markdown file you Read/Edit directly)." (Path <$> Node.nodeIdArg TaskNode)
+            <> subcmd "cat" "Print body of a task to stdout. Exit non-zero if the body file is missing." (Cat <$> Node.nodeIdArg TaskNode)
             <> subcmd "exists" "Check whether a task id or prefix resolves uniquely. Exit 0 = found, 1 = not found, 2 = ambiguous." (Exists <$> existsP)
         )
 
@@ -65,12 +65,12 @@ run db = \case
     Queue o -> runQueue db o
     Show o -> runShow db o
     Update o -> runUpdate db o
-    Rm o -> runRm db o
+    Rm t -> Node.runRm TaskNode db t
     Next o -> runNext db o
     Claim o -> runClaim db o
-    Path o -> runPath db o
-    Cat o -> runCat db o
-    Exists o -> runExists db o
+    Path t -> Node.runPath TaskNode db t
+    Cat t -> Node.runCat TaskNode db t
+    Exists o -> Node.runExists TaskNode db (exVerbose o) (exId o)
 
 -- =============================================================
 -- add
@@ -128,8 +128,8 @@ runAdd db o = withDb db $ \c -> do
     mDomain <- mapM (requireCategory c Domain) (aDomain o)
     mDisc <- mapM (requireCategory c Discipline) (aDiscipline o)
     mKind <- mapM (requireCategory c Kind) (aKind o)
-    depIds <- mapM (requireTask c) (aDependsOn o)
-    refIds <- mapM (requireContext c) (aReferences o)
+    depIds <- mapM (Node.requireTask c) (aDependsOn o)
+    refIds <- mapM (Node.requireContext c) (aReferences o)
 
     (tid, fp) <-
         createTaskWithBody
@@ -152,9 +152,8 @@ runAdd db o = withDb db $ \c -> do
     Ev.emit db "task add" (Ev.TaskCreated tid (aState o))
     TIO.putStrLn tid
     TIO.putStrLn (T.pack fp)
-    when (T.null body) $ do
-        hPutStrLn stderr ("# next: Write your markdown to " <> fp)
-        hPutStrLn stderr ("# to edit later: Read $(icarium task path " <> T.unpack tid <> ") then Edit")
+    when (T.null body) $
+        mapM_ (TIO.hPutStrLn stderr) (Render.emptyBodyNudge TaskNode tid fp)
     -- Read back rather than inspecting the flags: same predicate, same source
     -- of truth as the prompt-render and dispatch guards, so the three can't drift.
     attached <- RC.taskCategoriesFor c tid
@@ -299,8 +298,8 @@ data ShowOpts = ShowOpts
 
 showP :: Parser ShowOpts
 showP =
-    ShowOpts . T.pack
-        <$> strArgument (metavar "TASK_ID")
+    ShowOpts
+        <$> Node.nodeIdArg TaskNode
         <*> switch (long "prompt" <> help "Render task as an LLM prompt context block")
         <*> jsonFlag
 
@@ -352,8 +351,8 @@ data UpdateOpts = UpdateOpts
 
 updateP :: Parser UpdateOpts
 updateP =
-    UpdateOpts . T.pack
-        <$> strArgument (metavar "TASK_ID")
+    UpdateOpts
+        <$> Node.nodeIdArg TaskNode
         -- Canonical state values: src/Icarium/Types.hs parseTaskState
         <*> optional
             ( option
@@ -384,7 +383,7 @@ updateP =
 
 -- | @task start@ / @task done@: an update that only sets the state.
 stateShorthandP :: TaskState -> Parser UpdateOpts
-stateShorthandP st = mk . T.pack <$> strArgument (metavar "TASK_ID")
+stateShorthandP st = mk <$> Node.nodeIdArg TaskNode
   where
     mk tid =
         UpdateOpts
@@ -435,28 +434,6 @@ runUpdate db o = withDb db $ \c -> do
                         Ev.emit db "task update" (Ev.TaskUpdated tid (taskState before) new)
             TIO.putStrLn ("updated " <> tid)
         else fatal 1 ("task not found: " <> T.unpack (uId o))
-
--- =============================================================
--- rm
--- =============================================================
-
-newtype RmOpts = RmOpts {rId :: Text}
-
-rmP :: Parser RmOpts
-rmP = RmOpts . T.pack <$> strArgument (metavar "TASK_ID")
-
-runRm :: FilePath -> RmOpts -> IO ()
-runRm db o = withDb db $ \c -> do
-    tid <- resolveOrFatal (RT.resolveTaskId c (rId o))
-    ok <- RT.deleteTask c tid
-    if ok
-        then do
-            let fp = taskBodyPath (bodiesDir db) tid
-            exists <- doesFileExist fp
-            when exists $ removeFile fp
-            Ev.emit db "task rm" (Ev.TaskDeleted tid)
-            TIO.putStrLn ("deleted " <> tid)
-        else fatal 1 ("task not found: " <> T.unpack (rId o))
 
 -- =============================================================
 -- next
@@ -530,34 +507,6 @@ refuseClaim c tid = do
             <> " --state ready-interactive"
 
 -- =============================================================
--- path
--- =============================================================
-
-newtype PathOpts = PathOpts {pId :: Text}
-
-pathP :: Parser PathOpts
-pathP = PathOpts . T.pack <$> strArgument (metavar "TASK_ID")
-
-runPath :: FilePath -> PathOpts -> IO ()
-runPath db o = withDb db $ \c -> do
-    tid <- resolveOrFatal (RT.resolveTaskId c (pId o))
-    TIO.putStrLn (T.pack (taskBodyPath (bodiesDir db) tid))
-
--- =============================================================
--- cat
--- =============================================================
-
-newtype CatOpts = CatOpts {catId :: Text}
-
-catP :: Parser CatOpts
-catP = CatOpts . T.pack <$> strArgument (metavar "TASK_ID")
-
-runCat :: FilePath -> CatOpts -> IO ()
-runCat db o = withDb db $ \c -> do
-    tid <- resolveOrFatal (RT.resolveTaskId c (catId o))
-    TIO.putStr =<< readBody (taskBodyPath (bodiesDir db) tid)
-
--- =============================================================
 -- exists
 -- =============================================================
 
@@ -568,10 +517,6 @@ data ExistsOpts = ExistsOpts
 
 existsP :: Parser ExistsOpts
 existsP =
-    ExistsOpts . T.pack
-        <$> strArgument (metavar "TASK_ID")
+    ExistsOpts
+        <$> Node.nodeIdArg TaskNode
         <*> switch (long "verbose" <> short 'v' <> help "Print the resolved full id on stdout")
-
-runExists :: FilePath -> ExistsOpts -> IO ()
-runExists db o = withDb db $ \c ->
-    reportExists (RT.getTasksByPrefix c) taskId "tasks" (exVerbose o) (exId o)
