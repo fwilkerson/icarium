@@ -6,6 +6,7 @@ module TestHelpers (
     mkCtxFrom,
     mkTaskRow,
     mkTaskIn,
+    mkTaskBody,
     insertTestDispatch,
     attachContextCats,
     minTask,
@@ -202,12 +203,16 @@ mkTaskRow c title = mkTaskIn c title ReadyHeadless
 
 -- | A minimal task in the given state; returns its id.
 mkTaskIn :: Connection -> Text -> TaskState -> IO Text
-mkTaskIn c title st =
+mkTaskIn c title = mkTaskBody c title ""
+
+-- | A headless-ready task carrying a body; returns its id.
+mkTaskBody :: Connection -> Text -> Text -> TaskState -> IO Text
+mkTaskBody c title body st =
     RT.insertTask
         c
         RT.NewTask
             { RT.ntTitle = title
-            , RT.ntBody = ""
+            , RT.ntBody = body
             , RT.ntState = st
             , RT.ntPriority = Nothing
             , RT.ntNoCommit = False

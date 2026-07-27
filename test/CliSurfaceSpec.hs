@@ -32,14 +32,9 @@ tests :: TestTree
 tests =
     testGroup
         "CLI surface"
-        [ testCase "--version prints icarium <semver> and exits 0" testVersion
-        , testCase "-V short form works" testVersionShort
+        [ testCase "--version and -V both print icarium <semver> and exit 0" testVersion
         , testCase "bare icarium prints help and exits 0" testBareIcariumHelp
-        , testCase "bare task prints help and exits non-zero" testBareTaskHelp
-        , testCase "bare ctx prints help and exits non-zero" testBareCtxHelp
-        , testCase "bare dispatch prints help and exits non-zero" testBareDispatchHelp
-        , testCase "bare link prints help and exits non-zero" testBareLinkHelp
-        , testCase "bare category prints help and exits non-zero" testBareCategoryHelp
+        , testGroup "bare subcommand prints its own help" (map bareHelpCase ["task", "ctx", "dispatch", "link", "category"])
         , testCase "agents quickstart states the append-only body convention" testAgentsAppendConvention
         , testCase "task ls and task list produce identical output" testTaskLsAlias
         , testCase "task ls --state ready works" testTaskLsStateFlag
@@ -58,16 +53,12 @@ tests =
         ]
 
 testVersion :: IO ()
-testVersion = do
-    (code, out, _) <- runIcariumBare ["--version"]
-    code @?= ExitSuccess
-    assertBool "output starts with 'icarium '" ("icarium " `isPrefixOf` out)
-
-testVersionShort :: IO ()
-testVersionShort = do
-    (code, out, _) <- runIcariumBare ["-V"]
-    code @?= ExitSuccess
-    assertBool "short form output starts with 'icarium '" ("icarium " `isPrefixOf` out)
+testVersion = mapM_ check ["--version", "-V"]
+  where
+    check flag = do
+        (code, out, _) <- runIcariumBare [flag]
+        code @?= ExitSuccess
+        assertBool (flag <> " output starts with 'icarium '") ("icarium " `isPrefixOf` out)
 
 testBareIcariumHelp :: IO ()
 testBareIcariumHelp = do
@@ -76,40 +67,13 @@ testBareIcariumHelp = do
     assertBool "bare icarium shows Available commands" ("Available commands:" `isInfixOf` out)
     assertBool "bare icarium lists task subcommand" ("task" `isInfixOf` out)
 
-testBareTaskHelp :: IO ()
-testBareTaskHelp = withTempDb $ \db -> do
-    (code, out, _) <- runIcarium db ["task"]
+-- | Every noun answers a bare invocation with its own help, alias note included.
+bareHelpCase :: String -> TestTree
+bareHelpCase noun = testCase noun $ withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db [noun]
     code @?= ExitSuccess
-    assertBool "bare task shows full help" ("Available commands:" `isInfixOf` out)
-    assertBool "bare task help notes ls alias" ("(alias: ls)" `isInfixOf` out)
-
-testBareCtxHelp :: IO ()
-testBareCtxHelp = withTempDb $ \db -> do
-    (code, out, _) <- runIcarium db ["ctx"]
-    code @?= ExitSuccess
-    assertBool "bare ctx shows full help" ("Available commands:" `isInfixOf` out)
-    assertBool "bare ctx help notes ls alias" ("(alias: ls)" `isInfixOf` out)
-
-testBareDispatchHelp :: IO ()
-testBareDispatchHelp = withTempDb $ \db -> do
-    (code, out, _) <- runIcarium db ["dispatch"]
-    code @?= ExitSuccess
-    assertBool "bare dispatch shows full help" ("Available commands:" `isInfixOf` out)
-    assertBool "bare dispatch help notes ls alias" ("(alias: ls)" `isInfixOf` out)
-
-testBareLinkHelp :: IO ()
-testBareLinkHelp = withTempDb $ \db -> do
-    (code, out, _) <- runIcarium db ["link"]
-    code @?= ExitSuccess
-    assertBool "bare link shows full help" ("Available commands:" `isInfixOf` out)
-    assertBool "bare link help notes ls alias" ("(alias: ls)" `isInfixOf` out)
-
-testBareCategoryHelp :: IO ()
-testBareCategoryHelp = withTempDb $ \db -> do
-    (code, out, _) <- runIcarium db ["category"]
-    code @?= ExitSuccess
-    assertBool "bare category shows full help" ("Available commands:" `isInfixOf` out)
-    assertBool "bare category help notes ls alias" ("(alias: ls)" `isInfixOf` out)
+    assertBool "shows full help" ("Available commands:" `isInfixOf` out)
+    assertBool "help notes ls alias" ("(alias: ls)" `isInfixOf` out)
 
 testAgentsAppendConvention :: IO ()
 testAgentsAppendConvention = withTempDb $ \db -> do

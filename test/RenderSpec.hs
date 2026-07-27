@@ -1,9 +1,13 @@
+{- | The rendering surface. Each top-level renderer gets one golden covering
+the shape as a whole; separate cases exist only where an input cannot share
+the golden's fixture (over-long text, ASCII mode, absent sections).
+-}
 module RenderSpec (tests) where
 
 import Data.Text (Text)
 import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
+import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import Icarium.Dispatch.LogResult (LogResult (..), LogUsage (..))
 import Icarium.Dispatch.Merge (MergeOutcome (..))
@@ -19,28 +23,18 @@ tests :: TestTree
 tests =
     testGroup
         "render"
-        [ testGroup "fmtSecs" testFmtSecs
-        , testGroup "mkBar 5-cell Unicode bar" testMkBar
+        [ testGroup "fmtSecs" (map goldenCase fmtSecsCases)
+        , testGroup "mkBar 5-cell Unicode bar" (map goldenCase mkBarCases)
         , testGroup
             "renderTaskList flat view"
-            [ testCase "flat: all rows present with state badges, no group headers" testFlatStateBadges
-            , testCase "flat: no group headers ever" testNoGroupHeaders
-            , testCase "blocked row shows bar plus hang-line reason" testBlockedReason
-            , testCase "edge counts omitted when both zero, shown otherwise" testEdgeCountFormat
-            , testCase "NULL priority sorts last" testNullPrioritySort
-            , testCase "90-char title truncated to 72 chars with UTF-8 ellipsis" testTitleTruncatedUtf8
+            [ testCase "golden: badges, priority sort, edge counts, blocked hang-line" testTaskListGolden
+            , testCase "over-long title and block reason are both truncated" testTaskListTruncation
             ]
         , testGroup
             "renderDispatchList"
-            [ testCase "title, duration, outcome badge, ctx badge, no branch/header" testDispatchListFormat
+            [ testCase "golden: id, title, duration, ctx badge, outcome badge" testDispatchListGolden
             ]
-        , testGroup
-            "renderRunSummary"
-            [ testCase "golden: full block with worker, log and files" testRunSummaryGolden
-            , testCase "no log result and no files omits those lines" testRunSummaryMinimal
-            , testCase "dry run has no dispatch id" testRunSummaryDryRun
-            , testCase "more than 10 files truncates with an N more line" testRunSummaryFileTruncation
-            ]
+        , testGroup "renderRunSummary" (map goldenCase runSummaryCases)
         , testGroup
             "dispatch line renderers"
             [ testCase "recovery notes with a surviving worktree" testRecoveryNotesWorktree
@@ -48,164 +42,86 @@ tests =
             , testCase "landed / parked / merge tally lines" testMergeLines
             ]
         , testGroup
-            "task show links section"
-            [ testCase "no edges renders (none)" testLinksNoEdges
-            , testCase "only depends-on edges" testLinksOnlyDeps
-            , testCase "only references edges" testLinksOnlyRefs
-            , testCase "derived-from edge is labelled, not depends-on" testLinksDerivedFrom
-            , testCase "both kinds present, deps before refs" testLinksBothKinds
-            , testCase "retired context gets [retired] suffix" testLinksRetiredContext
-            , testCase "done task gets [done] suffix" testLinksTaskDone
-            , testCase "blocked task gets [blocked] suffix" testLinksTaskBlocked
+            "renderTaskHuman"
+            [ testCase "golden: metadata, categories and the full links tree" testTaskHumanGolden
+            , testCase "a task with no edges renders (none)" testLinksNoEdges
             , testCase "ASCII mode uses +- and \\- glyphs" testLinksAscii
             ]
         ]
 
-mustJust :: String -> Maybe a -> IO a
-mustJust msg = maybe (assertFailure msg) pure
+-- | A table row: the name identifies the input, the pair is the proof.
+goldenCase :: (String, Text, Text) -> TestTree
+goldenCase (name, actual, expected) = testCase name (actual @?= expected)
 
--- =============================================================
--- fmtSecs tests
--- =============================================================
+fmtSecsCases :: [(String, Text, Text)]
+fmtSecsCases =
+    [ (show s, fmtSecs s, e)
+    | (s, e) <- [(0, "0s"), (59, "59s"), (60, "1m"), (3599, "59m"), (3600, "1h 0m"), (3661, "1h 1m")]
+    ]
 
-testFmtSecs :: [TestTree]
-testFmtSecs =
-    [ testCase (show s <> " -> " <> show expected) (fmtSecs s @?= expected)
-    | (s, expected) <-
-        [ (0, "0s")
-        , (59, "59s")
-        , (60, "1m")
-        , (3599, "59m")
-        , (3600, "1h 0m")
-        , (3661, "1h 1m")
-        ]
+mkBarCases :: [(String, Text, Text)]
+mkBarCases =
+    [ ("Nothing", Icarium.Render.mkBar Nothing, "□ □ □ □ □")
+    , ("5", Icarium.Render.mkBar (Just 5), "■ ■ ◧ □ □")
+    , ("10", Icarium.Render.mkBar (Just 10), "■ ■ ■ ■ ■")
     ]
 
 -- =============================================================
--- mkBar tests
--- =============================================================
-
-testMkBar :: [TestTree]
-testMkBar =
-    [ testCase "Nothing" $ Icarium.Render.mkBar Nothing @?= "□ □ □ □ □"
-    , testCase "5" $ Icarium.Render.mkBar (Just 5) @?= "■ ■ ◧ □ □"
-    , testCase "10" $ Icarium.Render.mkBar (Just 10) @?= "■ ■ ■ ■ ■"
-    ]
-
--- =============================================================
--- renderTaskList flat view tests
+-- renderTaskList
 -- =============================================================
 
 mkRow :: Text -> Text -> TaskState -> Maybe Int -> [Category] -> Int -> Int -> Maybe Text -> Icarium.Render.TaskRow
 mkRow tid title st pri cats deps refs blockReason =
     Icarium.Render.TaskRow
         { Icarium.Render.trTask =
-            Task
+            minTask
                 { taskId = tid
                 , taskTitle = title
                 , taskBody = ""
                 , taskState = st
                 , taskPriority = pri
                 , taskBlockReason = blockReason
-                , taskCreatedAt = "2026-04-26 00:00:00"
-                , taskUpdatedAt = "2026-04-26 00:00:00"
-                , taskNoCommit = False
-                , taskClaimedBy = Nothing
-                , taskClaimedAt = Nothing
-                , taskRouting = mempty
                 }
         , Icarium.Render.trCats = cats
         , Icarium.Render.trDeps = deps
         , Icarium.Render.trRefs = refs
         }
 
-testFlatStateBadges :: IO ()
-testFlatStateBadges = do
+{- | Deliberately fed out of priority order: the render sorts, and a golden
+that arrives pre-sorted would not prove it.
+-}
+testTaskListGolden :: IO ()
+testTaskListGolden = do
     let rows =
-            [ mkRow "01ABCDEFGH01" "ready task" ReadyHeadless (Just 5) [] 0 0 Nothing
-            , mkRow "01ABCDEFGH02" "planned task" Planned (Just 3) [] 0 0 Nothing
-            , mkRow "01ABCDEFGH03" "idea task" Idea Nothing [] 0 0 Nothing
+            [ mkRow "01DDDDDDDD04" "idea task" Idea Nothing [] 0 0 Nothing
+            , mkRow "01BBBBBBBB02" "planned task" Planned (Just 5) [] 2 0 Nothing
+            , mkRow "01AAAAAAAA01" "ready task" ReadyHeadless (Just 9) [] 1 4 Nothing
+            , mkRow "01CCCCCCCC03" "blocked task" Blocked (Just 3) [] 0 3 (Just "upstream is parked")
             ]
-        out = renderTaskList True rows
-    assertBool "ready task present" ("ready task" `T.isInfixOf` out)
-    assertBool "planned task present" ("planned task" `T.isInfixOf` out)
-    assertBool "idea task present" ("idea task" `T.isInfixOf` out)
-    assertBool "[ready-headless] badge" ("[ready-headless]" `T.isInfixOf` out)
-    assertBool "[planned] badge" ("[planned]" `T.isInfixOf` out)
-    assertBool "[idea] badge" ("[idea]" `T.isInfixOf` out)
-    -- Priority sorted: higher priority first
-    let ls = T.lines out
-        idx t = head [i | (i, l) <- zip [0 :: Int ..] ls, t `T.isInfixOf` l]
-    assertBool "ready (pri 5) before planned (pri 3)" (idx "ready task" < idx "planned task")
-    assertBool "planned (pri 3) before idea (null)" (idx "planned task" < idx "idea task")
-
-testNoGroupHeaders :: IO ()
-testNoGroupHeaders = do
-    let rows = [mkRow "01ABCDEFGH01" "only ready" ReadyHeadless (Just 5) [] 0 0 Nothing]
-        out = renderTaskList True rows
-    assertBool "no READY header" (not ("READY" `T.isInfixOf` out))
-    assertBool "no PLANNED header" (not ("PLANNED" `T.isInfixOf` out))
-    assertBool "still has the row" ("only ready" `T.isInfixOf` out)
-
-testBlockedReason :: IO ()
-testBlockedReason = do
-    let longReason = T.replicate 80 "x"
-        rows =
-            [ mkRow "01ABCDEFGH01" "short" Blocked (Just 5) [] 0 0 (Just "nope")
-            , mkRow "01ABCDEFGH02" "long" Blocked (Just 5) [] 0 0 (Just longReason)
+    renderTaskList True rows
+        @?= T.unlines
+            [ "  01AAAAAAAA  ready task    ■ ■ ■ ■ ◧  [-]  [deps:1 refs:4]  [ready-headless]"
+            , "  01BBBBBBBB  planned task  ■ ■ ◧ □ □  [-]  [deps:2]  [planned]"
+            , "  01CCCCCCCC  blocked task  ■ ◧ □ □ □  [-]  [refs:3]  [blocked]"
+            , "              upstream is parked"
+            , "  01DDDDDDDD  idea task     □ □ □ □ □  [-]  [idea]"
             ]
-        out = renderTaskList True rows
-    assertBool "shows short reason" ("nope" `T.isInfixOf` out)
-    assertBool "priority bar shown" ("■ ■ ◧ □ □" `T.isInfixOf` out)
-    assertBool "long reason truncated" ((T.replicate 57 "x" <> "...") `T.isInfixOf` out)
-    let hangLines = filter (T.isPrefixOf (T.replicate 14 " ")) (T.lines out)
-    assertBool "hang line present" (not (null hangLines))
-    assertBool "hang line contains reason" (any ("nope" `T.isInfixOf`) hangLines)
 
-testEdgeCountFormat :: IO ()
-testEdgeCountFormat = do
-    let rows =
-            [ mkRow "01ABCDEFGH01" "no edges" ReadyHeadless (Just 5) [] 0 0 Nothing
-            , mkRow "01ABCDEFGH02" "deps only" ReadyHeadless (Just 5) [] 2 0 Nothing
-            , mkRow "01ABCDEFGH03" "refs only" ReadyHeadless (Just 5) [] 0 3 Nothing
-            , mkRow "01ABCDEFGH04" "both" ReadyHeadless (Just 5) [] 1 4 Nothing
-            ]
-        out = renderTaskList True rows
-        line title = head $ filter (T.isInfixOf title) (T.lines out)
-    assertBool "no edges → no bracket" (not ("[deps" `T.isInfixOf` line "no edges") && not ("[refs" `T.isInfixOf` line "no edges"))
-    assertBool "deps-only" ("[deps:2]" `T.isInfixOf` line "deps only")
-    assertBool "refs-only" ("[refs:3]" `T.isInfixOf` line "refs only")
-    assertBool "both" ("[deps:1 refs:4]" `T.isInfixOf` line "both")
-
-testNullPrioritySort :: IO ()
-testNullPrioritySort = do
-    let rows =
-            [ mkRow "01ABCDEFGH01" "null-pri" Idea Nothing [] 0 0 Nothing
-            , mkRow "01ABCDEFGH02" "low-pri" Idea (Just 1) [] 0 0 Nothing
-            , mkRow "01ABCDEFGH03" "high-pri" Idea (Just 9) [] 0 0 Nothing
-            ]
-        out = renderTaskList True rows
-        ls = filter (\l -> "pri" `T.isInfixOf` l) (T.lines out)
-    assertBool "non-empty rendered rows" (not (null ls))
-    let idx t = head [i | (i, l) <- zip [0 :: Int ..] ls, t `T.isInfixOf` l]
-    (idx "high-pri" < idx "low-pri") @?= True
-    (idx "low-pri" < idx "null-pri") @?= True
-
-testTitleTruncatedUtf8 :: IO ()
-testTitleTruncatedUtf8 = do
+testTaskListTruncation :: IO ()
+testTaskListTruncation = do
     let longTitle = T.replicate 90 "x"
-        rows = [mkRow "01ABCDEFGH01" longTitle ReadyHeadless (Just 5) [] 0 0 Nothing]
-        out = renderTaskList True rows
-        ls = T.lines out
-    assertBool "has a data row" (not (null ls))
-    let dataRow = head ls
-    assertBool "row contains UTF-8 ellipsis" ("…" `T.isInfixOf` dataRow)
-    assertBool "row does not contain raw 90-char title" (not (longTitle `T.isInfixOf` dataRow))
-    let titlePart = T.take Icarium.Render.recommendedTitleMax (T.drop 14 dataRow)
-    assertBool "title column is exactly 72 chars" (T.length titlePart == Icarium.Render.recommendedTitleMax)
+        longReason = T.replicate 80 "y"
+        out = renderTaskList True [mkRow "01AAAAAAAA01" longTitle Blocked (Just 5) [] 0 0 (Just longReason)]
+        mainLine = head (T.lines out)
+        hangLine = T.lines out !! 1
+    assertBool "title truncated with a UTF-8 ellipsis" ("…" `T.isInfixOf` mainLine)
+    assertBool "raw title absent" (not (longTitle `T.isInfixOf` mainLine))
+    T.length (T.take Icarium.Render.recommendedTitleMax (T.drop 14 mainLine)) @?= Icarium.Render.recommendedTitleMax
+    assertBool "reason truncated at 57 chars" ((T.replicate 57 "y" <> "...") `T.isInfixOf` hangLine)
+    assertBool "raw reason absent" (not (longReason `T.isInfixOf` hangLine))
 
 -- =============================================================
--- renderDispatchList tests
+-- renderDispatchList
 -- =============================================================
 
 minDispatch :: Text -> Text -> Maybe DispatchOutcome -> Dispatch
@@ -236,34 +152,38 @@ minDispatch did tid outcome =
         , dispatchBodyChanged = Nothing
         }
 
-testDispatchListFormat :: IO ()
-testDispatchListFormat = do
-    let d1 = (minDispatch "01AAA0000000000000000000AA" "01TTT0000000000000000000AA" (Just OSuccess)){dispatchMergeSha = Just "def456"}
-        d2 = minDispatch "01BBB0000000000000000000BB" "01TTT0000000000000000000BB" (Just OFailure)
-        d3 = minDispatch "01CCC0000000000000000000CC" "01TTT0000000000000000000CC" Nothing
-        d4 = minDispatch "01DDD0000000000000000000DD" "01TTT0000000000000000000DD" (Just OSuccess)
-        rows =
-            [ Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d1, Icarium.Render.drTaskTitle = "Add unified search", Icarium.Render.drCtxCount = 1, Icarium.Render.drDuration = "12m"}
-            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d2, Icarium.Render.drTaskTitle = "FTS5 backend decision", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "47m"}
-            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d3, Icarium.Render.drTaskTitle = "Search CLI shape", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "3m (running)"}
-            , Icarium.Render.DispatchRow{Icarium.Render.drDispatch = d4, Icarium.Render.drTaskTitle = "Parked run", Icarium.Render.drCtxCount = 0, Icarium.Render.drDuration = "9m"}
+{- | All four outcome badges in one block. The branch never appears and no
+header row is printed — both are visible in the golden by their absence.
+-}
+testDispatchListGolden :: IO ()
+testDispatchListGolden = do
+    let row d title ctxCount dur =
+            Icarium.Render.DispatchRow
+                { Icarium.Render.drDispatch = d
+                , Icarium.Render.drTaskTitle = title
+                , Icarium.Render.drCtxCount = ctxCount
+                , Icarium.Render.drDuration = dur
+                }
+        merged = (minDispatch "01AAA0000000000000000000AA" "01TTT0000000000000000000AA" (Just OSuccess)){dispatchMergeSha = Just "def456"}
+        failed = minDispatch "01BBB0000000000000000000BB" "01TTT0000000000000000000BB" (Just OFailure)
+        open = minDispatch "01CCC0000000000000000000CC" "01TTT0000000000000000000CC" Nothing
+        parked = minDispatch "01DDD0000000000000000000DD" "01TTT0000000000000000000DD" (Just OSuccess)
+    Icarium.Render.renderDispatchList
+        True
+        [ row merged "Add unified search" 1 "12m"
+        , row failed "FTS5 backend decision" 0 "47m"
+        , row open "Search CLI shape" 0 "3m (running)"
+        , row parked "Parked run" 0 "9m"
+        ]
+        @?= T.unlines
+            [ "  01AAA00000   01TTT00000  Add unified search     12m           [ctx:1]  [success]"
+            , "  01BBB00000   01TTT00000  FTS5 backend decision  47m                    [failure]"
+            , "  01CCC00000   01TTT00000  Search CLI shape       3m (running)           [open]"
+            , "  01DDD00000   01TTT00000  Parked run             9m                     [parked]"
             ]
-        out = Icarium.Render.renderDispatchList True rows
-    assertBool "dispatch-id prefix in output" ("01AAA00000" `T.isInfixOf` out)
-    assertBool "task title present" ("Add unified search" `T.isInfixOf` out)
-    assertBool "[ctx:1] badge shown" ("[ctx:1]" `T.isInfixOf` out)
-    assertBool "no [ctx:0] badge" (not ("[ctx:0]" `T.isInfixOf` out))
-    assertBool "[success] outcome badge (merged)" ("[success]" `T.isInfixOf` out)
-    assertBool "[failure] outcome badge" ("[failure]" `T.isInfixOf` out)
-    assertBool "[open] outcome badge" ("[open]" `T.isInfixOf` out)
-    assertBool "[parked] badge for unmerged success" ("[parked]" `T.isInfixOf` out)
-    assertBool "branch column absent" (not ("dispatch/01AAA" `T.isInfixOf` out))
-    assertBool "no column header row" (not ("task_id" `T.isInfixOf` out))
-    assertBool "duration shown" ("12m" `T.isInfixOf` out)
-    assertBool "(running) suffix on open" ("(running)" `T.isInfixOf` out)
 
 -- =============================================================
--- renderRunSummary tests
+-- renderRunSummary
 -- =============================================================
 
 minResult :: DispatchResult
@@ -290,24 +210,23 @@ fullLog =
         , lrResultText = Nothing
         }
 
-testRunSummaryGolden :: IO ()
-testRunSummaryGolden = do
-    let payload =
-            WorkerPayload
-                { wpStatus = WSubmitted
-                , wpBlockReason = Nothing
-                , wpForFutureAgents =
-                    [ FutureNote "one" "body"
-                    , FutureNote "two" "body"
-                    ]
+runSummaryCases :: [(String, Text, Text)]
+runSummaryCases =
+    [
+        ( "golden: full block with worker, log and files"
+        , Icarium.Render.renderRunSummary
+            minResult
+                { dresPayload =
+                    Just
+                        WorkerPayload
+                            { wpStatus = WSubmitted
+                            , wpBlockReason = Nothing
+                            , wpForFutureAgents = [FutureNote "one" "body", FutureNote "two" "body"]
+                            }
                 }
-        out =
-            Icarium.Render.renderRunSummary
-                minResult{dresPayload = Just payload}
-                (Just fullLog)
-                ["src/A.hs", "src/B.hs"]
-    out
-        @?= T.unlines
+            (Just fullLog)
+            ["src/A.hs", "src/B.hs"]
+        , T.unlines
             [ ""
             , "dispatch: 01AAA0000000000000000000AA"
             , "outcome:  success"
@@ -321,36 +240,47 @@ testRunSummaryGolden = do
             , "files:    src/A.hs"
             , "          src/B.hs"
             ]
-
-testRunSummaryMinimal :: IO ()
-testRunSummaryMinimal = do
-    let out = Icarium.Render.renderRunSummary minResult Nothing []
-    out
-        @?= T.unlines
+        )
+    ,
+        ( "no log result and no files omits those lines"
+        , Icarium.Render.renderRunSummary minResult Nothing []
+        , T.unlines
             [ ""
             , "dispatch: 01AAA0000000000000000000AA"
             , "outcome:  success"
             , "branch:   dispatch/01AAA0000000000000000000AA"
             , "notes:    gates passed"
             ]
-
-testRunSummaryDryRun :: IO ()
-testRunSummaryDryRun = do
-    let out = Icarium.Render.renderRunSummary minResult{dresDispatchId = Nothing} Nothing []
-    assertBool "dry-run placeholder" ("dispatch: (dry-run)" `T.isInfixOf` out)
-
-testRunSummaryFileTruncation :: IO ()
-testRunSummaryFileTruncation = do
-    let files = ["src/F" <> T.pack (show n) <> ".hs" | n <- [1 :: Int .. 13]]
-        out = Icarium.Render.renderRunSummary minResult Nothing files
-        ls = T.lines out
-    assertBool "first file on the files: line" ("files:    src/F1.hs" `elem` ls)
-    assertBool "tenth file shown" ("          src/F10.hs" `elem` ls)
-    assertBool "eleventh file dropped" ("          src/F11.hs" `notElem` ls)
-    assertBool "remainder counted" ("          3 more" `elem` ls)
+        )
+    ,
+        ( "dry run has no dispatch id"
+        , Icarium.Render.renderRunSummary minResult{dresDispatchId = Nothing} Nothing []
+        , T.unlines
+            [ ""
+            , "dispatch: (dry-run)"
+            , "outcome:  success"
+            , "branch:   dispatch/01AAA0000000000000000000AA"
+            , "notes:    gates passed"
+            ]
+        )
+    ,
+        ( "more than 10 files truncates with an N more line"
+        , Icarium.Render.renderRunSummary minResult Nothing ["src/F" <> T.pack (show n) <> ".hs" | n <- [1 :: Int .. 13]]
+        , T.unlines $
+            [ ""
+            , "dispatch: 01AAA0000000000000000000AA"
+            , "outcome:  success"
+            , "branch:   dispatch/01AAA0000000000000000000AA"
+            , "notes:    gates passed"
+            , "files:    src/F1.hs"
+            ]
+                <> ["          src/F" <> T.pack (show n) <> ".hs" | n <- [2 :: Int .. 10]]
+                <> ["          3 more"]
+        )
+    ]
 
 -- =============================================================
--- dispatch line renderer tests
+-- dispatch line renderers
 -- =============================================================
 
 testRecoveryNotesWorktree :: IO ()
@@ -379,118 +309,91 @@ testMergeLines = do
     Icarium.Render.renderMergeTally 4 1 1 2 @?= "1 of 4 landed; 1 still parked; 2 not attempted"
 
 -- =============================================================
--- task show links section tests
+-- renderTaskHuman
 -- =============================================================
 
-minContext :: Context
-minContext =
+minContext :: Text -> Text -> Context
+minContext cid title =
     Context
-        { contextId = "01CTX0000000000000000000CC"
-        , contextTitle = "Test context"
+        { contextId = cid
+        , contextTitle = title
         , contextBody = "Context body"
         , contextCreatedAt = "2026-01-01T00:00:00Z"
         , contextUpdatedAt = "2026-01-01T00:00:00Z"
         }
 
-depTask :: TaskState -> Task
-depTask st =
-    minTask
-        { taskId = "01DDDD000000000000000000DD"
-        , taskTitle = "Dep task"
-        , taskState = st
-        , taskBlockReason = Nothing
-        }
+depTask :: Text -> Text -> TaskState -> Task
+depTask tid title st = minTask{taskId = tid, taskTitle = title, taskState = st}
 
-refCtx :: Context
-refCtx =
-    minContext
-        { contextId = "01RRRR000000000000000000RR"
-        , contextTitle = "Ref context"
-        }
+{- | Every optional line and every edge kind at once. The tree orders
+depends-on before derived-from before references, ids sorted within a kind,
+and only the last edge takes the └─ glyph — all of which the golden pins.
+-}
+testTaskHumanGolden :: IO ()
+testTaskHumanGolden = do
+    let t =
+            minTask
+                { taskState = Blocked
+                , taskPriority = Just 7
+                , taskBlockReason = Just "upstream is parked"
+                , taskNoCommit = True
+                , taskClaimedBy = Just "worker-1"
+                , taskClaimedAt = Just "2026-01-02T00:00:00Z"
+                , taskRouting = Routing{rtModel = Just "claude-opus-5", rtEffort = Just High}
+                }
+        deps = [depTask "01DEP2000000000000000000BB" "Second dep" Blocked, depTask "01DEP1000000000000000000AA" "First dep" Planned]
+        derived = [depTask "01DERIVED000000000000000CC" "Parent task" Done]
+        refs = [minContext "01REFB000000000000000000EE" "Retired context", minContext "01REFA000000000000000000DD" "Live context"]
+        cats = [Category "01CAT1" Domain "cli", Category "01CAT2" Discipline "haskell"]
+    renderTaskHuman True t "/tmp/body.md" refs deps derived cats ["01REFB000000000000000000EE"]
+        @?= T.unlines
+            [ "id:        01TEST00000000000000000000"
+            , "title:     Test task"
+            , "state:     blocked"
+            , "priority:  7"
+            , "block_reason: upstream is parked"
+            , "no-commit:   yes"
+            , "model:     claude-opus-5"
+            , "effort:    high"
+            , "owner:     worker-1"
+            , "claimed:   2026-01-02T00:00:00Z"
+            , "created:   2026-01-01T00:00:00Z"
+            , "updated:   2026-01-01T00:00:00Z"
+            , "body:      /tmp/body.md"
+            , "Categories:"
+            , "  domain:     cli"
+            , "  discipline: haskell"
+            , ""
+            , "## Links"
+            , ""
+            , "01TEST0000  Test task"
+            , "├─ depends-on    01DEP10000  First dep  [planned]"
+            , "├─ depends-on    01DEP20000  Second dep  [blocked]"
+            , "├─ derived-from  01DERIVED0  Parent task  [done]"
+            , "├─ references    01REFA0000  Live context"
+            , "└─ references    01REFB0000  Retired context  [retired]"
+            , ""
+            ]
 
 testLinksNoEdges :: IO ()
 testLinksNoEdges = do
     let out = renderTaskHuman True minTask "/tmp/body" [] [] [] [] []
     assertBool "## Links header" ("## Links" `T.isInfixOf` out)
     assertBool "(none) line" ("(none)" `T.isInfixOf` out)
-    assertBool "no depends-on edge" (not ("depends-on" `T.isInfixOf` out))
-    assertBool "no references edge" (not ("references" `T.isInfixOf` out))
-
-testLinksOnlyDeps :: IO ()
-testLinksOnlyDeps = do
-    let dep = depTask Planned
-        out = renderTaskHuman True minTask "/tmp/body" [] [dep] [] [] []
-    assertBool "## Links header" ("## Links" `T.isInfixOf` out)
-    assertBool "depends-on edge" ("depends-on" `T.isInfixOf` out)
-    assertBool "dep id prefix" (T.take 10 (taskId dep) `T.isInfixOf` out)
-    assertBool "dep state" ("[planned]" `T.isInfixOf` out)
-    assertBool "no references" (not ("references" `T.isInfixOf` out))
-    assertBool "last glyph is └─" ("└─" `T.isInfixOf` out)
-
-{- | A follow-up discovered while working another task. It shares the task→task
-column with depends-on, so the label is what distinguishes them.
--}
-testLinksDerivedFrom :: IO ()
-testLinksDerivedFrom = do
-    let parent = depTask Done
-        out = renderTaskHuman True minTask "/tmp/body" [] [] [parent] [] []
-    assertBool "derived-from edge" ("derived-from" `T.isInfixOf` out)
-    assertBool "parent id prefix" (T.take 10 (taskId parent) `T.isInfixOf` out)
-    assertBool "parent state" ("[done]" `T.isInfixOf` out)
-    assertBool "not labelled depends-on" (not ("depends-on" `T.isInfixOf` out))
-
-testLinksOnlyRefs :: IO ()
-testLinksOnlyRefs = do
-    let ref = refCtx
-        out = renderTaskHuman True minTask "/tmp/body" [ref] [] [] [] []
-    assertBool "## Links header" ("## Links" `T.isInfixOf` out)
-    assertBool "references edge" ("references" `T.isInfixOf` out)
-    assertBool "ref id prefix" (T.take 10 (contextId ref) `T.isInfixOf` out)
-    assertBool "no [retired] suffix" (not ("[retired]" `T.isInfixOf` out))
-    assertBool "no depends-on" (not ("depends-on" `T.isInfixOf` out))
-    assertBool "last glyph is └─" ("└─" `T.isInfixOf` out)
-
-testLinksBothKinds :: IO ()
-testLinksBothKinds = do
-    let dep = depTask ReadyHeadless
-        ref = refCtx
-        out = renderTaskHuman True minTask "/tmp/body" [ref] [dep] [] [] []
-    assertBool "depends-on edge" ("depends-on" `T.isInfixOf` out)
-    assertBool "references edge" ("references" `T.isInfixOf` out)
-    iDep <- mustJust "depends-on position" (posOf "depends-on" out)
-    iRef <- mustJust "references position" (posOf "references" out)
-    assertBool "depends-on before references" (iDep < iRef)
-    assertBool "branch glyph ├─" ("├─" `T.isInfixOf` out)
-    assertBool "last glyph └─" ("└─" `T.isInfixOf` out)
-  where
-    posOf needle h =
-        let (pre, suf) = T.breakOn needle h
-         in if T.null suf then Nothing else Just (T.length pre)
-
-testLinksRetiredContext :: IO ()
-testLinksRetiredContext = do
-    let ref = refCtx
-        out = renderTaskHuman True minTask "/tmp/body" [ref] [] [] [] [contextId ref]
-    assertBool "[retired] suffix present" ("[retired]" `T.isInfixOf` out)
-
-testLinksTaskDone :: IO ()
-testLinksTaskDone = do
-    let dep = depTask Done
-        out = renderTaskHuman True minTask "/tmp/body" [] [dep] [] [] []
-    assertBool "[done] suffix" ("[done]" `T.isInfixOf` out)
-
-testLinksTaskBlocked :: IO ()
-testLinksTaskBlocked = do
-    let dep = (depTask Blocked){taskBlockReason = Just "waiting"}
-        out = renderTaskHuman True minTask "/tmp/body" [] [dep] [] [] []
-    assertBool "[blocked] suffix" ("[blocked]" `T.isInfixOf` out)
+    assertBool "no edge rows" (not ("depends-on" `T.isInfixOf` out) && not ("references" `T.isInfixOf` out))
 
 testLinksAscii :: IO ()
 testLinksAscii = do
-    let dep = depTask Planned
-        ref = refCtx
-        out = renderTaskHuman False minTask "/tmp/body" [ref] [dep] [] [] []
-    assertBool "ASCII branch glyph +- present" ("+-" `T.isInfixOf` out)
-    assertBool "ASCII last glyph \\- present" ("\\-" `T.isInfixOf` out)
-    assertBool "no UTF-8 branch glyph" (not ("├─" `T.isInfixOf` out))
-    assertBool "no UTF-8 last glyph" (not ("└─" `T.isInfixOf` out))
+    let out =
+            renderTaskHuman
+                False
+                minTask
+                "/tmp/body"
+                [minContext "01REFA000000000000000000DD" "Ref context"]
+                [depTask "01DEP1000000000000000000AA" "Dep task" Planned]
+                []
+                []
+                []
+    assertBool "ASCII branch glyph +-" ("+-" `T.isInfixOf` out)
+    assertBool "ASCII last glyph \\-" ("\\-" `T.isInfixOf` out)
+    assertBool "no UTF-8 glyphs" (not ("├─" `T.isInfixOf` out) && not ("└─" `T.isInfixOf` out))

@@ -36,45 +36,42 @@ tests :: TestTree
 tests =
     testGroup
         "worktree dispatch and merge"
-        [ testCase "dispatch: invoking checkout untouched from dirty feature branch" testDispatchInvokingCheckoutUntouched
-        , testCase "dispatch: child icarium hits parent DB, no nested store" testDispatchNoNestedStore
-        , testCase "dispatch: success auto-merges (base advances, branch deleted, task done)" testDispatchAutoMerges
-        , testCase "dispatch: blocked auto-merge stays parked, exit 3 names fixing command" testDispatchAutoMergeBlockedParks
-        , testCase "dispatch run (drain): dependency chain lands in one invocation" testDrainAutoMergesChain
-        , testCase "dispatch merge: fast-forward in place when base checked out clean" testMergeFFInPlace
-        , testCase "dispatch merge: fast-forward via temp worktree when base checked out elsewhere" testMergeFFTempWorktree
-        , testCase "dispatch merge: dirty base checkout is fatal" testMergeDirtyBaseFatal
-        , testCase "dispatch merge: base moved rebases and re-runs gates" testMergeRebaseRegate
-        , testCase "dispatch merge: rebase conflict stays parked, exit 3" testMergeConflictParked
-        , testCase "dispatch merge --all: lands clean branches, conflict stays parked, exit 3" testMergeAllPartial
-        , testCase "dispatch merge --all: nothing parked is a friendly no-op" testMergeAllEmpty
-        , testCase "dispatch merge: --all and DISPATCH_ID are mutually exclusive" testMergeArgValidation
-        , testCase "dispatch run (drain): task claimed (in_progress + owner) while worker runs" testDrainClaimsTask
-        , testCase "dispatch run TASK_ID: task claimed while worker runs" testTargetedDispatchClaimsTask
-        , testCase "dispatch run: racing drains never select the same task" testDrainClaimIsAtomic
-        , testCase "dispatch: claude failure blocks task, retains branch, removes worktree" testDispatchFailBlocks
-        , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
-        , testCase "dispatch run (drain): a failed dispatch exits 3" testDrainFailedDispatchExits3
-        , testCase "dispatch: worktree_setup exit 75 stops drain cleanly" testWorktreeSetup75
-        , testCase "dispatch: worktree_setup exit 75 stops a named run the same way" testWorktreeSetup75Named
-        , testCase "dispatch: worktree_setup nonzero errors a single run" testWorktreeSetupErr
-        , testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
-        , testCase "dispatch --dry-run previews dontAsk and worktree path" testDispatchDryRun
-        , testCase "dispatch --dry-run previews --mcp-config when set" testDispatchDryRunMcpConfig
-        , testCase "dispatch --dry-run: Skill in tools drops --disable-slash-commands" testDispatchDryRunSkillTool
-        , testCase "dispatch --dry-run prompt carries built-in agreement with no-user rules" testDryRunBuiltInAgreement
-        , testCase "dispatch: agreement_path file wholly replaces built-in body" testDispatchAgreementFile
-        , testCase "dispatch: prompt names the resolved scratch path, override or not" testDispatchScratchPathResolved
-        , testCase "dispatch: unreadable agreement_path fails closed before worker starts" testAgreementPathUnreadableFailsClosed
-        , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
-        , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
-        , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
-        , testCase "dispatch review: body tamper reported to reviewer, flag persisted" testReviewerBodyTamperReport
-        , testCase "dispatch review: retry diffs against first-attempt baseline (no laundering)" testReviewerRetryKeepsTamperBaseline
-        , testCase "dispatch review: unreadable prompt_path fails closed before worker starts, dry-run too" testReviewerPromptUnreadableFailsClosed
-        , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
-        , testCase "dispatch: untagged task warns on stderr, dry-run and live" testDispatchUntaggedWarns
-        ]
+        $ [ testCase "dispatch: invoking checkout untouched from dirty feature branch" testDispatchInvokingCheckoutUntouched
+          , testCase "dispatch: child icarium hits parent DB, no nested store" testDispatchNoNestedStore
+          , testCase "dispatch: success auto-merges (base advances, branch deleted, task done)" testDispatchAutoMerges
+          , testCase "dispatch: blocked auto-merge stays parked, exit 3 names fixing command" testDispatchAutoMergeBlockedParks
+          , testCase "dispatch run (drain): dependency chain lands in one invocation" testDrainAutoMergesChain
+          , testCase "dispatch merge: fast-forward in place when base checked out clean" testMergeFFInPlace
+          , testCase "dispatch merge: fast-forward via temp worktree when base checked out elsewhere" testMergeFFTempWorktree
+          , testCase "dispatch merge: dirty base checkout is fatal" testMergeDirtyBaseFatal
+          , testCase "dispatch merge: base moved rebases and re-runs gates" testMergeRebaseRegate
+          , testCase "dispatch merge: rebase conflict stays parked, exit 3" testMergeConflictParked
+          , testCase "dispatch merge --all: lands clean branches, conflict stays parked, exit 3" testMergeAllPartial
+          , testCase "dispatch merge --all: nothing parked is a friendly no-op" testMergeAllEmpty
+          , testCase "dispatch merge: --all and DISPATCH_ID are mutually exclusive" testMergeArgValidation
+          , testCase "dispatch run (drain): task claimed (in_progress + owner) while worker runs" testDrainClaimsTask
+          , testCase "dispatch run TASK_ID: task claimed while worker runs" testTargetedDispatchClaimsTask
+          , testCase "dispatch run: racing drains never select the same task" testDrainClaimIsAtomic
+          , testCase "dispatch: claude failure blocks task, retains branch, removes worktree" testDispatchFailBlocks
+          , testCase "dispatch: dirty tree checkpointed as wip on branch" testDispatchDirtyCheckpoint
+          , testCase "dispatch run (drain): a failed dispatch exits 3" testDrainFailedDispatchExits3
+          ]
+            <> map setupOutcomeCase setupOutcomeCases
+            <> [ testCase "dispatch: worktree_teardown runs on success and failure" testWorktreeTeardownRuns
+               , testCase "dispatch --dry-run previews dontAsk, worktree and scratch paths" testDispatchDryRun
+               , testCase "dispatch --dry-run previews mcp_config and a Skill-bearing tools list" testDispatchDryRunConfigured
+               , testCase "dispatch --dry-run prompt carries built-in agreement with no-user rules" testDryRunBuiltInAgreement
+               , testCase "dispatch: agreement_path file replaces the built-in body, not the scratch section" testDispatchAgreementFile
+               , testCase "dispatch: unreadable agreement_path fails closed before worker starts" testAgreementPathUnreadableFailsClosed
+               , testCase "dispatch recover: orphaned worktree checkpointed and removed" testDispatchRecoverWorktree
+               , testCase "dispatch: no-commit task success is not parked, branch deleted" testDispatchNoCommitSuccess
+               , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
+               , testCase "dispatch review: body tamper reported to reviewer, flag persisted" testReviewerBodyTamperReport
+               , testCase "dispatch review: retry diffs against first-attempt baseline (no laundering)" testReviewerRetryKeepsTamperBaseline
+               , testCase "dispatch review: unreadable prompt_path fails closed before worker starts, dry-run too" testReviewerPromptUnreadableFailsClosed
+               , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
+               , testCase "dispatch: untagged task warns on stderr, dry-run and live" testDispatchUntaggedWarns
+               ]
 
 -- Scenario 1: dispatch from a checkout on a different branch with a dirty
 -- tree; the invoking checkout's branch and dirtiness are untouched, the
@@ -437,48 +434,32 @@ testDispatchDirtyCheckpoint = withDispatchRepo $ \dir db -> do
 
 -- Scenario 7a: worktree_setup exit 75 is back-pressure: drain stops cleanly
 -- (exit 0), no dispatch row is created, the task stays ready.
-testWorktreeSetup75 :: IO ()
-testWorktreeSetup75 = withDispatchRepo $ \dir db -> do
-    tid <- addReadyTask dir db "capacity task"
-    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "exit 75") Nothing)
-    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run"]
-    code @?= ExitSuccess
-    assertBool "drain reports no capacity and stops" ("no worktree capacity" `isInfixOf` err)
-    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
-    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
-    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
-    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
 
-{- | Back-pressure reads the same whichever selector picked the task: the
-machine is full, nothing was dispatched, and the task stays ready. The named
-form used to exit 3 here while the drain exited 0 — a per-mode reporting
-policy that the single pipeline has no room for.
+{- | A worktree_setup that refuses never leaves a trace: no dispatch row, task
+still ready. Exit 75 is back-pressure and reads the same whichever selector
+picked the task — the named form used to exit 3 here while the drain exited 0,
+a per-mode reporting policy the single pipeline has no room for. Any other
+nonzero is a genuine error and exits 3.
 -}
-testWorktreeSetup75Named :: IO ()
-testWorktreeSetup75Named = withDispatchRepo $ \dir db -> do
-    tid <- addReadyTask dir db "named capacity task"
-    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "exit 75") Nothing)
-    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
-    code @?= ExitSuccess
-    assertBool "reports no capacity and stops" ("no worktree capacity" `isInfixOf` err)
-    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
-    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
-    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
-    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
+setupOutcomeCases :: [(String, String, Bool, ExitCode, String)]
+setupOutcomeCases =
+    [ ("exit 75 stops a drain cleanly", "exit 75", False, ExitSuccess, "no worktree capacity")
+    , ("exit 75 stops a named run the same way", "exit 75", True, ExitSuccess, "no worktree capacity")
+    , ("any other nonzero errors the run", "exit 1", True, ExitFailure 3, "worktree setup failed")
+    ]
 
--- Scenario 7b: worktree_setup other-nonzero is an error: single run exits 3,
--- no dispatch row, task untouched.
-testWorktreeSetupErr :: IO ()
-testWorktreeSetupErr = withDispatchRepo $ \dir db -> do
-    tid <- addReadyTask dir db "setup-err task"
-    writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just "exit 1") Nothing)
-    (code, _, err) <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
-    code @?= ExitFailure 3
-    assertBool "reports a setup failure" ("worktree setup failed" `isInfixOf` err)
-    (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
-    assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
-    (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
-    assertBool "task still ready" ("ready" `isInfixOf` taskOut)
+setupOutcomeCase :: (String, String, Bool, ExitCode, String) -> TestTree
+setupOutcomeCase (name, setupCmd, named, expectedCode, expectedErr) =
+    testCase ("dispatch: worktree_setup " <> name) $ withDispatchRepo $ \dir db -> do
+        tid <- addReadyTask dir db "setup task"
+        writeFile (dir </> "icarium.toml") (stubTomlWith "true" (Just setupCmd) Nothing)
+        (code, _, err) <- runDispatch dir db (Just "commit") (["dispatch", "run"] <> [tid | named])
+        code @?= expectedCode
+        assertBool ("stderr names the cause: " <> expectedErr) (expectedErr `isInfixOf` err)
+        (_, listOut, _) <- runDispatch dir db Nothing ["dispatch", "list"]
+        assertBool "no dispatch row was created" ("(no dispatches)" `isInfixOf` listOut)
+        (_, taskOut, _) <- runDispatch dir db Nothing ["task", "show", tid]
+        assertBool "task still ready" ("ready" `isInfixOf` taskOut)
 
 -- Scenario 7c: worktree_teardown runs on both the success and failure paths.
 testWorktreeTeardownRuns :: IO ()
@@ -495,6 +476,11 @@ testWorktreeTeardownRuns = withDispatchRepo $ \dir db -> do
     afterFail @?= 2
 
 -- Scenario 8: --dry-run previews the containment flag and the worktree path.
+
+{- | The default preview: what the worker is actually invoked with, and where.
+The scratch path rides a prompt section outside the agreement body, so it is
+checked here and again under an agreement_path override.
+-}
 testDispatchDryRun :: IO ()
 testDispatchDryRun = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "dry-run task"
@@ -506,11 +492,15 @@ testDispatchDryRun = withDispatchRepo $ \dir db -> do
     assertBool "preview shows --strict-mcp-config" ("--strict-mcp-config" `isInfixOf` out)
     assertBool "no --mcp-config when key absent" (not ("--mcp-config" `isInfixOf` out))
     assertBool "slash commands disabled when Skill not in tools" ("--disable-slash-commands" `isInfixOf` out)
+    assertBool "prompt names the worktree-absolute scratch dir" (namesAbsScratch out)
 
--- Scenario 8c: listing Skill in [dispatch] tools drops --disable-slash-commands
--- (ADR 0003 -- the tools list is the only gate on skill loading).
-testDispatchDryRunSkillTool :: IO ()
-testDispatchDryRunSkillTool = withDispatchRepo $ \dir db -> do
+{- | Two config keys the preview must carry through: @mcp_config@ becomes a
+@--mcp-config@ flag, and listing @Skill@ in @tools@ drops
+@--disable-slash-commands@ (ADR 0003 — the tools list is the only gate on
+skill loading).
+-}
+testDispatchDryRunConfigured :: IO ()
+testDispatchDryRunConfigured = withDispatchRepo $ \dir db -> do
     let toml =
             unlines
                 [ "[project]"
@@ -527,47 +517,28 @@ testDispatchDryRunSkillTool = withDispatchRepo $ \dir db -> do
                 , "max_minutes_per_dispatch = 2"
                 , "heartbeat_stale_seconds  = 300"
                 , "log_retention_runs       = 5"
-                , "[categories]"
-                , "domains     = [\"core\"]"
-                , "disciplines = [\"development\"]"
-                ]
-    writeFile (dir </> "icarium.toml") toml
-    tid <- addReadyTask dir db "dry-run skill task"
-    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
-    code @?= ExitSuccess
-    assertBool "preview lists the Skill tool" ("Bash,Skill" `isInfixOf` out)
-    assertBool "no --disable-slash-commands when Skill in tools" (not ("--disable-slash-commands" `isInfixOf` out))
-
--- Scenario 8b: --dry-run previews --mcp-config <path> when dispatch.mcp_config is set.
-testDispatchDryRunMcpConfig :: IO ()
-testDispatchDryRunMcpConfig = withDispatchRepo $ \dir db -> do
-    let toml =
-            unlines
-                [ "[project]"
-                , "integration_branch = \"main\""
-                , "[commands]"
-                , "build = \"true\""
-                , "test  = \"true\""
-                , "[dispatch]"
-                , "model  = \"stub\""
-                , "effort = \"low\""
-                , "tools = [\"Bash\"]"
-                , "allowed_tools = [\"Bash\"]"
-                , "scratch_dir = \".icarium/scratch\""
-                , "max_minutes_per_dispatch = 2"
-                , "heartbeat_stale_seconds  = 300"
-                , "log_retention_runs       = 5"
                 , "mcp_config = \".mcp.json\""
                 , "[categories]"
                 , "domains     = [\"core\"]"
                 , "disciplines = [\"development\"]"
                 ]
     writeFile (dir </> "icarium.toml") toml
-    tid <- addReadyTask dir db "dry-run mcp task"
+    tid <- addReadyTask dir db "dry-run configured task"
     (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
     code @?= ExitSuccess
+    assertBool "preview lists the Skill tool" ("Bash,Skill" `isInfixOf` out)
+    assertBool "Skill in tools drops --disable-slash-commands" (not ("--disable-slash-commands" `isInfixOf` out))
     assertBool "preview shows --strict-mcp-config" ("--strict-mcp-config" `isInfixOf` out)
     assertBool "preview shows --mcp-config .mcp.json" ("--mcp-config .mcp.json" `isInfixOf` out)
+
+{- | Both segments on one line, both absolute: the dry-run header prints
+@scratch_dir: .icarium/scratch@ relative, so a plain substring test would pass
+on the header even with the prompt section deleted.
+-}
+namesAbsScratch :: String -> Bool
+namesAbsScratch =
+    any (\l -> "/.icarium/wt/" `isInfixOf` l && "/.icarium/scratch" `isInfixOf` l)
+        . lines
 
 -- Scenario: with no agreement_path the dispatch prompt carries the built-in
 -- agreement and its no-user counterweight, and drives no tracker CLI — every
@@ -602,30 +573,10 @@ testDispatchAgreementFile = withDispatchRepo $ \dir db -> do
                 . dropWhile (/= "## Working agreement")
                 $ lines out
     section @?= ["Custom lane contract xagree1."]
-
-{- | Scenario: the worker is told where scratch is by absolute path, not by an
-env var it has no permitted way to expand. The path rides a section outside
-the agreement body, so an agreement_path override cannot drop it.
--}
-testDispatchScratchPathResolved :: IO ()
-testDispatchScratchPathResolved = withDispatchRepo $ \dir db -> do
-    tid <- addReadyTask dir db "scratch path task"
-    (code, out, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
-    code @?= ExitSuccess
-    assertBool "prompt names the worktree-absolute scratch dir" (namesAbsScratch out)
-    -- The override replaces the agreement body; the scratch section survives.
-    writeFile (dir </> "agreement.md") "Custom lane contract xagree2.\n"
-    writeFile (dir </> "icarium.toml") (agreementToml "agreement.md")
-    (oCode, oOut, _) <- runDispatch dir db Nothing ["dispatch", "run", tid, "--dry-run"]
-    oCode @?= ExitSuccess
-    assertBool "override prompt still names the scratch path" (namesAbsScratch oOut)
-  where
-    -- Both segments on one line, both absolute: the dry-run header prints
-    -- `scratch_dir: .icarium/scratch` relative, so a plain substring test
-    -- would pass on the header even with the prompt section deleted.
-    namesAbsScratch =
-        any (\l -> "/.icarium/wt/" `isInfixOf` l && "/.icarium/scratch" `isInfixOf` l)
-            . lines
+    -- The worker is told where scratch is by absolute path, not by an env var
+    -- it has no permitted way to expand. That section rides outside the
+    -- agreement body, so the override must not be able to drop it.
+    assertBool "override prompt still names the scratch path" (namesAbsScratch out)
 
 -- Scenario: an unreadable agreement_path must fail closed before the worker
 -- starts (same posture as reviewer prompt_path) — and in dry-run too, which

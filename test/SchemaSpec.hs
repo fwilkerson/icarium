@@ -1,10 +1,20 @@
 {- | Column-shape concerns: the embedded base schema, @migrateDb@'s driving
-of the chain, and one test per incremental migration.
+of the chain, and the incremental migrations that can lose data.
 
 Every per-migration test hand-writes the pre-migration shape. It cannot be
 reached through @migrateDb@ from empty: 'migrations' starts with @Migration 1
 applySchema@, which stamps @user_version@ at the current version, so the
 incremental steps never run on a fresh DB.
+
+Only migrations that /rebuild/ a table, transform rows, or settle the final
+column shape are covered — a rebuild that drops a row or a column is silent,
+and the constraint still looks right afterwards. A migration that adds a
+column or drops a view either throws or succeeds; the base-schema and
+column-layout tests already pin where it must land.
+
+Read the SQL before deciding which class a migration is in. 0015 announces
+itself as a state-CHECK widening and is in fact a full rebuild through a
+backup table.
 -}
 module SchemaSpec (tests) where
 
@@ -13,8 +23,7 @@ import Control.Monad (void)
 import Data.Either (isLeft)
 import Data.List qualified as L
 import Data.Text (Text)
-import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute, execute_, fromOnly, open, query_)
+import Database.SQLite.Simple (Connection, Only (..), Query (..), close, execute, execute_, fromOnly, open, query_, (:.) (..))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import Test.Tasty (TestTree, testGroup)
@@ -37,8 +46,7 @@ tests =
         "schema"
         [ testGroup
             "base schema"
-            [ testCase "applying embedded schema produces user_version = schemaVersion with expected tables" testInitialSchema
-            , testCase "deleting a context entry cascades to context_categories rows" testContextCategoriesCascade
+            [ testCase "deleting a context entry cascades to context_categories rows" testContextCategoriesCascade
             , testCase "no task_status view: listTasks is the one source of effective state" testNoTaskStatusView
             ]
         , testGroup
@@ -55,16 +63,13 @@ tests =
             ]
         , testGroup
             "migrations"
-            [ testCase "migration 9 adds merged_at column to a pre-migration dispatches table" testMigration9AddsMergedAt
-            , testCase "migration 10 replaces the pre-existing ready_tasks view" testMigration10ReplacesView
-            , testCase "migration 13 backfills stale rows, drops the column" testMigration13Backfill
+            [ testCase "migration 13 backfills stale rows, drops the column" testMigration13Backfill
             , testCase "migration 14 widens the axis CHECK, keeping rows and FKs" testMigration14KindAxis
-            , testCase "migration 15 widens the state CHECK and the view" testMigration15ReadyInteractive
+            , testCase "migration 15 rebuild carries every column, edges and triggers" testMigration15ReadyInteractive
             , testCase "migration 16 renames ready rows and recreates the view" testMigration16ReadyHeadless
             , testCase "migration 17 adds the column to a pre-17 context table" testMigration17AddsProvenance
             , testCase "migration 18 rebuild preserves existing edges" testMigration18PreservesEdges
             , testCase "migration 19 adds routing columns to a pre-19 tasks table" testMigration19AddsRouting
-            , testCase "migration 20 drops the task_status view, present or not" testMigration20DropsTaskStatus
             ]
         ]
 
@@ -77,24 +82,6 @@ migration v = case filter ((== v) . migrationVersion) migrations of
 -- =============================================================
 -- Base schema
 -- =============================================================
-
-testInitialSchema :: IO ()
-testInitialSchema = withBaseTestDb $ \conn -> do
-    v <- dbSchemaVersion conn
-    v @?= fromIntegral schemaVersion
-    tableRows <-
-        query_
-            conn
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name" ::
-            IO [Only Text]
-    let tables = map (\(Only n) -> n) tableRows
-    assertBool "tasks table exists" ("tasks" `elem` tables)
-    assertBool "context table exists" ("context" `elem` tables)
-    assertBool "categories table exists" ("categories" `elem` tables)
-    assertBool "edges table exists" ("edges" `elem` tables)
-    assertBool "dispatches table exists" ("dispatches" `elem` tables)
-    assertBool "task_categories table exists" ("task_categories" `elem` tables)
-    assertBool "context_categories table exists" ("context_categories" `elem` tables)
 
 testContextCategoriesCascade :: IO ()
 testContextCategoriesCascade = withTestDb $ \conn -> do
@@ -212,43 +199,6 @@ testMigrateChainFromEmpty =
 -- Per-migration tests
 -- =============================================================
 
-{- | applySchema always stamps the latest schemaVersion (Schema.hs), so a
-"v8" DB can't be built that way; hand-write the pre-migration-9 table
-(no merged_at) instead.
--}
-testMigration9AddsMergedAt :: IO ()
-testMigration9AddsMergedAt = do
-    conn <- open ":memory:"
-    execSql
-        conn
-        "CREATE TABLE dispatches (\
-        \id TEXT PRIMARY KEY, task_id TEXT NOT NULL, branch TEXT NOT NULL, \
-        \base_branch TEXT NOT NULL, base_sha TEXT NOT NULL, pid INTEGER, \
-        \model TEXT NOT NULL, effort TEXT NOT NULL, \
-        \started_at TEXT NOT NULL DEFAULT (datetime('now')), \
-        \heartbeat_at TEXT NOT NULL DEFAULT (datetime('now')), \
-        \ended_at TEXT, outcome TEXT, merge_sha TEXT, last_commit TEXT, \
-        \notes TEXT, log_path TEXT, tokens_in INTEGER, tokens_out INTEGER, \
-        \tokens_cache_read INTEGER, review_verdict TEXT, reviewer_log_path TEXT)"
-    migrationUp (migration 9) conn
-    cols <- query_ conn "SELECT name FROM pragma_table_info('dispatches')" :: IO [Only Text]
-    assertBool "merged_at column present after migration 9" (Only ("merged_at" :: Text) `elem` cols)
-    close conn
-
-{- | An upgrading DB carries the old view; migration 10 must drop and
-recreate it. The stand-in view's shape is irrelevant — only its existence
-matters for the DROP.
--}
-testMigration10ReplacesView :: IO ()
-testMigration10ReplacesView = withBaseTestDb $ \conn -> do
-    execute_ conn "DROP VIEW ready_tasks"
-    execute_ conn "CREATE VIEW ready_tasks AS SELECT * FROM tasks WHERE 0"
-    migrationUp (migration 10) conn
-    sql <- query_ conn "SELECT sql FROM sqlite_master WHERE type='view' AND name='ready_tasks'" :: IO [Only Text]
-    assertBool
-        "recreated view gates on unmerged dispatches"
-        (any (\(Only s) -> "merge_sha IS NULL" `T.isInfixOf` s) sql)
-
 testMigration13Backfill :: IO ()
 testMigration13Backfill = do
     conn <- open ":memory:"
@@ -324,9 +274,10 @@ testMigration14KindAxis = withBaseTestDb $ \conn -> do
     orphaned <- RC.taskCategoriesFor conn tid
     null orphaned @?= True
 
-{- | Migration 15 rebuilds `tasks` to widen its state CHECK. Existing rows
-and the child FKs must survive the rebuild, and the recreated view must
-span both ready states.
+{- | Migration 15 rebuilds `tasks` through an unconstrained backup table to
+widen its state CHECK. The @INSERT ... SELECT@ names its columns explicitly,
+so a column dropped from that list loses its data silently — hence a fixture
+row with every nullable field populated, compared whole.
 -}
 testMigration15ReadyInteractive :: IO ()
 testMigration15ReadyInteractive = withBaseTestDb $ \conn -> do
@@ -356,14 +307,31 @@ testMigration15ReadyInteractive = withBaseTestDb $ \conn -> do
         \CREATE INDEX tasks_state_idx ON tasks(state);\n\
         \CREATE VIEW ready_tasks AS SELECT * FROM tasks WHERE 0;\n\
         \INSERT INTO tasks (id,title,state) VALUES ('01AAA','Dependency','ready');\n\
-        \INSERT INTO tasks (id,title,state) VALUES ('01BBB','Dependent','ready');\n\
+        \INSERT INTO tasks (id,title,body,state,priority,block_reason,no_commit,\n\
+        \                   claimed_by,claimed_at,created_at,updated_at)\n\
+        \  VALUES ('01BBB','Dependent','kept body','ready',7,'waiting on A',1,\n\
+        \          'agent-3','2026-01-02 03:04:05','2026-01-01 00:00:00',\n\
+        \          '2026-01-01 00:00:00');\n\
         \INSERT INTO edges (id,kind,src_kind,src_id,dst_kind,dst_id)\n\
         \  VALUES ('01EDGE','depends_on','task','01BBB','task','01AAA');"
 
     migrationUp (migration 15) conn
 
-    carried <- query_ conn "SELECT id FROM tasks ORDER BY id" :: IO [Only Text]
-    map fromOnly carried @?= ["01AAA", "01BBB"]
+    -- Every column of the fully-populated row, not just its id: a name missing
+    -- from the migration's INSERT list nulls that field without complaint.
+    carried <-
+        query_
+            conn
+            "SELECT id, title, body, state, priority, block_reason, no_commit, \
+            \claimed_by, claimed_at, created_at, updated_at \
+            \FROM tasks WHERE id = '01BBB'" ::
+            IO [(Text, Text, Text, Text, Maybe Int, Maybe Text, Int) :. (Maybe Text, Maybe Text, Text, Text)]
+    carried
+        @?= [ ("01BBB", "Dependent", "kept body", "ready", Just 7, Just "waiting on A", 1)
+                :. (Just "agent-3", Just "2026-01-02 03:04:05", "2026-01-01 00:00:00", "2026-01-01 00:00:00")
+            ]
+    ids <- query_ conn "SELECT id FROM tasks ORDER BY id" :: IO [Only Text]
+    map fromOnly ids @?= ["01AAA", "01BBB"]
     edges <- query_ conn "SELECT id FROM edges" :: IO [Only Text]
     map fromOnly edges @?= ["01EDGE"]
 
@@ -534,19 +502,3 @@ testMigration19AddsRouting = withBaseTestDb $ \conn -> do
     -- applySchema, so a "migrated" fresh DB is the schema verbatim).
     upgraded <- tableColumns conn "tasks"
     L.sort upgraded @?= L.sort taskCols
-
-{- | Upgrading DBs carry the dead view; DBs created after it left the base
-schema do not. Both must land in the same place.
--}
-testMigration20DropsTaskStatus :: IO ()
-testMigration20DropsTaskStatus = withBaseTestDb $ \conn -> do
-    execute_ conn "CREATE VIEW task_status AS SELECT id, state FROM tasks"
-    migrationUp (migration 20) conn
-    assertNoTaskStatus conn
-    -- Already-absent is the common case: a rerun must not throw.
-    migrationUp (migration 20) conn
-    assertNoTaskStatus conn
-  where
-    assertNoTaskStatus conn = do
-        views <- query_ conn "SELECT name FROM sqlite_master WHERE type='view'" :: IO [Only Text]
-        assertBool "task_status view dropped" (Only ("task_status" :: Text) `notElem` views)

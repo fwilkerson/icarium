@@ -17,6 +17,12 @@ Tests should cover the **interface and larger functional units**. Get nuanced on
 
 If a function is hard to test, that's usually a design signal — extract the pure core, then the test is easy. Don't reach for mocks first.
 
+**One test per externally-promised behaviour; a table row counts as a test.** When several cases share a scenario and differ only in input and expectation, make them a list of rows fed through one `testCase`-per-row generator (`SearchSpec.matchCases`, `DecideSpec.reasonCases`, `ResolverSpec.resolvers`). Adding a case becomes a line, and each row still fails and reports on its own — `tasty-hunit` aborts a `testCase` at the first failed assertion, so bundling behaviours that fail independently into one case costs a red-green round-trip per hidden failure. Bundle only assertions that share a fixture and would fail together.
+
+**Prove a shape with a golden, not a pile of `isInfixOf`.** One `@?=` against the whole rendered block says more than a dozen substring checks, and there is one place to update when the format moves.
+
+**Settle a semantic at one tier.** If `SearchSpec` pins FTS ranking, `CliSearchSpec` proves only that the flag reaches the filter and the hit renders — it does not restate the ranking.
+
 **Build tasks with `TestHelpers.mkTaskIn` / `mkTaskRow`,** not an inline `RT.NewTask` record — the record grows, and every literal has to be touched when it does. Spell it out only for a non-default field.
 
 **Filter with a single bare word: `--test-options="-p /branches/"`.** Tasty splits `-p` on commas, and a pattern containing `.` can match zero tests while still reporting `All 0 tests passed`. A green run with a suspiciously low count means the filter missed, not that the code is fine.

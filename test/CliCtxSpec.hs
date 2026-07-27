@@ -22,10 +22,7 @@ tests =
         , testCase "link --help has corrected argument order example" testLinkHelpExample
         , testCase "link list emits header row when edges exist" testLinkListHeader
         , testCase "ctx add --help and link add --help cross-reference each other" testHelpCrossRef
-        , testCase "ctx path → body file contains body" testCtxShowBody
-        , testCase "ctx show prints body path, not body content" testCtxShowBodyPath
-        , testCase "ctx cat prints body to stdout" testCtxCat
-        , testCase "ctx cat on no-body entry prints empty and exits 0" testCtxCatNoBody
+        , testCase "ctx path/show/cat round-trip over a body" testCtxBodyRoundTrip
         , testCase "link add ctx references ctx is accepted" testLinkAddCtxReferencesCtx
         , testCase "link add task derived-from task records a follow-up" testLinkAddTaskDerivedFromTask
         , testCase "ctx children lists direct children by edge kind" testCtxChildren
@@ -33,13 +30,11 @@ tests =
         , testCase "ctx children --json: kind, id, title per row" testCtxChildrenJson
         , testCase "ctx tree --json: nested children, cycle flag" testCtxTreeJson
         , testCase "ctx exists: found exits 0, not-found exits 1, ambiguous exits 2" testCtxExists
-        , testCase "ctx exists --verbose prints full id on match" testCtxExistsVerbose
         , testCase "ctx list/show --json: valid JSON, ids, body_path not body" testCtxJson
         , testCase "ctx curate records events; show renders latest; list hides retired" testCtxCurateLifecycle
         , testCase "ctx curate validation: artifact rules per disposition" testCtxCurateValidation
         , testCase "ctx curate queue: never-curated, --older-than, --json" testCtxCurateQueue
-        , testCase "ctx rm removes the body file and prints deleted <id>" testCtxRm
-        , testCase "ctx rm on an unresolvable id exits 1, names the kind" testCtxRmNotFound
+        , testCase "ctx rm removes the body file; an unresolvable id exits 1" testCtxRm
         ]
 
 testCtxListLimit :: IO ()
@@ -99,47 +94,37 @@ testHelpCrossRef = withTempDb $ \db -> do
     (_, linkOut, _) <- runIcarium db ["link", "add", "--help"]
     assertBool "link add --help mentions ctx add --derived-from" ("ctx add --derived-from" `isInfixOf` linkOut)
 
-testCtxShowBody :: IO ()
-testCtxShowBody = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["ctx", "add", "Body test entry", "--body", "context body text"]
-    let kid = head (words addOut)
-
-    (pCode, pathOut, _) <- runIcarium db ["ctx", "path", kid]
-    pCode @?= ExitSuccess
-    let bodyPath = head (lines pathOut)
-    contents <- readFile bodyPath
-    contents @?= "context body text"
-
-testCtxShowBodyPath :: IO ()
-testCtxShowBodyPath = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["ctx", "add", "Body path test entry", "--body", "secret context body"]
+{- | The read surface over one filed entry: @path@ names the file, @show@
+points at it without inlining it, @cat@ is the way to the content.
+-}
+testCtxBodyRoundTrip :: IO ()
+testCtxBodyRoundTrip = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Body test entry", "--body", "secret body\nline two"]
     let outLines = lines addOut
         cxid = head outLines
         bodyPath = outLines !! 1
 
-    (code, out, _) <- runIcarium db ["ctx", "show", cxid]
-    code @?= ExitSuccess
-    assertBool "show contains body path" (bodyPath `isInfixOf` out)
-    assertBool "show does not contain body content" (not ("secret context body" `isInfixOf` out))
-    assertBool "show does not have ## Body header" (not ("## Body" `isInfixOf` out))
+    (pCode, pathOut, _) <- runIcarium db ["ctx", "path", cxid]
+    pCode @?= ExitSuccess
+    head (lines pathOut) @?= bodyPath
+    contents <- readFile bodyPath
+    contents @?= "secret body\nline two"
 
-testCtxCat :: IO ()
-testCtxCat = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["ctx", "add", "Cat context", "--body", "ctx body line one\nctx body line two"]
-    let cxid = head (lines addOut)
+    (sCode, sOut, _) <- runIcarium db ["ctx", "show", cxid]
+    sCode @?= ExitSuccess
+    assertBool "show contains body path" (bodyPath `isInfixOf` sOut)
+    assertBool "show does not contain body content" (not ("secret body" `isInfixOf` sOut))
+    assertBool "show does not have ## Body header" (not ("## Body" `isInfixOf` sOut))
 
-    (code, out, _) <- runIcarium db ["ctx", "cat", cxid]
-    code @?= ExitSuccess
-    out @?= "ctx body line one\nctx body line two"
+    (cCode, cOut, _) <- runIcarium db ["ctx", "cat", cxid]
+    cCode @?= ExitSuccess
+    cOut @?= "secret body\nline two"
 
-testCtxCatNoBody :: IO ()
-testCtxCatNoBody = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["ctx", "add", "No body context"]
-    let cxid = head (lines addOut)
-
-    (code, out, _) <- runIcarium db ["ctx", "cat", cxid]
-    code @?= ExitSuccess
-    out @?= ""
+    -- An entry filed without a body cats to nothing rather than failing.
+    (_, bareOut, _) <- runIcarium db ["ctx", "add", "No body context"]
+    (bCode, bOut, _) <- runIcarium db ["ctx", "cat", head (lines bareOut)]
+    bCode @?= ExitSuccess
+    bOut @?= ""
 
 testLinkAddCtxReferencesCtx :: IO ()
 testLinkAddCtxReferencesCtx = withTempDb $ \db -> do
@@ -331,9 +316,12 @@ testCtxExists = withTempDb $ \db -> do
     foundCode @?= ExitSuccess
     foundOut @?= ""
 
-    -- found: prefix → exit 0
+    -- found: prefix → exit 0, and --verbose resolves it to the full id
     (prefCode, _, _) <- runIcarium db ["ctx", "exists", take 10 cxid]
     prefCode @?= ExitSuccess
+    (vCode, vOut, _) <- runIcarium db ["ctx", "exists", "--verbose", take 10 cxid]
+    vCode @?= ExitSuccess
+    assertBool "verbose output contains full id" (cxid `isInfixOf` vOut)
 
     -- not found → exit 1
     (missCode, _, _) <- runIcarium db ["ctx", "exists", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
@@ -347,15 +335,6 @@ testCtxExists = withTempDb $ \db -> do
     (ambCode, _, ambErr) <- runIcarium db ["ctx", "exists", sharedPrefix]
     ambCode @?= ExitFailure 2
     ambErr @?= "ambiguous: " <> sharedPrefix <> " matches 2 contexts\n"
-
-testCtxExistsVerbose :: IO ()
-testCtxExistsVerbose = withTempDb $ \db -> do
-    (_, addOut, _) <- runIcarium db ["ctx", "add", "Verbose exists context"]
-    let cxid = head (words addOut)
-
-    (code, out, _) <- runIcarium db ["ctx", "exists", "--verbose", take 10 cxid]
-    code @?= ExitSuccess
-    assertBool "verbose output contains full id" (cxid `isInfixOf` out)
 
 testCtxJson :: IO ()
 testCtxJson = withTempDb $ \db -> do
@@ -489,8 +468,6 @@ testCtxRm = withTempDb $ \db -> do
     after <- doesFileExist bodyPath
     assertBool "body file gone after rm" (not after)
 
-testCtxRmNotFound :: IO ()
-testCtxRmNotFound = withTempDb $ \db -> do
-    (code, _, err) <- runIcarium db ["ctx", "rm", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
-    code @?= ExitFailure 1
-    assertBool "error names the kind" ("context" `isInfixOf` err)
+    (missCode, _, missErr) <- runIcarium db ["ctx", "rm", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
+    missCode @?= ExitFailure 1
+    assertBool "error names the kind" ("context" `isInfixOf` missErr)

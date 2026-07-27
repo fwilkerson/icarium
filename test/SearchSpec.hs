@@ -1,14 +1,21 @@
--- | Query parsing and the FTS-backed @searchEntries@ surface.
+{- | Query parsing and the FTS-backed @searchEntries@ surface.
+
+Match and filter semantics are settled here, once, against the repo
+function. The CLI spec proves the flags reach these filters and that hits
+render; it does not restate the semantics.
+-}
 module SearchSpec (tests) where
 
 import Control.Monad (forM_, void)
+import Data.List (sort)
+import Data.Text (Text)
 import Data.Text qualified as T
+import Database.SQLite.Simple (Connection)
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (assertBool, testCase, (@?=))
+import Test.Tasty.HUnit (testCase, (@?=))
 
 import Icarium.Repo.Search (ParsedQuery (..), Term (..), parseQuery)
 import Icarium.Repo.Search qualified as RS
-import Icarium.Repo.Task qualified as RT
 import Icarium.Types
 
 import TestHelpers
@@ -17,262 +24,211 @@ tests :: TestTree
 tests =
     testGroup
         "search"
-        [ testGroup
-            "searchEntries"
-            [ testCase "whitespace-only query returns (0, [])" testSearchWhitespaceOnly
-            , testCase "title hit ranks before body hit" testSearchTitleBeforeBody
-            , testCase "title hit from context outranks body hit from task" testSearchCrossKindRank
-            , testCase "escapeLike: query containing % matches literally" testSearchEscapePercent
-            , testCase "escapeLike: query containing _ matches literally" testSearchEscapeUnderscore
-            , testCase "--kind task excludes context hits" testSearchKindTask
-            , testCase "--kind ctx excludes task hits" testSearchKindCtx
-            , testCase "limit caps result count" testSearchLimit
-            , testCase "no match returns empty list" testSearchNoMatch
-            , testCase "AND: multi-word matches tokens in any order" testSearchAndTokens
-            , testCase "AND: entry missing one token excluded" testSearchAndExcludes
-            , testCase "phrase: exact substring required" testSearchPhrase
-            , testCase "OR: union of token matches" testSearchOrTokens
-            , testCase "snake_case: space-separated tokens match underscore-joined form" testSearchSnakeCase
-            , testCase "--domain filter includes only domain-tagged entries" testSearchDomainFilter
-            , testCase "--discipline filter includes only discipline-tagged entries" testSearchDisciplineFilter
-            , testCase "multiple --domain values are OR'd" testSearchMultiDomainOr
-            , testCase "--exclude-domain removes tagged entries" testSearchExcludeDomain
-            , testCase "--title-only scopes FTS to title column" testSearchTitleOnly
-            , testCase "--body-only scopes FTS to body column" testSearchBodyOnly
-            , testCase "hitBodyMatch set for body matches" testSearchHitBodyMatch
-            ]
-        , testGroup
-            "parseQuery"
-            [ testCase "single word → AndQuery [Word]" testParseQueryWord
-            , testCase "two words → AndQuery [Word, Word]" testParseQueryAnd
-            , testCase "quoted phrase → AndQuery [Phrase]" testParseQueryPhrase
-            , testCase "explicit OR → OrQuery" testParseQueryOr
-            , testCase "OR is case-sensitive (lowercase not treated as OR)" testParseQueryOrCase
-            , testCase "whitespace-only → AndQuery []" testParseQueryWhitespace
-            ]
+        [ testGroup "searchEntries" $
+            map matchCase matchCases
+                <> [ testCase "title hits outrank body hits in both directions, with match flags" testRanking
+                   , testCase "limit caps the result list, total counts past it" testLimit
+                   ]
+        , testGroup "parseQuery" (map parseCase parseCases)
         ]
 
 -- =============================================================
--- searchEntries
+-- searchEntries: which entries match
 -- =============================================================
 
-testSearchWhitespaceOnly :: IO ()
-testSearchWhitespaceOnly = withTestDb $ \c -> do
-    _ <- mkContext c "some title" "some body"
-    (total, results) <- RS.searchEntries c "   " RS.noFilters 10
-    total @?= 0
-    null results @?= True
+{- | One matching scenario: seed a labelled corpus, run a query under some
+filters, and name the entries that must come back. Compared as a set —
+'testRanking' owns the order.
+-}
+data MatchCase = MatchCase
+    { mcName :: String
+    , mcSeed :: Connection -> IO [(String, Text)]
+    , mcQuery :: Text
+    , mcFilters :: RS.SearchFilters
+    , mcExpect :: [String]
+    }
 
-testSearchTitleBeforeBody :: IO ()
-testSearchTitleBeforeBody = withTestDb $ \c -> do
-    tid <- mkTaskRow c "fts needle title"
-    kid <- mkContext c "unrelated title" "body contains needle here"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters 10
-    assertBool "two results returned" (length results == 2)
-    RS.hitId (head results) @?= tid
-    RS.hitTitleMatch (head results) @?= True
-    RS.hitId (results !! 1) @?= kid
-    RS.hitTitleMatch (results !! 1) @?= False
+matchCase :: MatchCase -> TestTree
+matchCase MatchCase{..} = testCase mcName $ withTestDb $ \c -> do
+    corpus <- mcSeed c
+    (_, hits) <- RS.searchEntries c mcQuery mcFilters 10
+    let labelOf i = lookup i [(v, k) | (k, v) <- corpus]
+    sort (map (labelOf . RS.hitId) hits) @?= sort (map Just mcExpect)
 
-testSearchCrossKindRank :: IO ()
-testSearchCrossKindRank = withTestDb $ \c -> do
-    _ <-
-        RT.insertTask
-            c
-            RT.NewTask
-                { RT.ntTitle = "no match title"
-                , RT.ntBody = "body has xyzzy"
-                , RT.ntState = ReadyHeadless
-                , RT.ntPriority = Nothing
-                , RT.ntNoCommit = False
-                , RT.ntRouting = mempty
-                }
-    kid <- mkContext c "title has xyzzy" "body"
-    (_, results) <- RS.searchEntries c "xyzzy" RS.noFilters 10
-    assertBool "context title hit before task body hit" (RS.hitId (head results) == kid)
-    RS.hitTitleMatch (head results) @?= True
+-- | Seed context entries as @(label, title, body)@.
+ctxs :: [(String, Text, Text)] -> Connection -> IO [(String, Text)]
+ctxs entries c = mapM (\(l, t, b) -> (,) l <$> mkContext c t b) entries
 
-testSearchEscapePercent :: IO ()
-testSearchEscapePercent = withTestDb $ \c -> do
-    kid <- mkContext c "100% correct" "body"
-    _ <- mkContext c "unrelated" "body"
-    (_, results) <- RS.searchEntries c "100%" RS.noFilters 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchEscapeUnderscore :: IO ()
-testSearchEscapeUnderscore = withTestDb $ \c -> do
-    kid <- mkContext c "snake_case naming" "body"
-    _ <- mkContext c "unrelated" "body"
-    (_, results) <- RS.searchEntries c "snake_case" RS.noFilters 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchKindTask :: IO ()
-testSearchKindTask = withTestDb $ \c -> do
+-- | A task and a context sharing a search token, for the kind filters.
+taskAndCtx :: Connection -> IO [(String, Text)]
+taskAndCtx c = do
     tid <- mkTaskRow c "needle task"
-    _ <- mkContext c "needle context" "body"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfKind = Just TaskNode} 10
-    length results @?= 1
-    RS.hitId (head results) @?= tid
-
-testSearchKindCtx :: IO ()
-testSearchKindCtx = withTestDb $ \c -> do
-    _ <- mkTaskRow c "needle task"
     kid <- mkContext c "needle context" "body"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfKind = Just ContextNode} 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
+    pure [("task", tid), ("ctx", kid)]
 
-testSearchLimit :: IO ()
-testSearchLimit = withTestDb $ \c -> do
+-- | Seed a category on @axis@ and tag the named context entries with it.
+tagged :: CategoryAxis -> Text -> [String] -> (Connection -> IO [(String, Text)]) -> Connection -> IO [(String, Text)]
+tagged axis name labels seed c = do
+    cat <- mkCat c axis name
+    corpus <- seed c
+    forM_ [i | (l, i) <- corpus, l `elem` labels] $ \i ->
+        attachContextCats c i [cat]
+    pure corpus
+
+matchCases :: [MatchCase]
+matchCases =
+    [ MatchCase
+        "whitespace-only query matches nothing"
+        (ctxs [("a", "some title", "some body")])
+        "   "
+        RS.noFilters
+        []
+    , MatchCase
+        "a query no entry carries matches nothing"
+        (ctxs [("a", "some title", "some body")])
+        "xyzzy_no_match"
+        RS.noFilters
+        []
+    , MatchCase
+        "escapeLike: a query containing % matches literally"
+        (ctxs [("hit", "100% correct", "body"), ("miss", "unrelated", "body")])
+        "100%"
+        RS.noFilters
+        ["hit"]
+    , MatchCase
+        "escapeLike: a query containing _ matches literally"
+        (ctxs [("hit", "snake_case naming", "body"), ("miss", "unrelated", "body")])
+        "snake_case"
+        RS.noFilters
+        ["hit"]
+    , MatchCase
+        "AND: multi-word matches tokens in any order, and excludes an entry missing one"
+        (ctxs [("hit", "credentials owned by client", "body"), ("miss", "client only", "body")])
+        "client credentials"
+        RS.noFilters
+        ["hit"]
+    , MatchCase
+        "phrase: exact substring required"
+        (ctxs [("hit", "client credentials flow", "body"), ("miss", "credentials for client", "body")])
+        "\"client credentials\""
+        RS.noFilters
+        ["hit"]
+    , MatchCase
+        "OR: union of token matches"
+        (ctxs [("foo", "foo topic", "body"), ("bar", "bar topic", "body"), ("miss", "unrelated", "body")])
+        "foo OR bar"
+        RS.noFilters
+        ["foo", "bar"]
+    , MatchCase
+        "snake_case: space-separated tokens match the underscore-joined form"
+        (ctxs [("hit", "client_credentials", "body"), ("miss", "unrelated", "body")])
+        "client credentials"
+        RS.noFilters
+        ["hit"]
+    , MatchCase
+        "--kind task excludes context hits"
+        taskAndCtx
+        "needle"
+        RS.noFilters{RS.sfKind = Just TaskNode}
+        ["task"]
+    , MatchCase
+        "--kind ctx excludes task hits"
+        taskAndCtx
+        "needle"
+        RS.noFilters{RS.sfKind = Just ContextNode}
+        ["ctx"]
+    , MatchCase
+        "--domain keeps only entries on that domain"
+        (tagged Domain "mydom" ["hit"] (ctxs [("hit", "needle tagged", "body"), ("miss", "needle untagged", "body")]))
+        "needle"
+        RS.noFilters{RS.sfDomains = ["mydom"]}
+        ["hit"]
+    , MatchCase
+        "--discipline keeps only entries on that discipline"
+        (tagged Discipline "mydisc" ["hit"] (ctxs [("hit", "needle tagged", "body"), ("miss", "needle untagged", "body")]))
+        "needle"
+        RS.noFilters{RS.sfDisciplines = ["mydisc"]}
+        ["hit"]
+    , MatchCase
+        "multiple --domain values are OR'd"
+        ( tagged Domain "domB" ["b"] $
+            tagged Domain "domA" ["a"] $
+                ctxs [("a", "needle entry A", "body"), ("b", "needle entry B", "body"), ("miss", "needle untagged", "body")]
+        )
+        "needle"
+        RS.noFilters{RS.sfDomains = ["domA", "domB"]}
+        ["a", "b"]
+    , MatchCase
+        "--exclude-domain drops entries on that domain"
+        (tagged Domain "noisydom" ["miss"] (ctxs [("hit", "needle good", "body"), ("miss", "needle noise", "body")]))
+        "needle"
+        RS.noFilters{RS.sfExcludeDomains = ["noisydom"]}
+        ["hit"]
+    , MatchCase
+        "--title-only scopes FTS to the title column"
+        (ctxs [("hit", "scopetoken in title", "body content"), ("miss", "unrelated title", "scopetoken in body")])
+        "scopetoken"
+        RS.noFilters{RS.sfScope = RS.ScopeTitle}
+        ["hit"]
+    , MatchCase
+        "--body-only scopes FTS to the body column"
+        (ctxs [("miss", "scopetoken in title", "body content"), ("hit", "unrelated title", "scopetoken in body")])
+        "scopetoken"
+        RS.noFilters{RS.sfScope = RS.ScopeBody}
+        ["hit"]
+    ]
+
+-- =============================================================
+-- searchEntries: rank and match flags
+-- =============================================================
+
+{- | Rank is decided by /where/ the hit landed, never by node kind: a title
+hit outranks a body hit whichever side of the task\/context divide it is
+on. The per-hit match flags are the same signal the renderer badges with.
+-}
+testRanking :: IO ()
+testRanking = withTestDb $ \c -> do
+    -- Title hit on a task, body hit on a context.
+    tTitle <- mkTaskRow c "needle in a task title"
+    kBody <- mkContext c "unrelated" "body carries needle"
+    (_, up) <- RS.searchEntries c "needle" RS.noFilters 10
+    map RS.hitId up @?= [tTitle, kBody]
+    map RS.hitTitleMatch up @?= [True, False]
+    map RS.hitBodyMatch up @?= [False, True]
+
+    -- The mirror image: title hit on a context, body hit on a task.
+    tBody <- mkTaskBody c "unrelated" "body carries xyzzy" ReadyHeadless
+    kTitle <- mkContext c "xyzzy in a context title" "body"
+    (_, down) <- RS.searchEntries c "xyzzy" RS.noFilters 10
+    map RS.hitId down @?= [kTitle, tBody]
+
+    -- A hit in both columns sets both flags.
+    _ <- mkContext c "bmatch_token in title" "bmatch_token in body"
+    (_, both) <- RS.searchEntries c "bmatch_token" RS.noFilters 10
+    map RS.hitTitleMatch both @?= [True]
+    map RS.hitBodyMatch both @?= [True]
+
+testLimit :: IO ()
+testLimit = withTestDb $ \c -> do
     forM_ [(1 :: Int) .. 5] $ \i ->
         void $ mkContext c ("needle entry " <> T.pack (show i)) "body"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters 3
+    (total, results) <- RS.searchEntries c "needle" RS.noFilters 3
+    total @?= 5
     length results @?= 3
-
-testSearchNoMatch :: IO ()
-testSearchNoMatch = withTestDb $ \c -> do
-    _ <- mkContext c "some title" "some body"
-    (_, results) <- RS.searchEntries c "xyzzy_no_match" RS.noFilters 10
-    null results @?= True
-
-testSearchAndTokens :: IO ()
-testSearchAndTokens = withTestDb $ \c -> do
-    kid <- mkContext c "credentials owned by client" "body"
-    _ <- mkContext c "client only" "body"
-    (_, results) <- RS.searchEntries c "client credentials" RS.noFilters 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchAndExcludes :: IO ()
-testSearchAndExcludes = withTestDb $ \c -> do
-    _ <- mkContext c "only alpha here" "body"
-    (_, results) <- RS.searchEntries c "alpha beta" RS.noFilters 10
-    null results @?= True
-
-testSearchPhrase :: IO ()
-testSearchPhrase = withTestDb $ \c -> do
-    kid <- mkContext c "client credentials flow" "body"
-    _ <- mkContext c "credentials for client" "body"
-    (_, results) <- RS.searchEntries c "\"client credentials\"" RS.noFilters 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchOrTokens :: IO ()
-testSearchOrTokens = withTestDb $ \c -> do
-    _ <- mkContext c "foo topic" "body"
-    _ <- mkContext c "bar topic" "body"
-    _ <- mkContext c "unrelated" "body"
-    (_, results) <- RS.searchEntries c "foo OR bar" RS.noFilters 10
-    length results @?= 2
-
-testSearchSnakeCase :: IO ()
-testSearchSnakeCase = withTestDb $ \c -> do
-    kid <- mkContext c "client_credentials" "body"
-    _ <- mkContext c "unrelated" "body"
-    (_, results) <- RS.searchEntries c "client credentials" RS.noFilters 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchDomainFilter :: IO ()
-testSearchDomainFilter = withTestDb $ \c -> do
-    domCat <- mkCat c Domain "mydom"
-    kid <- mkContext c "needle in domain entry" "body"
-    attachContextCats c kid [domCat]
-    _ <- mkContext c "needle no domain" "body"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfDomains = ["mydom"]} 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchDisciplineFilter :: IO ()
-testSearchDisciplineFilter = withTestDb $ \c -> do
-    discCat <- mkCat c Discipline "mydisc"
-    kid <- mkContext c "needle in discipline entry" "body"
-    attachContextCats c kid [discCat]
-    _ <- mkContext c "needle no discipline" "body"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfDisciplines = ["mydisc"]} 10
-    length results @?= 1
-    RS.hitId (head results) @?= kid
-
-testSearchMultiDomainOr :: IO ()
-testSearchMultiDomainOr = withTestDb $ \c -> do
-    domA <- mkCat c Domain "domA"
-    domB <- mkCat c Domain "domB"
-    kidA <- mkContext c "needle entry A" "body"
-    attachContextCats c kidA [domA]
-    kidB <- mkContext c "needle entry B" "body"
-    attachContextCats c kidB [domB]
-    _ <- mkContext c "needle entry C untagged" "body"
-    (_, results) <- RS.searchEntries c "needle" RS.noFilters{RS.sfDomains = ["domA", "domB"]} 10
-    length results @?= 2
-    assertBool "domA entry present" (any (\h -> RS.hitId h == kidA) results)
-    assertBool "domB entry present" (any (\h -> RS.hitId h == kidB) results)
-
-testSearchExcludeDomain :: IO ()
-testSearchExcludeDomain = withTestDb $ \c -> do
-    domCat <- mkCat c Domain "noisydom"
-    kidExcluded <- mkContext c "needle noise entry" "body"
-    attachContextCats c kidExcluded [domCat]
-    kidKept <- mkContext c "needle good entry" "body"
-    (_, results) <-
-        RS.searchEntries c "needle" RS.noFilters{RS.sfExcludeDomains = ["noisydom"]} 10
-    length results @?= 1
-    RS.hitId (head results) @?= kidKept
-
-testSearchTitleOnly :: IO ()
-testSearchTitleOnly = withTestDb $ \c -> do
-    kidTitle <- mkContext c "scopetoken in title" "body content only"
-    _ <- mkContext c "unrelated title" "scopetoken in body only"
-    (_, results) <- RS.searchEntries c "scopetoken" RS.noFilters{RS.sfScope = RS.ScopeTitle} 10
-    length results @?= 1
-    RS.hitId (head results) @?= kidTitle
-
-testSearchBodyOnly :: IO ()
-testSearchBodyOnly = withTestDb $ \c -> do
-    _ <- mkContext c "bodytoken in title" "body content only"
-    kidBody <- mkContext c "unrelated title" "bodytoken in body only"
-    (_, results) <- RS.searchEntries c "bodytoken" RS.noFilters{RS.sfScope = RS.ScopeBody} 10
-    length results @?= 1
-    RS.hitId (head results) @?= kidBody
-
-testSearchHitBodyMatch :: IO ()
-testSearchHitBodyMatch = withTestDb $ \c -> do
-    kidBodyOnly <- mkContext c "unrelated title" "bmatch_token lives here"
-    kidBoth <- mkContext c "bmatch_token in title too" "bmatch_token in body"
-    (_, results) <- RS.searchEntries c "bmatch_token" RS.noFilters 10
-    let findHit i = head [h | h <- results, RS.hitId h == i]
-        hBody = findHit kidBodyOnly
-        hBoth = findHit kidBoth
-    RS.hitTitleMatch hBody @?= False
-    RS.hitBodyMatch hBody @?= True
-    RS.hitTitleMatch hBoth @?= True
-    RS.hitBodyMatch hBoth @?= True
 
 -- =============================================================
 -- parseQuery
 -- =============================================================
 
-testParseQueryWord :: IO ()
-testParseQueryWord =
-    parseQuery "needle" @?= AndQuery [Word "needle"]
+parseCases :: [(String, Text, ParsedQuery)]
+parseCases =
+    [ ("single word", "needle", AndQuery [Word "needle"])
+    , ("two words are AND'd", "client credentials", AndQuery [Word "client", Word "credentials"])
+    , ("quoted phrase", "\"client credentials\"", AndQuery [Phrase "client credentials"])
+    , ("explicit OR", "foo OR bar", OrQuery [Word "foo", Word "bar"])
+    , ("OR is case-sensitive", "foo or bar", AndQuery [Word "foo", Word "or", Word "bar"])
+    , ("whitespace-only", "   ", AndQuery [])
+    ]
 
-testParseQueryAnd :: IO ()
-testParseQueryAnd =
-    parseQuery "client credentials" @?= AndQuery [Word "client", Word "credentials"]
-
-testParseQueryPhrase :: IO ()
-testParseQueryPhrase =
-    parseQuery "\"client credentials\"" @?= AndQuery [Phrase "client credentials"]
-
-testParseQueryOr :: IO ()
-testParseQueryOr =
-    parseQuery "foo OR bar" @?= OrQuery [Word "foo", Word "bar"]
-
-testParseQueryOrCase :: IO ()
-testParseQueryOrCase =
-    parseQuery "foo or bar" @?= AndQuery [Word "foo", Word "or", Word "bar"]
-
-testParseQueryWhitespace :: IO ()
-testParseQueryWhitespace =
-    parseQuery "   " @?= AndQuery []
+parseCase :: (String, Text, ParsedQuery) -> TestTree
+parseCase (name, input, expected) = testCase name $ parseQuery input @?= expected
