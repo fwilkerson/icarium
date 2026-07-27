@@ -4,33 +4,21 @@ Status: accepted (2026-07-24)
 
 `icarium dispatch run` exits 3 when any dispatch in the drain failed, or when
 anything stayed parked. Exit 0 means every task selected was dispatched,
-succeeded, and landed. This makes the drain agree with the single named
-dispatch, which already exited 3 on a failed outcome.
+succeeded, and landed. The drain and the single named dispatch answer alike.
 
 ## Context
 
-The two forms disagreed, and the disagreement was invisible because they were
-separate code paths in the same function:
-
-- `dispatch run TASK_ID` — dispatch failed ⇒ exit 3.
-- `dispatch run` (drain) — five tasks dispatched, all five failed ⇒ **exit 0**.
-  Only a *parked* dispatch raised exit 3.
-
-Neither branch stated a rule; each terminal case picked an exit code inline.
-Putting the two side by side to remove the duplication forced the question,
-because a shared pipeline cannot hold both answers.
-
-Agents are the callers here. An agent that runs a drain and reads exit 0 after
-five failures has been told the run was fine, and the failures are only
-discoverable by parsing the summary it printed on the way past.
+Agents are the callers here. An agent that runs a drain over five tasks, all
+of which fail, and reads exit 0 has been told the run was fine — the failures
+being discoverable only by parsing the summary printed on the way past.
 
 ## Decision
 
 **The exit code is derived from the accumulated results, not asserted per
 branch.** Exit 3 when any dispatch failed or any dispatch stayed parked; exit 0
 only for a clean full drain. Selection errors keep their own codes — a *named*
-task that does not resolve is exit 1, as before, because that is the selector
-failing rather than the work.
+task that does not resolve is exit 1, because that is the selector failing
+rather than the work.
 
 This mirrors how `Icarium.Dispatch.Decide` concludes an outcome from signals:
 the terminal cases report what happened, and one function reads them together.

@@ -9,19 +9,16 @@ a success — the verdict over their diff is never theirs to give.
 
 ## Context
 
-The reviewer prompt already defined its verdict as a function of its findings —
-"status is the verdict over BOTH axes, the worst outcome on either wins" — while
-also asking the model to emit that verdict as a separate `status:` field. Two
-representations of one value, and `--json-schema` constrained decoding
-guarantees *shape*, not *consistency*: a `fail` finding reported under a `pass`
-verdict is a well-formed payload the schema cannot reject.
+A model-asserted verdict alongside the findings would be two representations of
+one value, and `--json-schema` constrained decoding guarantees *shape*, not
+*consistency*: a `fail` finding reported under a `pass` verdict is a well-formed
+payload the schema cannot reject.
 
-This surfaced during the return-payload design, alongside a naming collision
-that turned out to be the same problem. `DispatchOutcome` (`success | failure |
-interrupted`) is icarium's conclusion about a dispatch. The proposed worker
-field was also called `outcome`, also with a `success` value — but a worker's
-`success` is contested: gates, the dirty-tree guard, and the reviewer can all
-turn it into `OFailure`.
+The same problem shows up in naming. `DispatchOutcome` (`success | failure |
+interrupted`) is icarium's conclusion about a dispatch, so a worker field named
+`outcome` with a `success` value would claim what a worker cannot: its success
+is contested — gates, the dirty-tree guard, and the reviewer can all turn it
+into `OFailure`.
 
 ## Decision
 
@@ -38,9 +35,6 @@ means.** Concretely:
   as-is because it is *unilateral* — nothing downstream overrules a worker that
   says it is stuck — and it maps 1:1 onto `TaskState.Blocked` plus
   `task.block_reason`.
-
-`ReviewVerdict`, `setReviewInfo`, and the `PCRetry` branch are unchanged. Only
-the value's provenance moves, from asserted to derived.
 
 ## Considered options
 
@@ -64,9 +58,7 @@ the value's provenance moves, from asserted to derived.
 
 ## Consequences
 
-- `parseReviewVerdictFromText` and `lastYamlBlock` are deletable; the schema
-  replaces the fenced-YAML scan.
-- Fail-closed posture on the *process* is retained separately: a reviewer that
-  times out or exits non-zero is still `RVFail`, independent of findings.
+- Fail-closed posture on the *process* is separate: a reviewer that times out
+  or exits non-zero is `RVFail`, independent of findings.
 - Verdict derivation lives in one place and is unit-testable without invoking a
   model.

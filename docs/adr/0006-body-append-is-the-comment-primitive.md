@@ -8,19 +8,14 @@ none is planned.
 
 ## Context
 
-The Pocock skills assume per-issue comments: triage notes, agent briefs,
-wontfix explanations, resolution threads. Icarium has only markdown bodies;
-body-append was the undocumented de facto convention.
+A comments table would mean new schema, new CLI surface, and a second place
+agents must read. A single body read is the more agent-friendly contract,
+and icarium's users are agents.
 
-Adding a comments table would mean new schema, new CLI surface, and a second
-place agents must read. A single body read is the more agent-friendly
-contract, and icarium's users are agents.
-
-The convention was already load-bearing: `Icarium.Dispatch.BodyDiff` diffs
-bodies section-by-section on H2 headings as the reviewer's tamper signal —
-workers may *append* `## Proof` or `## Notes`; any edit to an existing
-section is flagged. Append-only H2 sections are therefore already the
-mechanical append unit; this ADR names what exists.
+H2 sections are already the mechanical append unit:
+`Icarium.Dispatch.BodyDiff` diffs bodies section-by-section on H2 headings as
+the reviewer's tamper signal — workers may *append* `## Proof` or `## Notes`;
+any edit to an existing section is flagged.
 
 ## Decision
 

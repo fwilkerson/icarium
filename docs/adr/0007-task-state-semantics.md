@@ -18,28 +18,26 @@ Status: accepted (2026-07-19), revised (2026-07-20)
 ## Context
 
 The five triage roles the skills speak (`docs/agents/triage-labels.md`) map
-onto states, but `ready-for-human` had no state to map to. It lived as a
-`Triage: ready-for-human` line in the body — a convention no Haskell read.
-Since `ready_tasks` keyed on `state = 'ready'` plus a satisfied deps gate,
-such work sitting in `ready` was picked up by `dispatch run`. So in practice
-it hid in `planned`, which corrupted `planned`'s meaning (under-specified,
-details may rot) and made the ready surfaces under-report real work.
+onto states, and `ready-for-human` needs one of its own. Without it that work
+hides in `planned`, which corrupts `planned`'s meaning (under-specified,
+details may rot) and makes the ready surfaces under-report real work.
 
-The original split kept `ready` bare, reasoning that `CONTEXT.md` defines the
-project as headless-agent development, so `ready` = the headless queue is the
-aligned reading and only the exception needs a qualified name. That was wrong
-in practice — see the 2026-07-20 revision below.
-
-Separately, the states were only ever documented in scattered help text.
-Two of them carry non-obvious meaning worth writing down: `planned` is
+Two states carry non-obvious meaning worth writing down: `planned` is
 *under-specified* (not "specified but not yet queued"), and `done` is
 *accepted*, which is weaker than what dependents need.
 
 ## Decision
 
 - Two ready states, `ready_headless` and `ready_interactive`. They share one
-  specification bar and differ only in who does the work. Neither name is
-  bare: an unqualified `ready` is a parse error naming both.
+  specification bar and differ only in who does the work. **Neither name is
+  bare** — an unqualified `ready` is a parse error naming both, and no alias
+  resolves it (an alias is the same trap, silently). Symmetry is the point:
+  leave the unqualified name on one queue and every unqualified surface
+  inherits an arbitrary default. The concrete failure that shape produces —
+  `--state ready` selecting the headless queue while a `--ready` selector
+  selected the interactive one, two opposite answers to "which queue" from
+  one word in adjacent flags of the same command. Documenting it in help
+  text did not make it usable.
 - `blocked` stays singular. Its two flavours (dispatch failed vs. waiting on
   information) are distinguishable from the `dispatches` row, and both agree
   on the only thing a state must encode: not proceeding, don't hand it out.
@@ -51,14 +49,19 @@ Two of them carry non-obvious meaning worth writing down: `planned` is
   worklist: both ready states, dependency-gated, one interleaved list in
   priority order, narrowed by `--headless` / `--interactive`. `task list` is
   how you *find* work — a pure filter, no gate, no queue semantics, so it
-  cannot re-acquire a default queue.
+  cannot re-acquire a default queue. There is no `--ready` selector: queue
+  selection is what `--state` does, and the dependency gate is `task queue`.
 - `task next` and bare `task claim` stay interactive with no qualifier.
   Views have no natural default, but these are actions, and a human can only
   perform interactive work; headless selection is in-process via
   `claimNextTask` and never through the CLI.
 - `task claim <id>` claims a *named* task in either ready state, through the
   same `BEGIN IMMEDIATE` path. It ignores the deps gate: naming the task is
-  the selection. It refuses any other state, and says so.
+  the selection. It refuses any other state, and says so. Permissive across
+  both ready states on purpose — the dangerous direction is dispatch taking
+  human work, enforced in `claimNextTask`; a human taking headless work is
+  harmless and serves a real workflow (dispatch keeps failing, do it by
+  hand). Forcing a state edit first would make the state lie.
 
 ### `done` means accepted, not landed
 
@@ -75,43 +78,7 @@ dependents build on a base missing their dependency.
 
 ## Consequences
 
-- Migration 0015 rebuilds `tasks` to widen the state CHECK and recreates the
-  view. Existing `ready` rows keep their meaning — the split adds a state,
-  it does not reinterpret one.
-- Triage's `ready-for-human` becomes a real state transition, so the body
-  line goes away and the ready surfaces stop under-reporting.
-- Pre-1.0: bare `task claim` changed meaning rather than gaining a
-  qualifier. No compatibility shim.
-
-## Revision, 2026-07-20
-
-The bare `ready` name did not survive contact. It meant the *headless* queue
-on the state axis (`--state ready`) and the *interactive* queue on the
-selector axis (`--ready`) — two opposite answers to "which queue" from one
-word, in adjacent flags of the same command. Help text documented it; that
-did not make it usable.
-
-The root cause was asymmetry, not the flag: one queue held the unqualified
-name, so every unqualified surface inherited an arbitrary default, and
-`--ready` was merely where it was noticed first.
-
-Revised accordingly:
-
-- `ready` → `ready_headless`, in both the CLI and storage. Bare `ready` is
-  now an unknown-value error listing the valid states. No alias — an alias
-  is the same trap, silently resolved.
-- `--ready` is removed. Its two jobs split: queue selection is what `--state`
-  already does, and the dependency gate — previously implicit in the flag —
-  becomes explicit as `task queue`.
-- `task claim <id>` stays permissive across both ready states. The dangerous
-  direction is dispatch taking human work, enforced in `claimNextTask`; a
-  human taking headless work is harmless and serves a real workflow
-  (dispatch keeps failing, do it by hand). Forcing a state edit first would
-  make the state lie.
-- Migration 0016 renames existing rows. All were agent-safe, so the rename
-  is unconditional.
-
-Amended in place rather than superseded: these ADRs are read mid-task to
-learn current semantics, and the surviving content (why `ready_interactive`
-exists, why `blocked` stays singular, why `done` ≠ landed) is most of the
-file, so a successor could not stand alone.
+- Triage's `ready-for-human` is a real state transition, so the ready
+  surfaces do not under-report it.
+- Every surface naming a ready queue must qualify which one, including new
+  ones. That is the invariant the two-name split exists to hold.
