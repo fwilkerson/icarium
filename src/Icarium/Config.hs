@@ -84,6 +84,7 @@ data CategoriesConfig = CategoriesConfig
 data ReviewConfig = ReviewConfig
     { rcEnabled :: Bool
     , rcModel :: Maybe Text
+    , rcEffort :: Maybe Effort
     , rcMaxAttempts :: Int
     , rcPromptPath :: Maybe Text
     }
@@ -140,6 +141,7 @@ reviewCodec =
     ReviewConfig
         <$> Toml.bool "enabled" .= rcEnabled
         <*> Toml.dioptional (Toml.text "model") .= rcModel
+        <*> Toml.dioptional (effortField "effort") .= rcEffort
         <*> (fromMaybe 2 <$> Toml.dioptional (Toml.int "max_attempts")) .= (Just . rcMaxAttempts)
         <*> Toml.dioptional (Toml.text "prompt_path") .= rcPromptPath
 
@@ -271,7 +273,7 @@ defaultConfigText =
     \[dispatch]\n\
     \# Routing defaults. A task carrying its own --model/--effort overrides\n\
     \# these; a `dispatch run --model/--effort` flag overrides the task.\n\
-    \model  = \"claude-opus-4-8\"\n\
+    \model  = \"claude-opus-5\"\n\
     \effort = \"medium\"\n\
     \# The tools list is the gate: a tool absent here does not exist for the\n\
     \# worker. Adding \"Skill\" also enables slash commands and skills (no\n\
@@ -322,8 +324,10 @@ defaultConfigText =
     \\n\
     \[review]\n\
     \enabled      = true\n\
-    \# A cross-model reviewer avoids the dispatch model grading itself.\n\
-    \# Omit this key to inherit dispatch.model instead.\n\
-    \model        = \"claude-sonnet-5\"\n\
+    \# Both keys are spelled out so changing the worker's model or effort\n\
+    \# cannot silently drag the reviewer with it. Omit either to inherit\n\
+    \# the dispatch value.\n\
+    \model        = \"claude-opus-5\"\n\
+    \effort       = \"medium\"\n\
     \max_attempts = 2\n\
     \# prompt_path  = \".icarium/reviewer.md\" # defaults to built-in prompt\n"

@@ -74,8 +74,8 @@ test  = "cabal test all"
 # Defaults for the headless agent. A task can carry its own
 # `task add --model / --effort`; a `dispatch run --model / --effort` flag
 # beats both.
-model  = "claude-sonnet-5"
-effort = "high"
+model  = "claude-opus-5"
+effort = "medium"
 
 # `tools` is what claude is told about; `allowed_tools` is the permission
 # allowlist. Keep `allowed_tools` to read-only Bash plus the safe icarium
@@ -119,11 +119,12 @@ domains     = ["core"]
 disciplines = ["development"]
 kinds       = ["bug", "enhancement", "chore"]
 
-# Optional reviewer gate (see "Reviewers" below). Omit the section to disable.
-# [review]
-# enabled      = true
-# model        = "claude-sonnet-5"    # defaults to dispatch.model
-# max_attempts = 2                      # total attempts incl. first
+# Reviewer gate (see "Reviewers" below). Set `enabled = false` to disable.
+[review]
+enabled      = true
+model        = "claude-opus-5"        # omit to inherit dispatch.model
+effort       = "medium"               # omit to inherit dispatch.effort
+max_attempts = 2                      # total attempts incl. first
 # prompt_path  = ".icarium/reviewer.md" # defaults to built-in prompt
 ```
 
@@ -169,6 +170,9 @@ A non-zero exit, a timeout, or an undecodable payload all count as `fail`.
 - **`fail`** — this attempt fails. If `max_attempts` remain, the worker retries with the findings
   injected into its prompt under a `## Reviewer findings from previous attempt` heading — address
   them directly. Out of attempts → dispatch `failure`, task `blocked`.
+
+`model` and `effort` each fall back to the `[dispatch]` value when omitted; the scaffold spells
+both out so retuning the worker doesn't silently retune the gate.
 
 The default reviewer prompt is built in; override it with `prompt_path`. See
 `.icarium/reviewer.md` in this repo for a worked example. Reviewer output is stored per dispatch —

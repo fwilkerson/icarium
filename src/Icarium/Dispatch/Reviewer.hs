@@ -46,6 +46,7 @@ import Icarium.Dispatch.Payload (
     jsonSchemaArgs,
     reviewerSchema,
  )
+import Icarium.Types (Effort, effortText)
 
 {- | Either the reviewer reported (findings, possibly empty) or the run itself
 failed. The two are not one field: a process that timed out has no findings
@@ -160,6 +161,8 @@ runReviewer ::
     FilePath ->
     -- | model name
     Text ->
+    -- | reasoning effort
+    Effort ->
     -- | system prompt override (Nothing = use default)
     Maybe Text ->
     -- | body-change tamper report
@@ -175,7 +178,7 @@ runReviewer ::
     -- | wall-clock limit in minutes
     Int ->
     IO ReviewResult
-runReviewer workDir model mSysPrompt bodyReport taskTitle taskBody diffText reviewerLogPath maxMinutes = do
+runReviewer workDir model effort mSysPrompt bodyReport taskTitle taskBody diffText reviewerLogPath maxMinutes = do
     let sysPrompt = fromMaybe defaultReviewerPrompt mSysPrompt
         stdinText = buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText
         stdinBytes = BL.fromStrict (TE.encodeUtf8 stdinText)
@@ -183,6 +186,8 @@ runReviewer workDir model mSysPrompt bodyReport taskTitle taskBody diffText revi
             [ "-p"
             , "--model"
             , T.unpack model
+            , "--effort"
+            , T.unpack (effortText effort)
             , "--output-format"
             , "stream-json"
             , "--verbose"

@@ -1,44 +1,40 @@
-# Shipped defaults: opus-4-8 at medium effort, review on with sonnet-5
+# Shipped defaults: opus-5 at medium effort, review on with opus-5
 
-Status: accepted (2026-07-19)
+Status: accepted (2026-07-27)
 
-`icarium init` scaffolds `[dispatch] model = "claude-opus-4-8"`,
-`effort = "medium"`, and an **enabled** `[review]` block with
-`model = "claude-sonnet-5"`, `max_attempts = 2`. The code fallback for an
-unset `review.model` stays inherit-`dispatch.model`.
-
-## Context
-
-The scaffold shipped sonnet-5 / high for dispatch and the whole `[review]`
-block commented out (review disabled). Benchmark research
-(`docs/research/2026-07-18-dispatch-model-benchmarks.md`):
-
-- opus-4-8 leads SWE-bench Verified 88.6% vs 82.1% and, despite the higher
-  sticker price, sonnet-5 measures ~15% *more* expensive per solved task at
-  high/max effort — sonnet is only the value pick at low/medium effort.
-- Anthropic recommends `xhigh` for headless coding with `high` as the floor.
-- No evidence sonnet-5 is inadequate as a reviewer/judge.
+`icarium init` scaffolds `[dispatch] model = "claude-opus-5"`,
+`effort = "medium"`, and an **enabled** `[review]` block with the same
+model and effort spelled out, plus `max_attempts = 2`. Either review key,
+if omitted, inherits its `[dispatch]` counterpart.
 
 ## Decision
 
-- **Dispatch model: `claude-opus-4-8`.** Better and effectively cheaper per
-  solved task for headless coding. "Best current trade among Claude models" —
-  revisit as the model landscape shifts, not a frontier claim.
+- **Dispatch model: `claude-opus-5`.** The opus tier leads on multi-file
+  agentic coding run to completion, which is the shape of work dispatch
+  does, and measures cheaper per solved task than the lower tier despite
+  the higher sticker price (`docs/research/2026-07-18-dispatch-model-benchmarks.md`,
+  measured on the prior generation of the same two tiers). "Best current trade among Claude models" —
+  revisit as the landscape shifts, not a frontier claim.
 - **Dispatch effort: `medium`.** A deliberate cost stance below Anthropic's
-  recommended band: deep-SWE benchmarks justify medium as the floor, users
-  can raise it per project, and vendor effort guidance is discounted as
-  token-sales-incentivized. The risk (more reviewer-cycle retries) is
+  recommended band (`xhigh` for headless coding, `high` as the floor):
+  users can raise it per project, and vendor effort guidance is discounted
+  as token-sales-incentivized. The risk — more reviewer-cycle retries — is
   accepted because the review gate backstops quality.
-- **Review enabled by default, reviewer `claude-sonnet-5`.** Headless
-  dispatch with auto-merge and no review gate is the risky configuration;
-  defaults take the safe posture. Review is a bounded read-only pass, so the
-  per-solved-task economics that ruled sonnet out for dispatch don't apply —
-  sticker price ($2/$10 vs $5/$25 per MTok) dominates, and a cross-model
-  reviewer avoids opus grading opus.
-- **No model names in code.** The sonnet-5 choice lives in the scaffolded
-  toml where users see and edit it; the code fallback for unset
-  `review.model` remains inherit-`dispatch.model` (sane semantics, nothing
-  to rot when models deprecate).
+- **Review enabled by default.** Headless dispatch with auto-merge and no
+  review gate is the risky configuration; defaults take the safe posture.
+- **Reviewer model and effort match the worker.** A read-only pass over a
+  bounded diff against a written spec is not where a cheaper model or extra
+  reasoning budget changes the verdict, so the reviewer inherits the tier
+  already justified above rather than introducing a second trade-off.
+- **Both review keys stay spelled out despite equalling `[dispatch]`.**
+  Redundant against the inherit fallback, deliberately: they pin the
+  reviewer, so retuning the worker cannot silently retune the gate.
+- **Reviewer effort is passed explicitly to `claude`.** The effort a gate
+  runs at must not be a property of the installed CLI's default.
+- **No model names in code.** The choice lives in the scaffolded toml where
+  users see and edit it; the code fallbacks for unset review keys are
+  inherit-from-`[dispatch]` (sane semantics, nothing to rot when models
+  deprecate).
 
 ## Consequences
 
@@ -46,5 +42,10 @@ block commented out (review disabled). Benchmark research
   `enabled = false` edit.
 - The medium-effort default leans on that gate — projects that disable
   review should consider raising effort.
-- This repo's own config (opus-4-8 / high) already exceeds the shipped
-  defaults; no dogfood change.
+- Two opus passes per attempt is the floor cost of a dispatch;
+  `max_attempts = 2` bounds it.
+- Worker and reviewer are the same model, so a blind spot shared by the
+  family survives the gate. Accepted: the gate exists to catch what the
+  worker got wrong, not what the family cannot see.
+- This repo's own config matches the shipped defaults exactly, so `icarium
+  init` output is what we dogfood.

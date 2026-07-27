@@ -180,6 +180,7 @@ runReviewStage args = case mfilter rcEnabled (cfgReview cfg) of
         task <- refreshTaskBody conn db (pcaTask args)
         let bodyDiff = diffBody (pcaBaselineBody args) (taskBody task)
             reviewModel = fromMaybe (dcModel (cfgDispatch cfg)) (rcModel rcfg)
+            reviewEffort = fromMaybe (dcEffort (cfgDispatch cfg)) (rcEffort rcfg)
             reviewerLogPath = takeDirectory (pcaLogPath args) <> "/" <> T.unpack did <> "-reviewer.jsonl"
             maxMins = dcMaxMinutesPerDispatch (cfgDispatch cfg)
         diffText <- Git.diffPatch wt (pcaBaseSha args)
@@ -187,6 +188,7 @@ runReviewStage args = case mfilter rcEnabled (cfgReview cfg) of
             runReviewer
                 wt
                 reviewModel
+                reviewEffort
                 (pcaSysPrompt args)
                 (renderBodyReport bodyDiff)
                 (taskTitle task)

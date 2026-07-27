@@ -108,10 +108,11 @@ loadConfigTest =
             Left err -> fail ("loadConfig failed: " <> err)
             Right c -> do
                 -- Shipped defaults are a contract (ADR 0005).
-                dcModel (cfgDispatch c) @?= "claude-opus-4-8"
+                dcModel (cfgDispatch c) @?= "claude-opus-5"
                 dcEffort (cfgDispatch c) @?= Medium
                 fmap rcEnabled (cfgReview c) @?= Just True
-                fmap rcModel (cfgReview c) @?= Just (Just "claude-sonnet-5")
+                fmap rcModel (cfgReview c) @?= Just (Just "claude-opus-5")
+                fmap rcEffort (cfgReview c) @?= Just (Just Medium)
                 fmap rcMaxAttempts (cfgReview c) @?= Just 2
 
 -- =============================================================
