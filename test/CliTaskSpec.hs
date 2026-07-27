@@ -8,6 +8,7 @@ import Control.Monad (forM, forM_, replicateM)
 import Data.Aeson.KeyMap qualified as KM
 import Data.Char (toLower)
 import Data.List (isInfixOf, isPrefixOf, nub, sort, tails)
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Tasty (TestTree, testGroup)
@@ -80,6 +81,8 @@ tests =
         , testCase "task show: refs, deps and cats reach both branches" testShowBranchesAgree
         , testCase "task show --prompt: one retrieval axis is quiet" testPromptTaggedQuiet
         , testCase "task add: untagged capture nudges without blocking" testTaskAddUntaggedNudge
+        , testCase "task rm removes the body file and prints deleted <id>" testTaskRm
+        , testCase "task rm on an unresolvable id exits 1, names the kind" testTaskRmNotFound
         ]
 
 testTaskRoundtrip :: IO ()
@@ -849,3 +852,29 @@ testTaskAddUntaggedNudge = withSystemTempDirectory "icarium-test" $ \dir -> do
     (code2, _, err2) <- runIcariumIn dir db ["task", "add", "tagged capture", "--domain", "cli"]
     code2 @?= ExitSuccess
     assertBool "no nudge when tagged" (not ("--domain" `isInfixOf` err2))
+
+{- | rm must take the row and the body file together; a prefix resolves to the
+full id, which is what @deleted@ echoes.
+-}
+testTaskRm :: IO ()
+testTaskRm = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Deletable task", "--body", "task body to delete"]
+    let outLines = lines addOut
+        tid = head outLines
+        bodyPath = outLines !! 1
+
+    before <- doesFileExist bodyPath
+    assertBool "body file exists before rm" before
+
+    (code, out, _) <- runIcarium db ["task", "rm", take 10 tid]
+    code @?= ExitSuccess
+    head (lines out) @?= "deleted " <> tid
+
+    after <- doesFileExist bodyPath
+    assertBool "body file gone after rm" (not after)
+
+testTaskRmNotFound :: IO ()
+testTaskRmNotFound = withTempDb $ \db -> do
+    (code, _, err) <- runIcarium db ["task", "rm", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
+    code @?= ExitFailure 1
+    assertBool "error names the kind" ("task" `isInfixOf` err)

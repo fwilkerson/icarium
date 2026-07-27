@@ -6,6 +6,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Foldable (toList)
 import Data.List (isInfixOf)
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
@@ -37,6 +38,8 @@ tests =
         , testCase "ctx curate records events; show renders latest; list hides retired" testCtxCurateLifecycle
         , testCase "ctx curate validation: artifact rules per disposition" testCtxCurateValidation
         , testCase "ctx curate queue: never-curated, --older-than, --json" testCtxCurateQueue
+        , testCase "ctx rm removes the body file and prints deleted <id>" testCtxRm
+        , testCase "ctx rm on an unresolvable id exits 1, names the kind" testCtxRmNotFound
         ]
 
 testCtxListLimit :: IO ()
@@ -465,3 +468,29 @@ testCtxCurateQueue = withTempDb $ \db -> do
     (code4, out4, _) <- runIcarium db ["ctx", "curate"]
     code4 @?= ExitSuccess
     assertBool "empty queue message" ("nothing to curate" `isInfixOf` out4)
+
+{- | rm must take the row and the body file together; a prefix resolves to the
+full id, which is what @deleted@ echoes.
+-}
+testCtxRm :: IO ()
+testCtxRm = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["ctx", "add", "Deletable entry", "--body", "ctx body to delete"]
+    let outLines = lines addOut
+        cxid = head outLines
+        bodyPath = outLines !! 1
+
+    before <- doesFileExist bodyPath
+    assertBool "body file exists before rm" before
+
+    (code, out, _) <- runIcarium db ["ctx", "rm", take 10 cxid]
+    code @?= ExitSuccess
+    head (lines out) @?= "deleted " <> cxid
+
+    after <- doesFileExist bodyPath
+    assertBool "body file gone after rm" (not after)
+
+testCtxRmNotFound :: IO ()
+testCtxRmNotFound = withTempDb $ \db -> do
+    (code, _, err) <- runIcarium db ["ctx", "rm", "01ZZZZZZZZZZZZZZZZZZZZZZZZ"]
+    code @?= ExitFailure 1
+    assertBool "error names the kind" ("context" `isInfixOf` err)
