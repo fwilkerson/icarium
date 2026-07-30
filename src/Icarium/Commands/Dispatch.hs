@@ -96,7 +96,7 @@ runP =
                     <> help "Cap dispatches when draining the queue; a named TASK_ID is a drain of one"
                 )
             )
-        <*> (($ mempty) <$> routingP "this dispatch")
+        <*> (($ mempty) <$> routingP (FreshRouting "this dispatch"))
         <*> optional (textOption "base-branch" "NAME" "Override the base branch for git operations")
         <*> switch (long "dry-run" <> help "Build the plan and prompt; don't cut git or call claude")
 

@@ -50,7 +50,27 @@ tests =
         , testCase "category add: invalid name exits 2" testCategoryAddBadName
         , testCase "kind axis: register, tag, filter, replace; task-only" testKindAxis
         , testCase "kind does not narrow ctx auto-pull" testKindDoesNotNarrowAutoPull
+        , testGroup "routing flag help offers clearing only where something is stored" (map clearingCase clearingCases)
         ]
+
+-- `--model`/`--effort` patch a stored routing on `task update`, but a fresh
+-- `mempty` on the other two call sites, where there is nothing to clear.
+clearingCases :: [(String, [String], Bool)]
+clearingCases =
+    [ ("task add", ["task", "add", "--help"], False)
+    , ("dispatch run", ["dispatch", "run", "--help"], False)
+    , ("task update", ["task", "update", "--help"], True)
+    ]
+
+clearingCase :: (String, [String], Bool) -> TestTree
+clearingCase (name, argv, offersClearing) = testCase name $ withTempDb $ \db -> do
+    (code, out, _) <- runIcarium db argv
+    code @?= ExitSuccess
+    assertBool "help mentions --model" ("--model" `isInfixOf` out)
+    assertBool "help mentions --effort" ("--effort" `isInfixOf` out)
+    assertBool
+        (if offersClearing then "help offers clearing" else "help does not promise clearing")
+        (("empty string clears" `isInfixOf` out) == offersClearing)
 
 testVersion :: IO ()
 testVersion = mapM_ check ["--version", "-V"]

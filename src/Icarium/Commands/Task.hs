@@ -116,7 +116,7 @@ addP =
         <*> many (textOption "depends-on" "TASK_ID" "Add a depends_on edge to TASK_ID")
         <*> many (textOption "references" "CONTEXT_ID" "Add a references edge to CONTEXT_ID")
         <*> switch (long "no-commit" <> help "Mark task as side-effect-only (no code commits required)")
-        <*> (($ mempty) <$> routingP "this task")
+        <*> (($ mempty) <$> routingP (FreshRouting "this task"))
 
 runAdd :: FilePath -> AddOpts -> IO ()
 runAdd db o = withDb db $ \c -> do
@@ -382,7 +382,7 @@ updateP =
             ( flag' True (long "no-commit" <> help "Mark as side-effect-only (no code commits required)")
                 <|> flag' False (long "commit-required" <> help "Clear no-commit flag (commit required)")
             )
-        <*> routingP "this task"
+        <*> routingP (StoredRouting "this task")
         <*> pure "task update"
 
 -- | @task start@ / @task done@: an update that only sets the state.

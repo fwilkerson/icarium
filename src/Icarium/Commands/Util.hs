@@ -10,6 +10,7 @@ module Icarium.Commands.Util (
     stateChoices,
     edgeKindReader,
     axisReader,
+    RoutingSubject (..),
     routingP,
 
     -- * Category validation
@@ -125,18 +126,28 @@ effortReader = eitherReader $ \s ->
             Just e -> Right (Just e)
             Nothing -> Left ("invalid effort: " <> s)
 
+{- | What a routing patch applies to, and what to call it in help text.
+'FreshRouting' patches 'mempty' (@task add@, @dispatch run@) — nothing is
+stored, so the help must not offer to clear it. 'StoredRouting' patches a
+persisted routing (@task update@), where clearing is a real outcome.
+-}
+data RoutingSubject
+    = FreshRouting String
+    | StoredRouting String
+
 {- | The routing flags, as a patch over an existing 'Routing'. A flag that
-isn't given leaves its field alone, so the same parser serves @task add@
-(patching 'mempty'), @task update@ (patching the stored routing) and
-@dispatch run@ (patching the empty flag-level routing). @subject@ names
-what is being routed, e.g. @\"this task\"@.
+isn't given leaves its field alone, so the same parser serves every call
+site; 'RoutingSubject' supplies the wording.
 
 A new routing knob is one more flag here and one more field in 'Routing';
 no call site changes.
 -}
-routingP :: String -> Parser (Routing -> Routing)
-routingP subject = patch <$> modelFlag <*> effortFlag
+routingP :: RoutingSubject -> Parser (Routing -> Routing)
+routingP rsubject = patch <$> modelFlag <*> effortFlag
   where
+    (subject, clears) = case rsubject of
+        FreshRouting s -> (s, "")
+        StoredRouting s -> (s, "; empty string clears")
     patch mm me r =
         r
             { rtModel = fromMaybe (rtModel r) mm
@@ -148,7 +159,7 @@ routingP subject = patch <$> modelFlag <*> effortFlag
                 ( textOption
                     "model"
                     "NAME"
-                    ("Use this model for " <> subject <> " instead of the [dispatch] default; empty string clears")
+                    ("Use this model for " <> subject <> " instead of the [dispatch] default" <> clears)
                 )
     blank t = if T.null (T.strip t) then Nothing else Just t
     effortFlag =
@@ -157,7 +168,7 @@ routingP subject = patch <$> modelFlag <*> effortFlag
                 effortReader
                 ( long "effort"
                     <> metavar "LEVEL"
-                    <> help ("Use this effort for " <> subject <> " instead of the [dispatch] default (" <> effortChoices <> "); empty string clears")
+                    <> help ("Use this effort for " <> subject <> " instead of the [dispatch] default (" <> effortChoices <> ")" <> clears)
                 )
             )
 
