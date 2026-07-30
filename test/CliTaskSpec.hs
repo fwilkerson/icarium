@@ -26,6 +26,7 @@ import CliHelpers (
     runIcariumStdin,
     withTempDb,
  )
+import TestHelpers (withHeldWriteLock)
 
 tests :: TestTree
 tests =
@@ -39,6 +40,8 @@ tests =
           , testCase "task claim: racing processes partition the queue" testTaskClaimConcurrent
           , testCase "task claim records owner; task done clears it" testTaskClaimOwnerLifecycle
           , testCase "task claim --owner empty exits 2, claims nothing" testTaskClaimEmptyOwner
+          , testCase "task claim: the busy-lock hint replays the named claim" testTaskClaimBusyHintNamed
+          , testCase "task claim: the busy-lock hint on a bare claim names no task" testTaskClaimBusyHintBare
           , testCase "task next/claim serve the interactive queue only" testInteractiveQueueSurfaces
           , testCase "task queue interleaves both ready states; --headless/--interactive narrow" testQueueStatesAndNarrowing
           , testCase "task queue: empty says so, --limit caps, --json spells the stored state" testQueueEmptyLimitJson
@@ -236,6 +239,38 @@ testTaskClaimEmptyOwner = withTempDb $ \db -> do
     (nCode, nOut, _) <- runIcarium db ["task", "next"]
     nCode @?= ExitSuccess
     words nOut @?= [tid]
+
+{- | Exit 3 hands the agent a command to run again, and a claim is destructive:
+a hint that dropped the id sends the retry at whatever heads the queue.
+-}
+testTaskClaimBusyHintNamed :: IO ()
+testTaskClaimBusyHintNamed = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "Contended", "--state", "ready-interactive"]
+    let tid = head (words addOut)
+
+    (code, _, err) <-
+        withHeldWriteLock db $
+            runIcarium db ["task", "claim", tid, "--owner", "agent-7"]
+
+    code @?= ExitFailure 3
+    assertBool ("retry names the task: " <> err) (("icarium task claim " <> tid) `isInfixOf` err)
+    assertBool ("retry keeps the owner: " <> err) ("--owner agent-7" `isInfixOf` err)
+
+    -- The premise of the whole hint: nothing was taken, so the retry is safe.
+    (_, shown, _) <- runIcarium db ["task", "show", tid]
+    assertBool "task is still ready" ("ready_interactive" `isInfixOf` shown)
+
+-- | Nothing was named, so there is no id to put back into the retry.
+testTaskClaimBusyHintBare :: IO ()
+testTaskClaimBusyHintBare = withTempDb $ \db -> do
+    (_, _, _) <- runIcarium db ["task", "add", "Contended", "--state", "ready-interactive"]
+
+    (code, _, err) <- withHeldWriteLock db $ runIcarium db ["task", "claim"]
+
+    code @?= ExitFailure 3
+    err
+        @?= "icarium: error: another process holds the database write lock; \
+            \nothing was claimed. Retry: icarium task claim\n"
 
 {- | The CLI queue serves the human. Headless work sitting in `ready` is
 dispatch's to take, and must never be handed to `task next`/`task claim` —

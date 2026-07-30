@@ -16,17 +16,18 @@ module TestHelpers (
     withOutOfTreeDb,
     readEventLog,
     eventField,
+    withHeldWriteLock,
 ) where
 
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
-import Control.Exception (bracket)
+import Control.Exception (bracket, bracket_)
 import Control.Monad (forM_)
 import Data.Aeson (Key, Object, Value (..), decode)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy.Char8 qualified as BLC
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.SQLite.Simple (Connection, Query (..), close, execute, open)
+import Database.SQLite.Simple (Connection, Query (..), close, execute, execute_, open)
 import Icarium.Events (eventLogPath)
 import System.Directory (doesFileExist)
 import System.Exit (ExitCode)
@@ -56,6 +57,17 @@ withBaseTestDb :: (Connection -> IO a) -> IO a
 withBaseTestDb act = bracket (open ":memory:") close $ \conn -> do
     applySchema conn
     act conn
+
+{- | Run @act@ while a separate connection holds the write lock, so any
+subprocess claiming against @db@ has to contend for it. BEGIN IMMEDIATE takes
+the lock without needing a write to hold it open.
+-}
+withHeldWriteLock :: FilePath -> IO a -> IO a
+withHeldWriteLock db act = bracket (open db) close $ \holder ->
+    bracket_
+        (execute_ holder "BEGIN IMMEDIATE")
+        (execute_ holder "ROLLBACK")
+        act
 
 mkCat :: Connection -> CategoryAxis -> Text -> IO Category
 mkCat c axis name = do

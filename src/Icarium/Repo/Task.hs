@@ -200,7 +200,8 @@ transaction over, which is what the backoff below does; exhausting it means
 
 The deadline bounds the whole thing: an attempt that burned the 5s
 @busy_timeout@ has already waited out a slow writer, and stacking seven more
-of those would hang a claim for most of a minute to no purpose.
+of those would hang a claim for most of a minute to no purpose. The backoff
+below is therefore spent only where SQLite returned BUSY without waiting.
 -}
 withClaimLock :: Connection -> IO (Maybe (Task, TaskState)) -> IO ClaimResult
 withClaimLock conn act = do
@@ -224,7 +225,10 @@ withClaimLock conn act = do
                         (d : rest) | now - started < claimRetryBudget -> threadDelay d >> go started rest
                         _ -> pure LockBusy
 
--- | Seconds a claim may spend retrying a busy write lock before giving up.
+{- | Seconds a claim may spend retrying a busy write lock before giving up.
+Holds at the @busy_timeout@ "Icarium.Db" sets: below it, a claim would give up
+while SQLite was still willing to wait.
+-}
 claimRetryBudget :: Double
 claimRetryBudget = 5
 

@@ -486,7 +486,13 @@ runClaim db o = do
             RT.Claimed t from -> do
                 Ev.emit db "task claim" (Ev.TaskClaimed (taskId t) from owner)
                 TIO.putStrLn (taskId t)
-            RT.LockBusy -> lockBusy "icarium task claim"
+            -- A retry that dropped the id claims whatever heads the queue, and
+            -- one that dropped the owner stamps the wrong name. Replay both.
+            RT.LockBusy ->
+                lockBusy $
+                    "icarium task claim"
+                        <> maybe "" (" " <>) mtid
+                        <> maybe "" (" --owner " <>) (clOwner o)
             -- Exit 1 with no output is the empty-queue signal scripts read;
             -- a named task that was refused gets the reason instead.
             RT.NoCandidate -> maybe (exitWith (ExitFailure 1)) (refuseClaim c) mtid

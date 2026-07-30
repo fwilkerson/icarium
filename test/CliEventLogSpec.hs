@@ -14,7 +14,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import CliDispatchHelpers (addReadyTask, runDispatch, withDispatchRepo)
 import CliHelpers (expectField, runIcarium, withTempDb)
-import TestHelpers (eventField, readEventLog)
+import TestHelpers (eventField, readEventLog, withHeldWriteLock)
 
 tests :: TestTree
 tests =
@@ -117,11 +117,9 @@ make the claim fail after the command has already read the task row.
 testEventLogClaimLockBusy :: IO ()
 testEventLogClaimLockBusy = withDispatchRepo $ \dir db -> do
     tid <- addReadyTask dir db "contended task"
-    (code, _, err) <- bracket (open db) close $ \holder -> do
-        execute_ holder "BEGIN IMMEDIATE"
-        r <- runDispatch dir db (Just "commit") ["dispatch", "run", tid]
-        execute_ holder "ROLLBACK"
-        pure r
+    (code, _, err) <-
+        withHeldWriteLock db $
+            runDispatch dir db (Just "commit") ["dispatch", "run", tid]
     code @?= ExitFailure 3
     assertBool "the run reports the busy lock" ("nothing was claimed" `isInfixOf` err)
 
