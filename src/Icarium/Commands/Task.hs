@@ -48,8 +48,8 @@ parser =
             <> subcmd "queue" "Print the ordered worklist: both ready states, dependency-gated, priority then age. Narrow with --headless / --interactive." (Queue <$> queueP)
             <> subcmd "show" "Show task metadata. The body is intentionally not printed: Read $(icarium task path <id>) so a subsequent Edit can succeed (Claude Code's Edit tool requires a prior Read of the same path)." (Show <$> showP)
             <> subcmd "update" "Update task metadata. To edit the body: Read $(icarium task path <id>) then Edit." (Update <$> updateP)
-            <> subcmd "start" "Set state to in-progress. Shorthand for `update <id> --state in-progress`." (Update <$> stateShorthandP InProgress)
-            <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP Done)
+            <> subcmd "start" "Set state to in-progress. Shorthand for `update <id> --state in-progress`." (Update <$> stateShorthandP "task start" InProgress)
+            <> subcmd "done" "Set state to done. Shorthand for `update <id> --state done`." (Update <$> stateShorthandP "task done" Done)
             <> subcmd "rm" "Delete a task" (Rm <$> Node.nodeIdArg TaskNode)
             <> subcmd "next" "Print the next ready-interactive task id; exit 1 if empty. Same row as the head of `task queue --interactive`." (Next <$> nextP)
             <> subcmd "claim" "Atomically claim a task: marks it in-progress, stamps an owner, prints its id. With TASK_ID, claims that task if it is in either ready state. Without, takes the head of the ready-interactive queue; exit 1 if empty, exit 3 if the database write lock stayed busy (retry)." (Claim <$> claimP)
@@ -347,6 +347,9 @@ data UpdateOpts = UpdateOpts
     , uKind :: Maybe Text
     , uNoCommit :: Maybe Bool
     , uRouting :: Routing -> Routing
+    , -- The command the user typed, which the shorthands vary: an event log
+      -- naming a command nobody ran is a false record of what happened.
+      uActor :: Ev.Actor
     }
 
 updateP :: Parser UpdateOpts
@@ -380,10 +383,11 @@ updateP =
                 <|> flag' False (long "commit-required" <> help "Clear no-commit flag (commit required)")
             )
         <*> routingP "this task"
+        <*> pure "task update"
 
 -- | @task start@ / @task done@: an update that only sets the state.
-stateShorthandP :: TaskState -> Parser UpdateOpts
-stateShorthandP st = mk <$> Node.nodeIdArg TaskNode
+stateShorthandP :: Ev.Actor -> TaskState -> Parser UpdateOpts
+stateShorthandP actor st = mk <$> Node.nodeIdArg TaskNode
   where
     mk tid =
         UpdateOpts
@@ -397,6 +401,7 @@ stateShorthandP st = mk <$> Node.nodeIdArg TaskNode
             , uKind = Nothing
             , uNoCommit = Nothing
             , uRouting = id
+            , uActor = actor
             }
 
 runUpdate :: FilePath -> UpdateOpts -> IO ()
@@ -431,7 +436,7 @@ runUpdate db o = withDb db $ \c -> do
             forM_ mBefore $ \before ->
                 forM_ (uState o) $ \new ->
                     when (new /= taskState before) $
-                        Ev.emit db "task update" (Ev.TaskUpdated tid (taskState before) new)
+                        Ev.emit db (uActor o) (Ev.TaskUpdated tid (taskState before) new)
             TIO.putStrLn ("updated " <> tid)
         else fatal 1 ("task not found: " <> T.unpack (uId o))
 

@@ -21,6 +21,7 @@ tests =
     testGroup
         "event log"
         [ testCase "event log: task lifecycle appends one line per command" testEventLogTask
+        , testCase "event log: start and done name the shorthand that was typed" testEventLogShorthandActor
         , testCase "event log: ctx lifecycle, curation included" testEventLogCtx
         , testCase "event log: a live dispatch logs claim, start, outcome, transition" testEventLogDispatch
         , testCase "event log: a claim that lost the write lock logs nothing" testEventLogClaimLockBusy
@@ -65,6 +66,19 @@ testEventLogTask = withTempDb $ \db -> do
     after <- readEventLog db
     length after @?= 4
 
+-- | The actor is what the user typed, not the code path it routed through.
+testEventLogShorthandActor :: IO ()
+testEventLogShorthandActor = withTempDb $ \db -> do
+    (_, addOut, _) <- runIcarium db ["task", "add", "shorthand task"]
+    let tid = head (words addOut)
+    (startCode, _, _) <- runIcarium db ["task", "start", tid]
+    startCode @?= ExitSuccess
+    (doneCode, _, _) <- runIcarium db ["task", "done", tid]
+    doneCode @?= ExitSuccess
+
+    evs <- readEventLog db
+    map (expectField "actor") evs @?= ["task add", "task start", "task done"]
+
 testEventLogCtx :: IO ()
 testEventLogCtx = withTempDb $ \db -> do
     (_, addOut, _) <- runIcarium db ["ctx", "add", "logged entry", "--body", "text"]
@@ -86,6 +100,22 @@ testEventLogCtx = withTempDb $ \db -> do
     let curated = evs !! 2
     expectField "to" curated @?= "rule"
     expectField "artifact" curated @?= "some-test"
+
+    -- An update that leaves the row as it found it logs nothing: neither a
+    -- bare update nor one whose flags restate what is already there.
+    (_, addOut2, _) <- runIcarium db ["ctx", "add", "untouched entry", "--body", "text"]
+    let cxid2 = head (words addOut2)
+    noops <-
+        forM
+            [ ["ctx", "update", cxid2]
+            , ["ctx", "update", cxid2, "--title", "untouched entry"]
+            , ["ctx", "update", cxid2, "--domain", ""]
+            ]
+            (runIcarium db)
+    map (\(c, _, _) -> c) noops @?= replicate 3 ExitSuccess
+    after <- readEventLog db
+    map (expectField "event") after
+        @?= ["ctx.created", "ctx.updated", "ctx.curated", "ctx.deleted", "ctx.created"]
 
 testEventLogDispatch :: IO ()
 testEventLogDispatch = withDispatchRepo $ \dir db -> do

@@ -246,6 +246,10 @@ runUpdate db o = withDb db $ \c -> do
     -- Validate categories before any mutation.
     mDomCat <- resolveAxisFlag c Domain (uDomain o)
     mDiscCat <- resolveAxisFlag c Discipline (uDiscipline o)
+    -- Read the pre-update row and its tags here: the event is only honest if
+    -- the write moved something, and after the write there is nothing to compare.
+    mBefore <- RCx.getContext c cxid
+    beforeCats <- RC.contextCategoriesFor c cxid
     let upd = RCx.emptyUpdate{RCx.cuTitle = uTitle o}
     ok <- RCx.updateContext c cxid upd
     if ok
@@ -257,7 +261,18 @@ runUpdate db o = withDb db $ \c -> do
             forM_ mDiscCat $ \mCat -> do
                 RC.detachContextCategoriesByAxis c cxid Discipline
                 forM_ mCat (RC.attachContextCategory c cxid)
-            Ev.emit db "ctx update" (Ev.CtxUpdated cxid)
+            let titleMoved = case (uTitle o, mBefore) of
+                    (Just new, Just before) -> new /= contextTitle before
+                    _ -> False
+                axisMoved ax mChange = case mChange of
+                    Nothing -> False
+                    Just mCat ->
+                        map categoryId (filter ((== ax) . categoryAxis) beforeCats)
+                            /= maybe [] (pure . categoryId) mCat
+            -- A flag that restates what is already stored moved nothing, and
+            -- an event for it would record a mutation that never happened.
+            when (titleMoved || axisMoved Domain mDomCat || axisMoved Discipline mDiscCat) $
+                Ev.emit db "ctx update" (Ev.CtxUpdated cxid)
             TIO.putStrLn ("updated " <> cxid)
         else fatal 1 ("context not found: " <> T.unpack (uId o))
 
