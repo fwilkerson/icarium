@@ -1,6 +1,7 @@
 module Icarium.Dispatch.Reviewer (
     ReviewResult (..),
     runReviewer,
+    reviewerArgs,
     loadReviewerPrompt,
 ) where
 
@@ -58,6 +59,42 @@ data ReviewResult = ReviewResult
     , rrLogPath :: FilePath
     }
 
+{- | The reviewer's tools: read-only navigation and nothing that executes, so
+the security posture of ADR 0004 is unchanged — @Read@ alone was the search
+half of read-only going missing, not a boundary being drawn. Without @Glob@ and
+@Grep@ a reviewer can only guess paths: the diff names the files it changed,
+but the code they must be judged against is found, not listed. @Bash@ stays
+out; the one thing it would buy is the diff, and 'buildReviewerStdin' already
+carries that.
+-}
+reviewerTools :: String
+reviewerTools = "Read,Glob,Grep"
+
+{- | The reviewer's CLI arguments. Pure and exported so a test can pin the tool
+grant: this is a security boundary, and one that widened silently is a boundary
+nobody agreed to move.
+-}
+reviewerArgs :: Text -> Effort -> [String]
+reviewerArgs model effort =
+    [ "-p"
+    , "--model"
+    , T.unpack model
+    , "--effort"
+    , T.unpack (effortText effort)
+    , "--output-format"
+    , "stream-json"
+    , "--verbose"
+    , "--tools"
+    , reviewerTools
+    , "--allowedTools"
+    , reviewerTools
+    , "--disable-slash-commands"
+    , "--permission-mode"
+    , "dontAsk"
+    , "--strict-mcp-config"
+    ]
+        <> map T.unpack (jsonSchemaArgs reviewerSchema)
+
 {- | The two-axis brief (ADR 0004), adapted from the @code-review@ skill's
 Standards and Spec sub-agent prompts. The harness is one Read-only agent, so
 the axes are two passes in one context rather than parallel sub-agents; each
@@ -66,8 +103,9 @@ finding tags its axis so retry prompts stay legible.
 defaultReviewerPrompt :: Text
 defaultReviewerPrompt =
     "You are a code reviewer. You will be given a task description and a git diff.\n\
-    \You have the Read tool: the working tree is the branch under review, so read\n\
-    \any file you need for context, including the repo's own standards docs.\n\
+    \You have Read, Glob and Grep, and the working tree is the branch under review.\n\
+    \Do not guess at paths: Glob what a directory holds and Grep for a symbol or a\n\
+    \rule, then Read what you found. The repo's own standards docs are in there too.\n\
     \\n\
     \Review the diff along TWO INDEPENDENT AXES. A change can pass one and fail\n\
     \the other; do not let one axis mask the other, and do not merge or rerank\n\
@@ -182,25 +220,7 @@ runReviewer workDir model effort mSysPrompt bodyReport taskTitle taskBody diffTe
     let sysPrompt = fromMaybe defaultReviewerPrompt mSysPrompt
         stdinText = buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText
         stdinBytes = BL.fromStrict (TE.encodeUtf8 stdinText)
-        args =
-            [ "-p"
-            , "--model"
-            , T.unpack model
-            , "--effort"
-            , T.unpack (effortText effort)
-            , "--output-format"
-            , "stream-json"
-            , "--verbose"
-            , "--tools"
-            , "Read"
-            , "--allowedTools"
-            , "Read"
-            , "--disable-slash-commands"
-            , "--permission-mode"
-            , "dontAsk"
-            , "--strict-mcp-config"
-            ]
-                <> map T.unpack (jsonSchemaArgs reviewerSchema)
+        args = reviewerArgs model effort
     hPutStrLn stderr "[reviewer] running..."
     exit <- runReviewerProcess workDir stdinBytes args reviewerLogPath maxMinutes
     mLR <- readLogResult reviewerLogPath
