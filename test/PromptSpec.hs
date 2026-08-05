@@ -10,6 +10,7 @@ import Test.Tasty.HUnit (assertBool, testCase)
 
 import Icarium.Dispatch.Claude (claudeArgs)
 import Icarium.Dispatch.Internal (buildPrompt)
+import Icarium.Dispatch.Reviewer (reviewerArgs)
 import Icarium.Prompt (taskPromptBody)
 import Icarium.Repo.Category qualified as RC
 import Icarium.Repo.Edge qualified as RE
@@ -24,6 +25,7 @@ tests =
         "prompt"
         [ testCase "CLI preview is a prefix of the dispatch prompt" testPreviewIsPrefix
         , testCase "claudeArgs includes --permission-mode dontAsk plus existing flags" testClaudeArgsPermissionMode
+        , testCase "reviewerArgs grants read-only navigation and nothing that executes" testReviewerArgsAreReadOnlyNavigation
         ]
 
 -- | True when @x@, @y@ appear as two consecutive elements of @xs@.
@@ -44,6 +46,35 @@ testClaudeArgsPermissionMode = do
     assertBool
         "adjacent --mcp-config <path> when key set"
         (hasAdjacentPair "--mcp-config" ".mcp.json" argsWithMcp)
+
+{- | The reviewer needs to find code, not just open it: Read alone left it
+guessing filenames one at a time. Glob and Grep close that without widening
+the boundary, which is why the negative half of this test is the load-bearing
+half -- nothing here may execute, write, or spawn.
+-}
+testReviewerArgsAreReadOnlyNavigation :: IO ()
+testReviewerArgsAreReadOnlyNavigation = do
+    let args = reviewerArgs "claude-opus-5" Medium
+        granted = [t | (flag, t) <- zip args (drop 1 args), flag == "--tools" || flag == "--allowedTools"]
+    case granted of
+        [tools, allowed] -> do
+            assertBool "--tools and --allowedTools grant the same set" (tools == allowed)
+            let names = splitOn ',' tools
+            mapM_ (\tool -> assertBool (tool <> " granted") (tool `elem` names)) ["Read", "Glob", "Grep"]
+            mapM_
+                (\tool -> assertBool (tool <> " must not be granted") (tool `notElem` names))
+                ["Bash", "Edit", "Write", "Task", "Agent", "Skill", "WebFetch"]
+        _ -> assertBool "--tools and --allowedTools each carry a value" False
+    assertBool "slash commands stay disabled" ("--disable-slash-commands" `elem` args)
+    assertBool "adjacent --permission-mode dontAsk" (hasAdjacentPair "--permission-mode" "dontAsk" args)
+    -- The verdict is ingested, so it must be schema-constrained.
+    assertBool "--json-schema present" ("--json-schema" `elem` args)
+
+-- | Split on a separator. @splitOn ',' "Read,Glob"@ is @["Read", "Glob"]@.
+splitOn :: Char -> String -> [String]
+splitOn sep s = case break (== sep) s of
+    (field, []) -> [field]
+    (field, _ : rest) -> field : splitOn sep rest
 
 testPreviewIsPrefix :: IO ()
 testPreviewIsPrefix = withTestDb $ \c -> do
