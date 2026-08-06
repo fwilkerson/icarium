@@ -8,6 +8,7 @@ import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
+import Icarium.Dispatch.Agreement (agreementSection)
 import Icarium.Dispatch.Claude (ClaudeInvocation (..), claudeArgs)
 import Icarium.Dispatch.Internal (buildPrompt)
 import Icarium.Dispatch.Payload (workerSchema)
@@ -29,6 +30,7 @@ tests =
             : testCase "claudeArgs includes --permission-mode dontAsk plus existing flags" testClaudeArgsPermissionMode
             : testCase "retry prompt appends findings then the previous attempt's coordinates" testRetryPromptNamesPriorAttempt
             : testCase "retry prompt without a readable prior tip carries findings alone" testRetryPromptWithoutPrior
+            : testCase "built-in agreement carries every portable rule and names no skill" testBuiltInAgreementGolden
             : reviewerArgCases
         )
 
@@ -85,6 +87,30 @@ reviewerArgCases =
 -- | The value following @flag@, if the flag is present and carries one.
 flagValue :: (Eq a) => a -> [a] -> Maybe a
 flagValue flag xs = lookup flag (zip xs (drop 1 xs))
+
+{- | The whole built-in body, because every line of it is a rule a worker acts
+on. The golden is also where ADR 0004 is enforced: no rule may name a skill or
+a slash command, since @icarium init@ scaffolds @Skill@ off and a target repo
+need not have the command at all.
+-}
+testBuiltInAgreementGolden :: IO ()
+testBuiltInAgreementGolden = do
+    agreementSection Nothing
+        @?= T.unlines
+            [ "## Working agreement"
+            , ""
+            , "You are a headless dispatch working on this task, unattended. Guardrails:"
+            , ""
+            , "- There is no user. Permission denials are policy, not questions —"
+            , "  never wait for input; work within what the allowed tools permit."
+            , "- Commit your code before exiting; after the gates pass the program parks your branch for merge."
+            , "- Where the task proposes an interface, ship that signature. If you diverge, put"
+            , "  the signature you shipped and why in `for_future_agents`."
+            , "- Where this repo has tests, write the failing test before the code that passes"
+            , "  it, and name the seam each test drives — the function or type boundary it"
+            , "  calls, not the behaviour it hopes for. A first test run that passes means you"
+            , "  tested after the fact; delete it and start from red."
+            ]
 
 testPreviewIsPrefix :: IO ()
 testPreviewIsPrefix = withTestDb $ \c -> do

@@ -36,6 +36,12 @@ builtInAgreement =
         , "- There is no user. Permission denials are policy, not questions —"
         , "  never wait for input; work within what the allowed tools permit."
         , "- Commit your code before exiting; after the gates pass the program parks your branch for merge."
+        , "- Where the task proposes an interface, ship that signature. If you diverge, put"
+        , "  the signature you shipped and why in `for_future_agents`."
+        , "- Where this repo has tests, write the failing test before the code that passes"
+        , "  it, and name the seam each test drives — the function or type boundary it"
+        , "  calls, not the behaviour it hopes for. A first test run that passes means you"
+        , "  tested after the fact; delete it and start from red."
         ]
 
 {- | The scratch rule, carried outside the agreement body so an
