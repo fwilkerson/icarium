@@ -9,11 +9,13 @@ property descriptions an override cannot weaken, and the gate performs the
 mutations. So the agreement holds only cross-cutting judgement the schema
 cannot localize to a field.
 
-Anything icarium must guarantee reaches every worker — the scratch path —
-rides its own section ('scratchSection'), outside the overridable body.
+Anything icarium must guarantee reaches every worker — the scratch path, the
+acceptance gates — rides its own section ('scratchSection', 'gatesSection'),
+outside the overridable body.
 -}
 module Icarium.Dispatch.Agreement (
     agreementSection,
+    gatesSection,
     loadAgreementFile,
     scratchSection,
 ) where
@@ -22,6 +24,8 @@ import Control.Exception (SomeException, try)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
+
+import Icarium.Config (CommandsConfig (..))
 
 {- | Agreement body used when no @agreement_path@ is configured.
 Mirrored in this repo's @.icarium/agreement.md@ (built-in body plus
@@ -58,6 +62,30 @@ scratchSection absScratch =
         , "Test artifacts (snapshots, fixtures, scratch files) MUST go in"
         , "`" <> T.pack absScratch <> "`, never in the working tree."
         , "The post-claude gate refuses to accept a dirty tree."
+        ]
+
+{- | The gate commands, asserted to the worker rather than described by project
+prose: 'Icarium.Dispatch.Gate.runGates' already knows them, so an override that
+spells them out can only drift. Empty without @[commands]@ — there is no gate
+to promise, and 'Icarium.Dispatch.Gate.runGates' treats that as an error.
+
+The closing clause is what makes the section portable: @[dispatch]
+allowed_tools@ may not grant the command, so the worker is told to run it only
+if it can.
+-}
+gatesSection :: Maybe CommandsConfig -> Text
+gatesSection Nothing = ""
+gatesSection (Just cc) =
+    T.unlines
+        [ "## Acceptance gates"
+        , ""
+        , "After you exit, these run in your worktree, in order:"
+        , ""
+        , "    build: " <> ccBuild cc
+        , "    test:  " <> ccTest cc
+        , ""
+        , "The work is accepted only if both exit 0. Run them yourself before you finish"
+        , "if your allowed tools permit it."
         ]
 
 {- | Load the agreement override. Fails closed: an unreadable

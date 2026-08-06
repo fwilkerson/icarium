@@ -8,7 +8,8 @@ import Data.Text qualified as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
-import Icarium.Dispatch.Agreement (agreementSection)
+import Icarium.Config (CommandsConfig (..))
+import Icarium.Dispatch.Agreement (agreementSection, gatesSection)
 import Icarium.Dispatch.Claude (ClaudeInvocation (..), claudeArgs)
 import Icarium.Dispatch.Internal (buildPrompt)
 import Icarium.Dispatch.Payload (workerSchema)
@@ -31,6 +32,9 @@ tests =
             : testCase "retry prompt appends findings then the previous attempt's coordinates" testRetryPromptNamesPriorAttempt
             : testCase "retry prompt without a readable prior tip carries findings alone" testRetryPromptWithoutPrior
             : testCase "built-in agreement carries every portable rule and names no skill" testBuiltInAgreementGolden
+            : testCase "gates section names the configured build and test commands" testGatesSectionGolden
+            : testCase "no [commands] means no gates section at all" testGatesSectionAbsent
+            : testCase "an agreement override cannot suppress the gates section" testGatesSurviveOverride
             : reviewerArgCases
         )
 
@@ -112,6 +116,40 @@ testBuiltInAgreementGolden = do
             , "  tested after the fact; delete it and start from red."
             ]
 
+{- | Golden, because the section is a promise to the worker about what will be
+run: the exact command strings, and the closing clause that keeps it honest
+when @allowed_tools@ withholds the command.
+-}
+testGatesSectionGolden :: IO ()
+testGatesSectionGolden =
+    gatesSection (Just CommandsConfig{ccBuild = "make lint", ccTest = "make test"})
+        @?= T.unlines
+            [ "## Acceptance gates"
+            , ""
+            , "After you exit, these run in your worktree, in order:"
+            , ""
+            , "    build: make lint"
+            , "    test:  make test"
+            , ""
+            , "The work is accepted only if both exit 0. Run them yourself before you finish"
+            , "if your allowed tools permit it."
+            ]
+
+-- | Not an empty heading — nothing, since there is no gate to promise.
+testGatesSectionAbsent :: IO ()
+testGatesSectionAbsent = gatesSection Nothing @?= ""
+
+{- | The whole point of a section outside the agreement body: @agreement_path@
+replaces that body wholesale, and the gates must survive it.
+-}
+testGatesSurviveOverride :: IO ()
+testGatesSurviveOverride = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Gated subject"
+    Just t <- RT.getTask c tid
+    let cc = CommandsConfig{ccBuild = "cabal build", ccTest = "cabal test"}
+    full <- buildPrompt c t "/tmp/scratch" (Just "a body that mentions no gates") (Just cc) Nothing
+    assertBool "gates section present" (gatesSection (Just cc) `T.isInfixOf` full)
+
 testPreviewIsPrefix :: IO ()
 testPreviewIsPrefix = withTestDb $ \c -> do
     domCat <- mkCat c Domain "cli"
@@ -131,7 +169,7 @@ testPreviewIsPrefix = withTestDb $ \c -> do
 
     Just t <- RT.getTask c tid
     preview <- taskPromptBody c t
-    full <- buildPrompt c t "/tmp/scratch" Nothing Nothing
+    full <- buildPrompt c t "/tmp/scratch" Nothing Nothing Nothing
 
     assertBool "preview non-trivial" ("Auto-pulled" `T.isInfixOf` preview)
     assertBool "explicit ref present" ("Explicit ref" `T.isInfixOf` preview)
@@ -147,8 +185,8 @@ testRetryPromptNamesPriorAttempt :: IO ()
 testRetryPromptNamesPriorAttempt = withTestDb $ \c -> do
     tid <- mkTaskRow c "Retry subject"
     Just t <- RT.getTask c tid
-    first <- buildPrompt c t "/tmp/scratch" Nothing Nothing
-    retry <- buildPrompt c t "/tmp/scratch" Nothing (Just handoff)
+    first <- buildPrompt c t "/tmp/scratch" Nothing Nothing Nothing
+    retry <- buildPrompt c t "/tmp/scratch" Nothing Nothing (Just handoff)
     T.drop (T.length first) retry
         @?= T.unlines
             [ ""
@@ -185,6 +223,6 @@ testRetryPromptWithoutPrior :: IO ()
 testRetryPromptWithoutPrior = withTestDb $ \c -> do
     tid <- mkTaskRow c "Retry subject"
     Just t <- RT.getTask c tid
-    retry <- buildPrompt c t "/tmp/scratch" Nothing (Just (RetryHandoff "findings text" Nothing))
+    retry <- buildPrompt c t "/tmp/scratch" Nothing Nothing (Just (RetryHandoff "findings text" Nothing))
     assertBool "findings still handed over" ("findings text" `T.isInfixOf` retry)
     assertBool "no previous attempt section" (not ("## Previous attempt" `T.isInfixOf` retry))

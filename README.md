@@ -204,6 +204,11 @@ it. An unreadable `agreement_path` is fatal
 before the worker starts, same as the reviewer's `prompt_path`. Preview the full prompt with
 `dispatch run <id> --dry-run`.
 
+What an override cannot drop rides its own section beside the body: the resolved scratch path, and
+an **acceptance gates** section naming the `[commands]` `build` and `test` that decide whether the
+work is accepted. Projects need not — and should not — repeat those command names in agreement
+prose; icarium tells the worker. Omitted entirely when `[commands]` is absent.
+
 **Attempt-then-park.** On success the task moves to `done`, the worktree is torn down, and the
 branch is **merged onto the integration branch immediately**. Merge-queue semantics:
 

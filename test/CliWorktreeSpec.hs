@@ -554,6 +554,9 @@ testDryRunBuiltInAgreement = withDispatchRepo $ \dir db -> do
     assertBool "no-user counterweight present" ("Permission denials are policy" `isInfixOf` out)
     assertBool "no CLI escalation command" (not ("icarium task update" `isInfixOf` out))
     assertBool "no CLI learnings recipe" (not ("icarium ctx add" `isInfixOf` out))
+    -- The wiring, not the wording (PromptSpec pins that): [commands] reaches
+    -- the prompt, so the worker learns the gates from config, not from prose.
+    assertBool "gates section names the configured commands" ("    build: true" `isInfixOf` out)
 
 -- Scenario: agreement_path file content wholly replaces the built-in
 -- agreement body — icarium appends nothing of its own to it.

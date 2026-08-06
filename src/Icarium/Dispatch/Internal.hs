@@ -22,12 +22,13 @@ import System.IO (hPutStrLn, stderr)
 
 import Icarium.Bodies.Sweep (refreshTaskBody)
 import Icarium.Config (
+    CommandsConfig,
     Config (..),
     DispatchConfig (..),
     ProjectConfig (..),
     ReviewConfig (..),
  )
-import Icarium.Dispatch.Agreement (agreementSection, loadAgreementFile, scratchSection)
+import Icarium.Dispatch.Agreement (agreementSection, gatesSection, loadAgreementFile, scratchSection)
 import Icarium.Dispatch.Claude (ClaudeInvocation (..), RunCtx (..), claudeArgs, runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
@@ -144,7 +145,7 @@ dryRunPreview conn req task mAgreement = do
     fakeId <- newId
     let dcfg = cfgDispatch (drConfig req)
     absScratch <- resolveScratch (worktreePath fakeId) dcfg
-    prompt <- buildPrompt conn task absScratch mAgreement Nothing
+    prompt <- buildPrompt conn task absScratch mAgreement (cfgCommands (drConfig req)) Nothing
     let branch = dispatchBranchName fakeId
         opts = resolveDispatchOpts req
         tools = dcTools dcfg
@@ -269,7 +270,7 @@ doRealAttempt conn req attempt mRetry mBaseline = do
                     }
             Ev.emit dbPath "dispatch" (Ev.DispatchStarted did (taskId task) branch)
 
-            prompt <- buildPrompt conn task absScratch mAgreement mRetry
+            prompt <- buildPrompt conn task absScratch mAgreement (cfgCommands cfg) mRetry
 
             let dx =
                     DispatchCtx
@@ -340,16 +341,23 @@ doRealAttempt conn req attempt mRetry mBaseline = do
 appended after the shared task content — see 'agreementSection'.
 @absScratch@ is the worker's scratch directory, already resolved: the
 prompt names the path, never an env var (see 'scratchSection').
+@mCommands@ is @[commands]@; it feeds 'gatesSection' and nothing else, which is
+why this takes it rather than the whole 'Icarium.Config.Config' — everything
+here past 'taskPromptBody' is headless-lane, and the CLI's
+@task show --prompt@ shares only that body.
 -}
-buildPrompt :: Connection -> Task -> FilePath -> Maybe Text -> Maybe RetryHandoff -> IO Text
-buildPrompt conn t absScratch mAgreement mRetry = do
+buildPrompt :: Connection -> Task -> FilePath -> Maybe Text -> Maybe CommandsConfig -> Maybe RetryHandoff -> IO Text
+buildPrompt conn t absScratch mAgreement mCommands mRetry = do
     body <- taskPromptBody conn t
     let base =
             body
                 <> agreementSection mAgreement
                 <> "\n"
                 <> scratchSection absScratch
+                <> sectionGap (gatesSection mCommands)
     pure (base <> foldMap retrySections mRetry)
+  where
+    sectionGap s = if T.null s then "" else "\n" <> s
 
 ioFail :: String -> IO a
 ioFail = ioError . userError
