@@ -14,7 +14,11 @@ tid="${ICARIUM_TASK_ID:-unknown}"
 # modes it records the prompt it was given (in the main repo's gitignored
 # .icarium/, so it survives worktree teardown without dirtying the base
 # checkout). All other invocations discard the prompt.
-if { [ "$mode" = proof ] || [ "$mode" = tamper ] || [ "$mode" = launder ]; } && [ -z "${ICARIUM_TASK_ID:-}" ]; then
+if [ "$mode" = priorattempt ] && [ -n "${ICARIUM_TASK_ID:-}" ]; then
+    # Worker prompt: priorattempt reads the retry hand-off back out of it.
+    common="$(git rev-parse --path-format=absolute --git-common-dir)"
+    cat > "$common/../.icarium/stub-prior-prompt.txt"
+elif { [ "$mode" = proof ] || [ "$mode" = tamper ] || [ "$mode" = launder ]; } && [ -z "${ICARIUM_TASK_ID:-}" ]; then
     common="$(git rev-parse --path-format=absolute --git-common-dir)"
     cat > "$common/../.icarium/stub-reviewer-prompt.txt"
 else
@@ -93,6 +97,38 @@ case "$mode" in
                 body="$(dirname "$ICARIUM_DB")/bodies/tasks/$tid.md"
                 sed 's/prove it/tampered xlaunder1/' "$body" > "$body.tmp" && mv "$body.tmp" "$body"
                 echo 1 > "$count"
+            fi
+            commit_work
+            result
+        else
+            init
+            if [ "$(cat "$count" 2>/dev/null)" = 1 ]; then
+                echo 2 > "$count"
+                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"findings\":[{\"axis\":\"spec\",\"severity\":\"fail\",\"message\":\"stub reviewer fails attempt 1\"}]}","num_turns":1}'
+            else
+                printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\"findings\":[]}","num_turns":1}'
+            fi
+        fi
+        exit 0
+        ;;
+    priorattempt)
+        # Retry hand-off: attempt 1 commits a file and its reviewer fails the
+        # attempt; attempt 2 reads that commit back through the coordinates
+        # its own prompt names, from inside its own fresh worktree.
+        common="$(git rev-parse --path-format=absolute --git-common-dir)"
+        count="$common/../.icarium/stub-prior-count"
+        if [ -n "${ICARIUM_TASK_ID:-}" ]; then
+            init
+            if [ ! -f "$count" ]; then
+                echo "prior work xprior1" > prior-work.txt
+                echo 1 > "$count"
+            else
+                set -- $(sed -n 's/^Attempt .* at `\(.*\)`, cut from `\(.*\)`\./\1 \2/p' "$common/../.icarium/stub-prior-prompt.txt")
+                {
+                    printf 'sha=%s base=%s\n' "${1:-none}" "${2:-none}"
+                    printf 'show=%s\n' "$(git show "${1:-none}:prior-work.txt" 2>&1)"
+                    printf 'diff=%s\n' "$(git diff --name-only "${2:-none}" "${1:-none}" 2>&1 | tr '\n' ' ')"
+                } > "$common/../.icarium/stub-prior-report.txt"
             fi
             commit_work
             result

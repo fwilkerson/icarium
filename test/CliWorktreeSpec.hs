@@ -68,6 +68,7 @@ tests =
                , testCase "dispatch review: reviewer sees worker's body-file edits" testReviewerSeesBodyFileEdits
                , testCase "dispatch review: body tamper reported to reviewer, flag persisted" testReviewerBodyTamperReport
                , testCase "dispatch review: retry diffs against first-attempt baseline (no laundering)" testReviewerRetryKeepsTamperBaseline
+               , testCase "dispatch review: retry reads the prior attempt's commits from its own worktree" testRetryReachesPriorAttempt
                , testCase "dispatch review: unreadable prompt_path fails closed before worker starts, dry-run too" testReviewerPromptUnreadableFailsClosed
                , testCase "dispatch: dependent held while dependency parked, eligible after merge" testDispatchDepGateOnMerged
                , testCase "dispatch: untagged task warns on stderr, dry-run and live" testDispatchUntaggedWarns
@@ -728,6 +729,31 @@ testReviewerRetryKeepsTamperBaseline = withDispatchRepo $ \dir db -> do
     assertBool
         "surviving dispatch records body_changed yes"
         (any (\l -> words l == ["body_changed:", "yes"]) (lines showOut))
+
+{- | The retry hand-off is only worth anything if the coordinates it names
+resolve where the retry stands: the two worktrees share one object database,
+so attempt 1's commits are readable from attempt 2's. The stub attempt 2
+reads the shas out of its own prompt and reports what git gave back.
+-}
+testRetryReachesPriorAttempt :: IO ()
+testRetryReachesPriorAttempt = withDispatchRepo $ \dir db -> do
+    writeFile
+        (dir </> "icarium.toml")
+        (stubToml <> unlines ["[review]", "enabled = true", "max_attempts = 2"])
+    tid <- addReadyTask dir db "prior attempt task"
+    (code, _, _) <- runDispatch dir db (Just "priorattempt") ["dispatch", "run", tid]
+    code @?= ExitSuccess
+    prompt <- readFile (dir </> ".icarium" </> "stub-prior-prompt.txt")
+    assertBool "retry prompt names the previous attempt" ("## Previous attempt" `isInfixOf` prompt)
+    assertBool "retry prompt names the prior branch" ("dispatch/" `isInfixOf` prompt)
+    report <- readFile (dir </> ".icarium" </> "stub-prior-report.txt")
+    assertBool
+        ("prior attempt's file readable at the named sha: " <> report)
+        ("show=prior work xprior1" `isInfixOf` report)
+    let diffLine = concat (filter ("diff=" `isPrefixOf`) (lines report))
+    assertBool
+        ("named base..tip diff lists what the prior attempt built: " <> report)
+        ("prior-work.txt" `isInfixOf` diffLine)
 
 -- Scenario: an unreadable [review] prompt_path must fail closed before the
 -- worker starts, not silently fall back to the built-in prompt — and in

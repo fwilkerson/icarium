@@ -36,6 +36,7 @@ import Icarium.Dispatch.Outcome (
  )
 import Icarium.Dispatch.Payload (workerSchema)
 import Icarium.Dispatch.PostClaude (PostClaudeArgs (..), PostClaudeResult (..), handlePostClaudeWithReview)
+import Icarium.Dispatch.Retry (RetryHandoff, retrySections)
 import Icarium.Dispatch.Reviewer (loadReviewerPrompt)
 import Icarium.Dispatch.Worktree (
     WorktreeError (..),
@@ -214,8 +215,8 @@ renderCmdPreview inv =
 doReal :: Connection -> DispatchRequest -> IO (Either WorktreeError DispatchResult)
 doReal conn req = doRealAttempt conn req 1 Nothing Nothing
 
-doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe Text -> Maybe Text -> IO (Either WorktreeError DispatchResult)
-doRealAttempt conn req attempt mFindings mBaseline = do
+doRealAttempt :: Connection -> DispatchRequest -> Int -> Maybe RetryHandoff -> Maybe Text -> IO (Either WorktreeError DispatchResult)
+doRealAttempt conn req attempt mRetry mBaseline = do
     let cfg = drConfig req
         dcfg = cfgDispatch cfg
         dbPath = drDbPath req
@@ -268,7 +269,7 @@ doRealAttempt conn req attempt mFindings mBaseline = do
                     }
             Ev.emit dbPath "dispatch" (Ev.DispatchStarted did (taskId task) branch)
 
-            prompt <- buildPrompt conn task absScratch mAgreement mFindings
+            prompt <- buildPrompt conn task absScratch mAgreement mRetry
 
             let dx =
                     DispatchCtx
@@ -305,6 +306,7 @@ doRealAttempt conn req attempt mFindings mBaseline = do
                             , pcaExit = exit
                             , pcaBaseSha = baseSha
                             , pcaLogPath = logPath
+                            , pcaAttempt = attempt
                             }
                 )
                     `onException` teardownWorktree "." dcfg wt
@@ -319,9 +321,9 @@ doRealAttempt conn req attempt mFindings mBaseline = do
                     when (dresOutcome dr == OSuccess && taskNoCommit task) $
                         void (Git.deleteBranchForce "." branch)
                     pure (Right dr)
-                PCRetry dr findings
+                PCRetry dr handoff
                     | attempt < maxAttempts -> do
-                        next <- doRealAttempt conn req (attempt + 1) (Just findings) (Just baselineBody)
+                        next <- doRealAttempt conn req (attempt + 1) (Just handoff) (Just baselineBody)
                         case next of
                             Right dr' -> pure (Right dr')
                             Left err -> do
@@ -339,17 +341,15 @@ appended after the shared task content — see 'agreementSection'.
 @absScratch@ is the worker's scratch directory, already resolved: the
 prompt names the path, never an env var (see 'scratchSection').
 -}
-buildPrompt :: Connection -> Task -> FilePath -> Maybe Text -> Maybe Text -> IO Text
-buildPrompt conn t absScratch mAgreement mFindings = do
+buildPrompt :: Connection -> Task -> FilePath -> Maybe Text -> Maybe RetryHandoff -> IO Text
+buildPrompt conn t absScratch mAgreement mRetry = do
     body <- taskPromptBody conn t
     let base =
             body
                 <> agreementSection mAgreement
                 <> "\n"
                 <> scratchSection absScratch
-    pure $ case mFindings of
-        Nothing -> base
-        Just f -> base <> "\n## Reviewer findings from previous attempt\n\n" <> f <> "\n"
+    pure (base <> foldMap retrySections mRetry)
 
 ioFail :: String -> IO a
 ioFail = ioError . userError

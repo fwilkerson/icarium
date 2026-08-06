@@ -37,6 +37,7 @@ import Icarium.Dispatch.Payload (
     decodeWorkerPayload,
     renderFindings,
  )
+import Icarium.Dispatch.Retry (PriorAttempt (..), RetryHandoff (..))
 import Icarium.Dispatch.Reviewer (ReviewResult (..), runReviewer)
 import Icarium.Git qualified as Git
 import Icarium.Node (createContextWithBody)
@@ -48,8 +49,10 @@ import Icarium.Types
 
 data PostClaudeResult
     = PCDone DispatchResult
-    | -- | Current dispatch closed with OFailure; Text = findings for next attempt.
-      PCRetry DispatchResult Text
+    | {- | Current dispatch closed with OFailure; the handoff is what the next
+      attempt is told about this one.
+      -}
+      PCRetry DispatchResult RetryHandoff
 
 data PostClaudeArgs = PostClaudeArgs
     { pcaCtx :: DispatchCtx
@@ -69,6 +72,8 @@ data PostClaudeArgs = PostClaudeArgs
     , pcaExit :: ExitCode
     , pcaBaseSha :: Text
     , pcaLogPath :: FilePath
+    , pcaAttempt :: Int
+    -- ^ 1-based; a retry names this attempt's branch to the next one.
     }
 
 {- | Post-run handling for one dispatch. Gathers the signals a finished run
@@ -158,12 +163,29 @@ settle args mPayload mReviewedTask decision = do
             cats <- RC.taskCategoriesFor conn (taskId task)
             writeWarnContextEntry conn (dxDbPath dx) did task cats findings
         _ -> pure ()
-    pure (maybe (PCDone dr) (PCRetry dr) (dRetry decision))
+    case dRetry decision of
+        Nothing -> pure (PCDone dr)
+        Just findings -> do
+            -- Read after the checkpoint: the tip handed to the next attempt
+            -- must include the work this one left uncommitted.
+            mTip <- Git.revParse wt (dxBranch dx)
+            pure . PCRetry dr $
+                RetryHandoff
+                    { rhFindings = findings
+                    , rhPrior = either (const Nothing) (Just . priorAttempt) mTip
+                    }
   where
     dx = pcaCtx args
     conn = dxConn dx
     did = dxDid dx
     wt = dxWorkDir dx
+    priorAttempt tip =
+        PriorAttempt
+            { paAttempt = pcaAttempt args
+            , paBranch = dxBranch dx
+            , paTipSha = tip
+            , paBaseSha = pcaBaseSha args
+            }
 
 {- | Run the reviewer, when one is configured, and record what it said.
 Returns the refreshed task alongside, since a warn mints a ctx entry off it.

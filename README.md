@@ -145,6 +145,11 @@ review-failed attempt can't launder its edits) — a yes/no line plus a section-
 with newly-added `## Proof` / `## Notes` sections exempt. The reviewer weighs it (nothing auto-fails), and the
 yes/no persists as `body_changed` on the dispatch row (`dispatch show`) since reviewer logs rotate.
 
+A retry runs in a fresh worktree cut from the integration branch, so its prompt carries the prior
+attempt's branch, tip sha and base sha alongside the findings: both worktrees share one object
+database, so `git diff <base> <tip>` and `git show <tip>:<path>` reach that work from where the
+retry stands, and it can build on what the failed attempt got right.
+
 ```
 worker → diff → reviewer ─┬─ pass / warn → land (parks if the merge is blocked)
                           └─ fail        → retry (findings injected) or block

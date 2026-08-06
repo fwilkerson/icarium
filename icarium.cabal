@@ -51,6 +51,7 @@ library
                       Icarium.Dispatch.PostClaude
                       Icarium.Dispatch.Outcome
                       Icarium.Dispatch.Payload
+                      Icarium.Dispatch.Retry
                       Icarium.Dispatch.Reviewer
                       Icarium.Dispatch.Tick
                       Icarium.Dispatch.Worktree

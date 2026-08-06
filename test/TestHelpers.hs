@@ -117,6 +117,7 @@ runPostClaude dx cfg noCommit exit baseSha logPath = do
                 , pcaExit = exit
                 , pcaBaseSha = baseSha
                 , pcaLogPath = logPath
+                , pcaAttempt = 1
                 }
     pure $ case res of
         PCDone dr -> dr

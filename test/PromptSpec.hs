@@ -11,6 +11,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import Icarium.Dispatch.Claude (ClaudeInvocation (..), claudeArgs)
 import Icarium.Dispatch.Internal (buildPrompt)
 import Icarium.Dispatch.Payload (workerSchema)
+import Icarium.Dispatch.Retry (PriorAttempt (..), RetryHandoff (..))
 import Icarium.Dispatch.Reviewer (reviewerArgs)
 import Icarium.Prompt (taskPromptBody)
 import Icarium.Repo.Category qualified as RC
@@ -26,6 +27,8 @@ tests =
         "prompt"
         ( testCase "CLI preview is a prefix of the dispatch prompt" testPreviewIsPrefix
             : testCase "claudeArgs includes --permission-mode dontAsk plus existing flags" testClaudeArgsPermissionMode
+            : testCase "retry prompt appends findings then the previous attempt's coordinates" testRetryPromptNamesPriorAttempt
+            : testCase "retry prompt without a readable prior tip carries findings alone" testRetryPromptWithoutPrior
             : reviewerArgCases
         )
 
@@ -108,3 +111,54 @@ testPreviewIsPrefix = withTestDb $ \c -> do
     assertBool "explicit ref present" ("Explicit ref" `T.isInfixOf` preview)
     assertBool "dependency present" ("Dependency" `T.isInfixOf` preview)
     assertBool "preview is a prefix of the dispatch prompt" (preview `T.isPrefixOf` full)
+    assertBool "first attempt names no previous attempt" (not ("## Previous attempt" `T.isInfixOf` full))
+
+{- | What attempt 2 is handed beyond attempt 1's prompt: the findings, then the
+prior branch's coordinates. Asserted as the whole appended block, since the
+point is the exact wording the worker acts on.
+-}
+testRetryPromptNamesPriorAttempt :: IO ()
+testRetryPromptNamesPriorAttempt = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Retry subject"
+    Just t <- RT.getTask c tid
+    first <- buildPrompt c t "/tmp/scratch" Nothing Nothing
+    retry <- buildPrompt c t "/tmp/scratch" Nothing (Just handoff)
+    T.drop (T.length first) retry
+        @?= T.unlines
+            [ ""
+            , "## Reviewer findings from previous attempt"
+            , ""
+            , "| axis | severity | message |"
+            , ""
+            , "## Previous attempt"
+            , ""
+            , "Attempt 1 is on branch `dispatch/01PRIOR` at `aaa111`, cut from `bbb222`."
+            , "Its code is in this repository and readable from here: `git diff bbb222 aaa111`"
+            , "shows what it built, `git show aaa111:<path>` reads any file it wrote. It was"
+            , "failed for the findings above and for nothing else — start from what it got"
+            , "right rather than rebuilding it."
+            ]
+  where
+    handoff =
+        RetryHandoff
+            { rhFindings = "| axis | severity | message |"
+            , rhPrior =
+                Just
+                    PriorAttempt
+                        { paAttempt = 1
+                        , paBranch = "dispatch/01PRIOR"
+                        , paTipSha = "aaa111"
+                        , paBaseSha = "bbb222"
+                        }
+            }
+
+{- | An unreadable prior tip degrades to the findings alone, never to a section
+naming a sha the worker cannot resolve.
+-}
+testRetryPromptWithoutPrior :: IO ()
+testRetryPromptWithoutPrior = withTestDb $ \c -> do
+    tid <- mkTaskRow c "Retry subject"
+    Just t <- RT.getTask c tid
+    retry <- buildPrompt c t "/tmp/scratch" Nothing (Just (RetryHandoff "findings text" Nothing))
+    assertBool "findings still handed over" ("findings text" `T.isInfixOf` retry)
+    assertBool "no previous attempt section" (not ("## Previous attempt" `T.isInfixOf` retry))
