@@ -3,11 +3,9 @@ module CliEventLogSpec (tests) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (bracket)
 import Control.Monad (forM)
 import Data.Aeson (Object)
 import Data.List (isInfixOf, nub)
-import Database.SQLite.Simple (close, execute_, open)
 import System.Exit (ExitCode (..))
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
