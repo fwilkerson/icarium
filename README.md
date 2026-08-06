@@ -135,7 +135,8 @@ so a child `icarium` run from inside a worktree writes to the same store instead
 ## Reviewers
 
 A reviewer is an optional post-commit gate. When `[review] enabled = true`, after the worker
-commits, the orchestrator runs a second Claude agent — given **only the `Read` tool** — with a
+commits, the orchestrator runs a second Claude agent — given **only `Read`, `Glob` and `Grep`**, so
+it can find and read code but never execute, write or spawn — with a
 body-change report, the task title, task body, and the git diff, and asks it to judge the work.
 
 The body-change report is a tamper signal: the body is worker-writable, so the reviewer is told

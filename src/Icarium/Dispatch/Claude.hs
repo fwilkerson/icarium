@@ -1,5 +1,6 @@
 module Icarium.Dispatch.Claude (
     RunCtx (..),
+    ClaudeInvocation (..),
     claudeArgs,
     raceTimeout,
     timeoutSentinel,
@@ -52,7 +53,7 @@ import System.Timeout (timeout)
 
 import Icarium.Config (DispatchConfig (..))
 import Icarium.Db (openDb)
-import Icarium.Dispatch.Payload (jsonSchemaArgs, workerSchema)
+import Icarium.Dispatch.Payload (Schema, jsonSchemaArgs, workerSchema)
 import Icarium.Dispatch.Tick (TickAction (..), TickState (..), emptyTickState, summariseTick)
 import Icarium.Repo.Dispatch qualified as RD
 import Icarium.Types
@@ -107,40 +108,55 @@ data RunCtx = RunCtx
     -- ^ The dispatch worktree the worker runs in.
     }
 
-{- | Full claude(1) worker argument list. Shared with the dry-run preview
-so the two can't drift out of sync with each other.
+{- | Everything a @claude -p@ invocation varies by. One record rather than a
+row of same-typed positionals: the two tool lists are distinct grants and
+transposing them at a call site would silently widen one of them.
+-}
+data ClaudeInvocation = ClaudeInvocation
+    { invModel :: Text
+    , invEffort :: Effort
+    , invTools :: [Text]
+    , invAllowedTools :: [Text]
+    , invMcpConfig :: Maybe Text
+    , invSchema :: Schema
+    -- ^ Constrains the final message; each participant ingests its own.
+    }
+
+{- | Full claude(1) argument list, for every subprocess icarium spawns —
+worker, dry-run preview and reviewer alike. One builder so a new flag cannot
+reach some participants and miss others.
 
 @--strict-mcp-config@ with no @--mcp-config@ means zero MCP servers; when
 'Just' a path is given, @--mcp-config@ grants exactly that file.
 
-@--disable-slash-commands@ is derived from @tools@: listing @Skill@ opts the
-worker into slash commands and skills (ADR 0003).
+@--disable-slash-commands@ is derived from 'invTools': listing @Skill@ opts the
+subprocess into slash commands and skills (ADR 0003).
 
-@--json-schema@ makes the final message a validated 'workerSchema' payload
-rather than prose; the gate ingests it in 'Icarium.Dispatch.Outcome.applyOutcomeToTask'.
+@--json-schema@ makes the final message a validated payload rather than prose;
+the gate ingests the worker's in 'Icarium.Dispatch.Outcome.applyOutcomeToTask'.
 -}
-claudeArgs :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> [Text]
-claudeArgs model effort tools allowed mcpConfig =
+claudeArgs :: ClaudeInvocation -> [Text]
+claudeArgs inv =
     [ "-p"
     , "--model"
-    , model
+    , invModel inv
     , "--effort"
-    , effortText effort
+    , effortText (invEffort inv)
     , "--output-format"
     , "stream-json"
     , "--verbose"
     , "--tools"
-    , T.intercalate "," tools
+    , T.intercalate "," (invTools inv)
     ]
-        ++ ["--disable-slash-commands" | "Skill" `notElem` tools]
+        ++ ["--disable-slash-commands" | "Skill" `notElem` invTools inv]
         ++ [ "--allowedTools"
-           , T.intercalate "," allowed
+           , T.intercalate "," (invAllowedTools inv)
            , "--permission-mode"
            , "dontAsk"
            , "--strict-mcp-config"
            ]
-        ++ maybe [] (\p -> ["--mcp-config", p]) mcpConfig
-        ++ jsonSchemaArgs workerSchema
+        ++ maybe [] (\p -> ["--mcp-config", p]) (invMcpConfig inv)
+        ++ jsonSchemaArgs (invSchema inv)
 
 runClaudeStreaming :: RunCtx -> DispatchConfig -> IO ExitCode
 runClaudeStreaming ctx dcfg = do
@@ -161,7 +177,17 @@ runClaudeStreaming ctx dcfg = do
     -- would silently create a nested store inside the worktree.
     absDb <- makeAbsolute dbPath
     let promptBytes = BL.fromStrict (TE.encodeUtf8 prompt)
-        args = map T.unpack (claudeArgs model effort tools allowed mcpConfig)
+        args =
+            map T.unpack $
+                claudeArgs
+                    ClaudeInvocation
+                        { invModel = model
+                        , invEffort = effort
+                        , invTools = tools
+                        , invAllowedTools = allowed
+                        , invMcpConfig = mcpConfig
+                        , invSchema = workerSchema
+                        }
         -- Inherit parent env so claude can find ~/.claude credentials
         -- via $HOME; append icarium's own vars.
         env =

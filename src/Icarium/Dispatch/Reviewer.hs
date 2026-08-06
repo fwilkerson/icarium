@@ -34,6 +34,8 @@ import System.Process.Typed (
  )
 
 import Icarium.Dispatch.Claude (
+    ClaudeInvocation (..),
+    claudeArgs,
     killGroupGracefully,
     raceTimeout,
     timeoutSentinel,
@@ -44,10 +46,9 @@ import Icarium.Dispatch.Payload (
     Finding,
     ReviewerPayload (..),
     decodeReviewerPayload,
-    jsonSchemaArgs,
     reviewerSchema,
  )
-import Icarium.Types (Effort, effortText)
+import Icarium.Types (Effort)
 
 {- | Either the reviewer reported (findings, possibly empty) or the run itself
 failed. The two are not one field: a process that timed out has no findings
@@ -59,44 +60,33 @@ data ReviewResult = ReviewResult
     , rrLogPath :: FilePath
     }
 
-{- | The reviewer's tools: read-only navigation and nothing that executes, so
-the security posture of ADR 0004 is unchanged — @Read@ alone was the search
-half of read-only going missing, not a boundary being drawn. Without @Glob@ and
-@Grep@ a reviewer can only guess paths: the diff names the files it changed,
-but the code they must be judged against is found, not listed. @Bash@ stays
-out; the one thing it would buy is the diff, and 'buildReviewerStdin' already
-carries that.
+{- | Read-only navigation, and nothing that executes, writes or spawns — the
+ADR 0004 posture. Finding the code a diff must be judged against is a search,
+not a lookup: the diff names the files it changed, not the callers those
+changes break. @Bash@ stays out; the one thing it would buy is the diff, and
+'buildReviewerStdin' already carries that.
 -}
-reviewerTools :: String
-reviewerTools = "Read,Glob,Grep"
+reviewerTools :: [Text]
+reviewerTools = ["Read", "Glob", "Grep"]
 
 {- | The reviewer's CLI arguments. Pure and exported so a test can pin the tool
 grant: this is a security boundary, and one that widened silently is a boundary
 nobody agreed to move.
 -}
-reviewerArgs :: Text -> Effort -> [String]
+reviewerArgs :: Text -> Effort -> [Text]
 reviewerArgs model effort =
-    [ "-p"
-    , "--model"
-    , T.unpack model
-    , "--effort"
-    , T.unpack (effortText effort)
-    , "--output-format"
-    , "stream-json"
-    , "--verbose"
-    , "--tools"
-    , reviewerTools
-    , "--allowedTools"
-    , reviewerTools
-    , "--disable-slash-commands"
-    , "--permission-mode"
-    , "dontAsk"
-    , "--strict-mcp-config"
-    ]
-        <> map T.unpack (jsonSchemaArgs reviewerSchema)
+    claudeArgs
+        ClaudeInvocation
+            { invModel = model
+            , invEffort = effort
+            , invTools = reviewerTools
+            , invAllowedTools = reviewerTools
+            , invMcpConfig = Nothing
+            , invSchema = reviewerSchema
+            }
 
 {- | The two-axis brief (ADR 0004), adapted from the @code-review@ skill's
-Standards and Spec sub-agent prompts. The harness is one Read-only agent, so
+Standards and Spec sub-agent prompts. The harness is one read-only agent, so
 the axes are two passes in one context rather than parallel sub-agents; each
 finding tags its axis so retry prompts stay legible.
 -}
@@ -195,7 +185,7 @@ buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText =
         ]
 
 runReviewer ::
-    -- | directory the reviewer runs in (its Read tool sees branch state)
+    -- | directory the reviewer runs in (what it reads is branch state)
     FilePath ->
     -- | model name
     Text ->
@@ -220,7 +210,7 @@ runReviewer workDir model effort mSysPrompt bodyReport taskTitle taskBody diffTe
     let sysPrompt = fromMaybe defaultReviewerPrompt mSysPrompt
         stdinText = buildReviewerStdin sysPrompt bodyReport taskTitle taskBody diffText
         stdinBytes = BL.fromStrict (TE.encodeUtf8 stdinText)
-        args = reviewerArgs model effort
+        args = map T.unpack (reviewerArgs model effort)
     hPutStrLn stderr "[reviewer] running..."
     exit <- runReviewerProcess workDir stdinBytes args reviewerLogPath maxMinutes
     mLR <- readLogResult reviewerLogPath

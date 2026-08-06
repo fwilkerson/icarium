@@ -28,12 +28,13 @@ import Icarium.Config (
     ReviewConfig (..),
  )
 import Icarium.Dispatch.Agreement (agreementSection, loadAgreementFile, scratchSection)
-import Icarium.Dispatch.Claude (RunCtx (..), claudeArgs, runClaudeStreaming)
+import Icarium.Dispatch.Claude (ClaudeInvocation (..), RunCtx (..), claudeArgs, runClaudeStreaming)
 import Icarium.Dispatch.Outcome (
     DispatchCtx (..),
     DispatchResult (..),
     applyOutcomeToTask,
  )
+import Icarium.Dispatch.Payload (workerSchema)
 import Icarium.Dispatch.PostClaude (PostClaudeArgs (..), PostClaudeResult (..), handlePostClaudeWithReview)
 import Icarium.Dispatch.Reviewer (loadReviewerPrompt)
 import Icarium.Dispatch.Worktree (
@@ -163,7 +164,16 @@ dryRunPreview conn req task mAgreement = do
     TIO.putStrLn $ "scratch_dir:             " <> scratchDir
     TIO.putStrLn ""
     TIO.putStrLn "--- claude invocation ---"
-    TIO.putStrLn (renderCmdPreview (roModel opts) (roEffort opts) tools allowed mcpConfig)
+    TIO.putStrLn $
+        renderCmdPreview
+            ClaudeInvocation
+                { invModel = roModel opts
+                , invEffort = roEffort opts
+                , invTools = tools
+                , invAllowedTools = allowed
+                , invMcpConfig = mcpConfig
+                , invSchema = workerSchema
+                }
     TIO.putStrLn ""
     TIO.putStrLn "--- prompt (via stdin) ---"
     TIO.putStr prompt
@@ -186,9 +196,9 @@ get quoted, and the worker schema is elided. The preview exists to show what
 /varies/ with task and config — the schema is an icarium-owned constant, and
 inlining ~2 KB of JSON buries everything else on the line.
 -}
-renderCmdPreview :: Text -> Effort -> [Text] -> [Text] -> Maybe Text -> Text
-renderCmdPreview model effort tools allowed mcpConfig =
-    T.unwords ("claude" : readable (claudeArgs model effort tools allowed mcpConfig))
+renderCmdPreview :: ClaudeInvocation -> Text
+renderCmdPreview inv =
+    T.unwords ("claude" : readable (claudeArgs inv))
   where
     readable (flag : val : rest)
         | flag `elem` ["--tools", "--allowedTools"] =
